@@ -2,9 +2,6 @@
 node_modules/
 .cargo/
 
-# Generated files
-tree-sitter-nasin/src
-
 # Compiled results
 bin/*
 target/

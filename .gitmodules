@@ -1,0 +1,3 @@
+[submodule "tree-sitter-nasin"]
+	path = tree-sitter-nasin
+	url = https://github.com/nasin-lang/tree-sitter-nasin.git
