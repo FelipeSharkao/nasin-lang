@@ -4,7 +4,7 @@ use std::{cmp, fmt};
 
 use derive_more::{Debug, Display, From};
 use derive_new::new;
-use itertools::Itertools;
+use itertools::{enumerate, Itertools};
 use tree_sitter as ts;
 
 use super::instr::*;
@@ -18,6 +18,8 @@ pub struct Module {
     pub idx: usize,
     #[new(default)]
     pub values: Vec<Value>,
+    #[new(default)]
+    pub func_sigs: Vec<FuncSig>,
     #[new(default)]
     pub typedefs: Vec<TypeDef>,
     #[new(default)]
@@ -72,22 +74,25 @@ impl Display for Module {
             }
         }
 
+        for (i, sig) in self.func_sigs.iter().enumerate() {
+            write!(f, "\n    func sig {i} {} (", sig.loc)?;
+
+            for (i, v) in enumerate(&sig.params) {
+                if i > 0 {
+                    write!(f, ", ")?;
+                }
+                write!(f, "v{v}")?;
+            }
+
+            write!(f, ") -> v{}", &sig.ret)?;
+        }
+
         for (i, func) in self.funcs.iter().enumerate() {
-            write!(f, "\n    func {i} {}", func.loc)?;
+            write!(f, "\n    func {i} {} (sig {})", func.loc, func.sig)?;
 
             if let Some(Extern { name }) = &func.extn {
                 write!(f, " (extern {})", utils::encode_string_lit(name))?;
             }
-
-            if func.params.len() > 0 {
-                write!(f, " (params")?;
-                for v in &func.params {
-                    write!(f, " v{v}")?;
-                }
-                write!(f, ")")?;
-            }
-
-            write!(f, " -> v{}", &func.ret)?;
 
             if func.body.len() > 0 {
                 write!(f, ":\n{}", utils::indented(8, &func.body))?;
@@ -117,10 +122,16 @@ pub struct Global {
 #[derive(Debug, Clone)]
 pub struct Func {
     pub name: String,
-    pub params: Vec<ValueIdx>,
-    pub ret: ValueIdx,
+    pub sig: usize,
     pub body: Vec<Instr>,
     pub extn: Option<Extern>,
+    pub loc: Loc,
+}
+
+#[derive(Debug, Clone)]
+pub struct FuncSig {
+    pub params: Vec<ValueIdx>,
+    pub ret: ValueIdx,
     pub loc: Loc,
 }
 

@@ -775,9 +775,11 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
         let mut args: Vec<_> = args.into();
 
         let func_id = self.funcs.get(&(func_mod_idx, func_idx)).unwrap().func_id;
-        let func = &self.modules[func_mod_idx].funcs[func_idx];
+        let module = &self.modules[func_mod_idx];
+        let func = &module.funcs[func_idx];
+        let sig = &module.func_sigs[func.sig];
 
-        let ret_ty = &self.modules[func_mod_idx].values[func.ret].ty;
+        let ret_ty = &self.modules[func_mod_idx].values[sig.ret].ty;
         let ret_policy = if ret_ty.is_never() {
             CallReturnPolicy::NoReturn
         } else if ret_ty.is_aggregate(&self.modules) {

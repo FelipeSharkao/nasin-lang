@@ -46,7 +46,9 @@ impl<'a> TypeChecker<'a> {
             tracing::trace!(i, "adding func");
             let (body, ret) = {
                 let module = &self.ctx.lock_modules()[self.mod_idx];
-                (module.funcs[i].body.clone(), module.funcs[i].ret)
+                let func = &module.funcs[i];
+                let sig = &module.func_sigs[func.sig];
+                (module.funcs[i].body.clone(), sig.ret)
             };
             let mut scopes = utils::ScopeStack::new(ScopePayload::new());
             if let Some(result) = self.add_body(body, &mut scopes, Some(i)) {
@@ -222,29 +224,34 @@ impl<'a> TypeChecker<'a> {
                 let v = instr.results[0];
 
                 if *mod_idx == self.mod_idx {
-                    let func = self.ctx.lock_modules()[self.mod_idx].funcs[*idx].clone();
+                    let sig = {
+                        let module = &self.ctx.lock_modules()[self.mod_idx];
+                        let func = &module.funcs[*idx];
+                        module.func_sigs[func.sig].clone()
+                    };
 
                     if func_idx.is_some_and(|i| i == *idx) {
-                        self.merge_types([&func.ret, &v]);
-                        for (arg, param) in izip!(args, func.params) {
+                        self.merge_types([&sig.ret, &v]);
+                        for (arg, param) in izip!(args, sig.params) {
                             self.merge_types([&param, arg]);
                         }
                     } else {
-                        for (arg, param) in izip!(args, func.params) {
+                        for (arg, param) in izip!(args, sig.params) {
                             self.add_constraint(*arg, Constraint::TypeOf(param));
                         }
-                        self.add_constraint(v, Constraint::TypeOf(func.ret));
+                        self.add_constraint(v, Constraint::TypeOf(sig.ret));
                     }
                 } else {
                     let (params_tys, ret_ty) = {
                         let module = &self.ctx.lock_modules()[*mod_idx];
                         let func = &module.funcs[*idx];
+                        let sig = &module.func_sigs[func.sig];
                         (
-                            func.params
+                            sig.params
                                 .iter()
                                 .map(|param| module.values[*param].ty.clone())
                                 .collect_vec(),
-                            module.values[func.ret].ty.clone(),
+                            module.values[sig.ret].ty.clone(),
                         )
                     };
 
@@ -735,23 +742,23 @@ impl<'a> TypeChecker<'a> {
         let b::TypeBody::TypeRef(mod_idx, ty_idx) = &parent.body else {
             return vec![];
         };
-        let Some(func) = modules
-            .get(*mod_idx)
-            .and_then(|module| module.typedefs.get(*ty_idx))
-            .and_then(|typedef| match &typedef.body {
-                b::TypeDefBody::Record(rec) => rec.methods.get(name),
-            })
-            .and_then(|method| {
-                if method.func_ref.0 == self.mod_idx {
-                    return module.funcs.get(method.func_ref.1);
-                } else {
-                    return None;
-                }
-            })
-        else {
+        // FIXME: Report a proper error if this typedef does not exist
+        let typedef_module = &modules[*mod_idx];
+        let typedef = &typedef_module.typedefs[*ty_idx];
+        let Some(func) = match &typedef.body {
+            b::TypeDefBody::Record(rec) => rec.methods.get(name),
+        }
+        .and_then(|method| {
+            if method.func_ref.0 == self.mod_idx {
+                return module.funcs.get(method.func_ref.1);
+            } else {
+                return None;
+            }
+        }) else {
             return vec![];
         };
-        return func.params.iter().cloned().chain([func.ret]).collect();
+        let sig = &typedef_module.func_sigs[func.sig];
+        return sig.params.iter().cloned().chain([sig.ret]).collect();
     }
 
     fn get_property_type(
@@ -766,24 +773,24 @@ impl<'a> TypeChecker<'a> {
             let b::TypeBody::TypeRef(mod_idx, ty_idx) = &parent.body else {
                 break 'from_entries;
             };
-            let Some((func, loc)) = modules
-                .get(*mod_idx)
-                .and_then(|module| module.typedefs.get(*ty_idx))
-                .and_then(|typedef| match &typedef.body {
-                    b::TypeDefBody::Record(rec) => rec.methods.get(key),
-                })
-                .and_then(|method| {
-                    if method.func_ref.0 == self.mod_idx {
-                        return Some((module.funcs.get(method.func_ref.1)?, method.loc));
-                    } else {
-                        return None;
-                    }
-                })
-            else {
+            // FIXME: Report a proper error if this typedef does not exist
+            let typedef_module = &modules[*mod_idx];
+            let typedef = &typedef_module.typedefs[*ty_idx];
+            let Some((func, loc)) = match &typedef.body {
+                b::TypeDefBody::Record(rec) => rec.methods.get(key),
+            }
+            .and_then(|method| {
+                if method.func_ref.0 == self.mod_idx {
+                    return Some((module.funcs.get(method.func_ref.1)?, method.loc));
+                } else {
+                    return None;
+                }
+            }) else {
                 break 'from_entries;
             };
 
-            let [params @ .., self_param] = &func.params[..] else {
+            let sig = &typedef_module.func_sigs[func.sig];
+            let [params @ .., self_param] = &sig.params[..] else {
                 break 'from_entries;
             };
             // is static?
@@ -792,7 +799,7 @@ impl<'a> TypeChecker<'a> {
             }
             // functions without parameters are just values
             if params.len() == 0 {
-                return Some(module.values[func.ret].ty.clone());
+                return Some(module.values[sig.ret].ty.clone());
             }
             return Some(b::Type::new(
                 b::TypeBody::Func(
@@ -801,7 +808,7 @@ impl<'a> TypeChecker<'a> {
                             .iter()
                             .map(|x| module.values[*x].ty.clone())
                             .collect(),
-                        module.values[func.ret].ty.clone(),
+                        module.values[sig.ret].ty.clone(),
                     )
                     .into(),
                 ),

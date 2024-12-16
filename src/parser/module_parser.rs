@@ -22,6 +22,8 @@ pub struct ModuleParser<'a, 't> {
     #[new(default)]
     pub globals: Vec<DeclaredGlobal<'t>>,
     #[new(default)]
+    pub func_sigs: Vec<b::FuncSig>,
+    #[new(default)]
     pub funcs: Vec<DeclaredFunc<'t>>,
     #[new(default)]
     pub values: Vec<b::Value>,
@@ -67,10 +69,12 @@ impl<'a, 't> ModuleParser<'a, 't> {
             };
 
             let func = &self.funcs[i];
-            if func.func.ret == UNDEF_VALUE {
+            let sig = &self.func_sigs[func.func.sig];
+            if sig.ret == UNDEF_VALUE {
                 let ret_ty = func.ret_ty.clone();
                 let loc = func.func.loc;
-                self.funcs[i].func.ret = self.create_value(ret_ty, loc)
+                self.func_sigs[self.funcs[i].func.sig].ret =
+                    self.create_value(ret_ty, loc)
             }
         }
 
@@ -78,6 +82,7 @@ impl<'a, 't> ModuleParser<'a, 't> {
         module.typedefs = self.types.typedefs;
         module.globals = self.globals.into_iter().map(|x| x.global).collect();
         module.funcs = self.funcs.into_iter().map(|x| x.func).collect();
+        module.func_sigs = self.func_sigs;
         module.values = self.values;
     }
     pub fn add_root(&mut self, node: ts::Node<'t>) {
@@ -229,11 +234,25 @@ impl<'a, 't> ModuleParser<'a, 't> {
             }
         }
 
+        let ident_node = node.required_field("name").of_kind("ident");
+        let sig = b::FuncSig {
+            params: params.clone(),
+            ret: UNDEF_VALUE,
+            loc: [ident_node]
+                .into_iter()
+                .chain(node.iter_field("params"))
+                .chain(node.field("ret_type"))
+                .map(|x| b::Loc::from_node(self.src_idx, &x))
+                .reduce(|a, b| a.merge(&b))
+                .unwrap(),
+        };
+        let sig_idx = self.func_sigs.len();
+        self.func_sigs.push(sig);
+
         let loc = b::Loc::from_node(self.src_idx, &node);
         let func = b::Func {
             name,
-            params: params.clone(),
-            ret: UNDEF_VALUE,
+            sig: sig_idx,
             extn,
             body: vec![],
             loc,
