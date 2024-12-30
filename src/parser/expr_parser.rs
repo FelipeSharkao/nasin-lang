@@ -57,16 +57,15 @@ impl<'a, 't> ExprParser<'a, 't> {
 
         if scope.is_loop {
             let func_idx = self.func_idx.unwrap();
-            let sig_idx = self.module.funcs[func_idx].func.sig;
-            let sig = &self.module.func_sigs[sig_idx];
+            let func = &self.module.funcs[func_idx].func;
 
-            let loop_inputs = enumerate(sig.params.clone())
+            let loop_inputs = enumerate(func.params.clone())
                 .map(|(i, loop_v)| {
                     let param = &self.module.values[loop_v];
                     let ty = param.ty.clone();
                     let loc = param.loc.clone();
                     let initial_v = self.module.create_value(ty, loc);
-                    self.module.func_sigs[sig_idx].params[i] = initial_v;
+                    self.module.funcs[func_idx].func.params[i] = initial_v;
                     (loop_v, initial_v)
                 })
                 .collect();

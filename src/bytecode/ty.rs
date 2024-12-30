@@ -227,13 +227,12 @@ impl Type {
                 }?;
                 let method_mod = modules.get(method.func_ref.0)?;
                 let func = &method_mod.funcs[method.func_ref.1];
-                let sig = &method_mod.func_sigs[func.sig];
-                let params_tys = sig
+                let params_tys = func
                     .params
                     .iter()
                     .map(|param| method_mod.values[*param].ty.clone())
                     .collect_vec();
-                let ret_ty = method_mod.values[sig.ret].ty.clone();
+                let ret_ty = method_mod.values[func.ret].ty.clone();
                 Some(Cow::Owned(Type::new(
                     TypeBody::Func(Box::new(FuncType::new(params_tys, ret_ty))),
                     Some(method.loc),

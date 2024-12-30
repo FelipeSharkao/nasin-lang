@@ -191,20 +191,19 @@ impl BinaryCodegen<'_> {
     }
     fn declare_function(&mut self, mod_idx: usize, idx: usize) {
         let module = &self.modules[mod_idx];
-        let func = &module.funcs[idx];
-        let sig = &module.func_sigs[func.sig];
-        let mut cl_sig = self.obj_module.make_signature();
+        let decl = &module.funcs[idx];
+        let mut sig = self.obj_module.make_signature();
 
-        let ret_ty = &module.values[sig.ret].ty;
+        let ret_ty = &module.values[decl.ret].ty;
         let result_policy = if ret_ty.is_aggregate(&self.modules) {
             let ret_param = cl::AbiParam::special(
                 self.obj_module.isa().pointer_type(),
                 cl::ArgumentPurpose::StructReturn,
             );
-            cl_sig.params.push(ret_param);
+            sig.params.push(ret_param);
             ResultPolicy::StructReturn
         } else if !matches!(&ret_ty.body, b::TypeBody::Void | b::TypeBody::Never) {
-            cl_sig.returns.push(cl::AbiParam::new(types::get_type(
+            sig.returns.push(cl::AbiParam::new(types::get_type(
                 ret_ty,
                 self.modules,
                 &self.obj_module,
@@ -214,8 +213,8 @@ impl BinaryCodegen<'_> {
             ResultPolicy::Normal
         };
 
-        for param in &sig.params {
-            cl_sig.params.push(cl::AbiParam::new(types::get_type(
+        for param in &decl.params {
+            sig.params.push(cl::AbiParam::new(types::get_type(
                 &module.values[*param].ty,
                 self.modules,
                 &self.obj_module,
@@ -226,17 +225,17 @@ impl BinaryCodegen<'_> {
             cl::UserFuncName::user(FuncNS::User.into(), self.next_func_id);
         self.next_func_id += 1;
 
-        let cl_func = cl::Function::with_name_signature(user_func_name, cl_sig);
+        let func = cl::Function::with_name_signature(user_func_name, sig);
 
-        let symbol_name = if let Some(b::Extern { name }) = &func.extn {
+        let symbol_name = if let Some(b::Extern { name }) = &decl.extn {
             name.clone()
         } else {
             // TODO: improve name mangling
             format!("$func_{mod_idx}_{idx}")
         };
 
-        let linkage = if func.extn.is_some() {
-            if func.body.is_empty() {
+        let linkage = if decl.extn.is_some() {
+            if decl.body.is_empty() {
                 cl::Linkage::Import
             } else {
                 cl::Linkage::Export
@@ -247,33 +246,31 @@ impl BinaryCodegen<'_> {
 
         let func_id = self
             .obj_module
-            .declare_function(&symbol_name, linkage, &cl_func.signature)
+            .declare_function(&symbol_name, linkage, &func.signature)
             .unwrap();
 
         self.funcs.insert(
             (mod_idx, idx),
             FuncBinding {
                 symbol_name,
-                is_extern: func.extn.is_some(),
+                is_extern: decl.extn.is_some(),
                 func_id,
                 result_policy,
             },
         );
-        self.declared_funcs.insert((mod_idx, idx), cl_func);
+        self.declared_funcs.insert((mod_idx, idx), func);
     }
     fn declare_global(&mut self, mod_idx: usize, idx: usize) {
         self.globals
             .insert_global(mod_idx, idx, &mut self.obj_module);
     }
     fn build_function(&mut self, mod_idx: usize, idx: usize) {
-        let module = &self.modules[mod_idx];
-        let func = &module.funcs[idx];
-        let sig = &module.func_sigs[func.sig];
+        let decl = &self.modules[mod_idx].funcs[idx];
         let result_policy = self.funcs.get(&(mod_idx, idx)).unwrap().result_policy;
         utils::replace_with(self, |mut this| {
             let mut func_ctx = cl::FunctionBuilderContext::new();
-            let cl_func = this.declared_funcs.get_mut(&(mod_idx, idx)).unwrap();
-            let func_builder = cl::FunctionBuilder::new(cl_func, &mut func_ctx);
+            let func = this.declared_funcs.get_mut(&(mod_idx, idx)).unwrap();
+            let func_builder = cl::FunctionBuilder::new(func, &mut func_ctx);
             let mut codegen = FuncCodegen::new(
                 this.modules,
                 Some(func_builder),
@@ -282,13 +279,13 @@ impl BinaryCodegen<'_> {
                 this.funcs,
             );
             codegen.create_initial_block(
-                &sig.params,
-                Some(sig.ret),
+                &decl.params,
+                Some(decl.ret),
                 result_policy,
                 mod_idx,
             );
 
-            codegen.add_body(&func.body, mod_idx, result_policy);
+            codegen.add_body(&decl.body, mod_idx, result_policy);
 
             (this.obj_module, this.globals, this.funcs) = codegen.finish();
             this
