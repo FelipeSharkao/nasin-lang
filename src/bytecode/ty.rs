@@ -6,8 +6,8 @@ use derive_more::Display;
 use derive_new::new;
 use itertools::{chain, izip, Itertools};
 
-use super::{Loc, Module, TypeDefBody};
-use crate::utils;
+use super::{Loc, Module, TypeDef, TypeDefBody};
+use crate::utils::{self, unordered};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum TypeBody {
@@ -38,6 +38,7 @@ pub enum TypeBody {
     Ptr(Box<Type>),
     Func(Box<FuncType>),
     TypeRef(usize, usize),
+    SelfType(usize, usize),
 }
 impl Display for TypeBody {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -87,6 +88,7 @@ impl Display for TypeBody {
                 write!(f, "func {}: {}", func.params.iter().join(", "), &func.ret)?
             }
             TypeBody::TypeRef(mod_idx, ty_idx) => write!(f, "type {mod_idx}-{ty_idx}")?,
+            TypeBody::SelfType(mod_idx, ty_idx) => write!(f, "self {mod_idx}-{ty_idx}")?,
         }
         Ok(())
     }
@@ -94,7 +96,7 @@ impl Display for TypeBody {
 impl TypeBody {
     pub fn unknown() -> Self {
         TypeBody::Inferred(InferredType {
-            members: utils::SortedMap::new(),
+            members:    utils::SortedMap::new(),
             properties: utils::SortedMap::new(),
         })
     }
@@ -109,14 +111,9 @@ impl TypeBody {
 #[derive(Debug, Clone, new)]
 pub struct Type {
     pub body: TypeBody,
-    pub loc: Option<Loc>,
+    pub loc:  Option<Loc>,
 }
 
-macro_rules! unordered {
-    ($a:pat, $b:pat) => {
-        ($a, $b) | ($b, $a)
-    };
-}
 macro_rules! number {
     ($var:ident $( , $gen:ident)*) => {
         unordered!(
@@ -126,7 +123,10 @@ macro_rules! number {
 }
 macro_rules! body {
     ($pat:pat) => {
-        Type { body: $pat, loc: _ }
+        Type {
+            body: $pat,
+            loc:  _,
+        }
     };
 }
 impl Type {
@@ -145,9 +145,9 @@ impl Type {
     pub fn is_aggregate(&self, modules: &[Module]) -> bool {
         match &self.body {
             //TypeBody::String(_) | TypeBody::Array(_) => true,
-            TypeBody::TypeRef(mod_idx, ty_idx) => {
+            TypeBody::TypeRef(mod_idx, ty_idx) | TypeBody::SelfType(mod_idx, ty_idx) => {
                 match &modules[*mod_idx].typedefs[*ty_idx].body {
-                    TypeDefBody::Record(_) => true,
+                    TypeDefBody::Record(_) | TypeDefBody::Interface(_) => true,
                 }
             }
             _ => false,
@@ -205,9 +205,10 @@ impl Type {
     pub fn field<'a>(&'a self, name: &str, modules: &'a [Module]) -> Option<&'a Type> {
         match &self.body {
             TypeBody::Inferred(v) => v.members.get(name),
-            TypeBody::TypeRef(mod_idx, ty_idx) => {
+            TypeBody::TypeRef(mod_idx, ty_idx) | TypeBody::SelfType(mod_idx, ty_idx) => {
                 match &modules.get(*mod_idx)?.typedefs.get(*ty_idx)?.body {
                     TypeDefBody::Record(rec) => Some(&rec.fields.get(name)?.ty),
+                    TypeDefBody::Interface(_) => None,
                 }
             }
             _ => None,
@@ -219,27 +220,30 @@ impl Type {
         name: &str,
         modules: &'a [Module],
     ) -> Option<Cow<'a, Type>> {
-        match &self.body {
-            TypeBody::TypeRef(mod_idx, ty_idx) => {
-                let typedef = modules.get(*mod_idx)?.typedefs.get(*ty_idx)?;
-                let method = match &typedef.body {
-                    TypeDefBody::Record(rec) => rec.methods.get(name),
-                }?;
-                let method_mod = modules.get(method.func_ref.0)?;
-                let func = &method_mod.funcs[method.func_ref.1];
-                let params_tys = func
-                    .params
-                    .iter()
-                    .map(|param| method_mod.values[*param].ty.clone())
-                    .collect_vec();
-                let ret_ty = method_mod.values[func.ret].ty.clone();
-                Some(Cow::Owned(Type::new(
-                    TypeBody::Func(Box::new(FuncType::new(params_tys, ret_ty))),
-                    Some(method.loc),
-                )))
+        let (mod_idx, ty_idx) = match &self.body {
+            TypeBody::TypeRef(mod_idx, ty_idx) | TypeBody::SelfType(mod_idx, ty_idx) => {
+                (*mod_idx, *ty_idx)
             }
-            _ => None,
-        }
+            _ => return None,
+        };
+
+        let typedef = modules.get(mod_idx)?.typedefs.get(ty_idx)?;
+        let method = match &typedef.body {
+            TypeDefBody::Record(rec) => rec.methods.get(name),
+            TypeDefBody::Interface(iface) => iface.methods.get(name),
+        }?;
+        let method_mod = modules.get(method.func_ref.0)?;
+        let func = &method_mod.funcs[method.func_ref.1];
+        let params_tys = func
+            .params
+            .iter()
+            .map(|param| method_mod.values[*param].ty.clone())
+            .collect_vec();
+        let ret_ty = method_mod.values[func.ret].ty.clone();
+        Some(Cow::Owned(Type::new(
+            TypeBody::Func(Box::new(FuncType::new(params_tys, ret_ty))),
+            Some(method.loc),
+        )))
     }
 
     pub fn property<'a>(
@@ -255,7 +259,7 @@ impl Type {
                 return None;
             };
             // is static?
-            if self_param.body != self.body {
+            if self.intersection(self_param, modules).is_none() {
                 return None;
             }
             // functions without parameters are just values
@@ -281,6 +285,7 @@ impl Type {
 
     pub fn intersection(&self, other: &Type, modules: &[Module]) -> Option<Type> {
         let body = match (self, other) {
+            (body!(a), body!(b)) if a == b => a.clone(),
             // INFO: This is not correct, an intersection with `never` and `a` should be
             // `never`, not `a`, but due to the way that `if` branches are checked, this
             // was necessary, and I reckon it won't be all that harmful. Maybe I'll fix it
@@ -351,7 +356,7 @@ impl Type {
                     })
                     .collect::<Option<_>>()?;
                 TypeBody::Inferred(InferredType {
-                    members: fields,
+                    members:    fields,
                     properties: methods,
                 })
             }
@@ -372,7 +377,63 @@ impl Type {
                     return None;
                 }
             }
-            (body!(a), body!(b)) if a == b => a.clone(),
+            (
+                body!(
+                    TypeBody::TypeRef(a_mod_idx, a_ty_idx)
+                        | TypeBody::SelfType(a_mod_idx, a_ty_idx)
+                ),
+                body!(
+                    TypeBody::TypeRef(b_mod_idx, b_ty_idx)
+                        | TypeBody::SelfType(b_mod_idx, b_ty_idx)
+                ),
+            ) => {
+                let a_ty = &modules[*a_mod_idx].typedefs[*a_ty_idx];
+                let b_ty = &modules[*b_mod_idx].typedefs[*b_ty_idx];
+
+                macro_rules! body {
+                    ($pat:pat) => {
+                        TypeDef { body: $pat, .. }
+                    };
+                }
+
+                let (r_mod_idx, r_ty_idx) =
+                    match ((a_mod_idx, a_ty_idx, a_ty), (b_mod_idx, b_ty_idx, b_ty)) {
+                        (
+                            (_, _, body!(TypeDefBody::Record(_))),
+                            (_, _, body!(TypeDefBody::Record(_))),
+                        ) if (a_mod_idx, a_ty_idx) == (b_mod_idx, b_ty_idx) => {
+                            (*a_mod_idx, *a_ty_idx)
+                        }
+                        (
+                            (_, _, body!(TypeDefBody::Interface(_))),
+                            (_, _, body!(TypeDefBody::Interface(_))),
+                        ) if (a_mod_idx, a_ty_idx) == (b_mod_idx, b_ty_idx) => {
+                            (*a_mod_idx, *a_ty_idx)
+                        }
+                        unordered!(
+                            (r_mod_idx, r_ty_idx, body!(TypeDefBody::Record(rec))),
+                            (i_mod_idx, i_ty_idx, body!(TypeDefBody::Interface(..))),
+                        ) => {
+                            let extends = rec.ifaces.iter().any(|(mod_idx, ty_idx)| {
+                                i_mod_idx == mod_idx && i_ty_idx == ty_idx
+                            });
+                            if !extends {
+                                return None;
+                            }
+
+                            (*r_mod_idx, *r_ty_idx)
+                        }
+                        _ => return None,
+                    };
+
+                if matches!(&self.body, TypeBody::SelfType(..))
+                    || matches!(&other.body, TypeBody::SelfType(..))
+                {
+                    TypeBody::SelfType(r_mod_idx, r_ty_idx)
+                } else {
+                    TypeBody::TypeRef(r_mod_idx, r_ty_idx)
+                }
+            }
             _ => return None,
         };
         let loc = match (&self.loc, &other.loc) {
@@ -400,7 +461,7 @@ impl Type {
             (body!(TypeBody::Array(a)), body!(TypeBody::Array(b))) => {
                 TypeBody::Array(ArrayType {
                     item: a.item.union(&b.item, modules)?.into(),
-                    len: if a.len == b.len { a.len.clone() } else { None },
+                    len:  if a.len == b.len { a.len.clone() } else { None },
                 })
             }
             (body!(TypeBody::Ptr(a)), body!(TypeBody::Ptr(b))) => {
@@ -443,7 +504,7 @@ impl Type {
                     })
                     .collect::<Option<_>>()?;
                 TypeBody::Inferred(InferredType {
-                    members: fields,
+                    members:    fields,
                     properties: props,
                 })
             }
@@ -463,6 +524,12 @@ impl Type {
                 } else {
                     return None;
                 }
+            }
+            unordered!(
+                body!(TypeBody::TypeRef(a_mod_idx, a_ty_idx)),
+                body!(TypeBody::SelfType(b_mod_idx, b_ty_idx))
+            ) if a_mod_idx == b_mod_idx && a_ty_idx == b_ty_idx => {
+                TypeBody::TypeRef(*a_mod_idx, *a_ty_idx)
             }
             (a, b) => {
                 if &a.body == &b.body {
@@ -504,7 +571,7 @@ impl Display for Type {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct InferredType {
     /// Fields used in the constructors
-    pub members: utils::SortedMap<String, Type>,
+    pub members:    utils::SortedMap<String, Type>,
     /// Fields or applied methods
     pub properties: utils::SortedMap<String, Type>,
 }
@@ -515,7 +582,7 @@ impl InferredType {
         props: impl IntoIterator<Item = (String, Type)>,
     ) -> Self {
         Self {
-            members: members.into_iter().collect(),
+            members:    members.into_iter().collect(),
             properties: props.into_iter().collect(),
         }
     }
@@ -523,20 +590,20 @@ impl InferredType {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, new)]
 pub struct StringType {
-    pub len: Option<usize>,
+    pub len: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, new)]
 pub struct ArrayType {
     pub item: Box<Type>,
-    pub len: Option<usize>,
+    pub len:  Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Display, new)]
 #[display("func({}): {ret}", params.iter().join(", "))]
 pub struct FuncType {
     pub params: Vec<Type>,
-    pub ret: Type,
+    pub ret:    Type,
 }
 impl FuncType {
     pub fn intersection(&self, other: &FuncType, modules: &[Module]) -> Option<FuncType> {

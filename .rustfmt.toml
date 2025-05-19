@@ -1,4 +1,8 @@
+unstable_features = true
 group_imports = "StdExternalCrate"
 imports_granularity = "Module"
 max_width = 90
 doc_comment_code_block_width = 90
+struct_field_align_threshold = 5
+enum_discrim_align_threshold = 5
+use_field_init_shorthand = true

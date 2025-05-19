@@ -40,8 +40,8 @@ impl<'t> TreeSitterUtils<'t> for ts::Node<'t> {
 }
 
 struct TreeSitterChildren<'t> {
-    field: Option<String>,
-    cursor: ts::TreeCursor<'t>,
+    field:    Option<String>,
+    cursor:   ts::TreeCursor<'t>,
     finished: bool,
 }
 impl<'t> TreeSitterChildren<'t> {

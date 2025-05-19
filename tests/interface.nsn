@@ -1,0 +1,33 @@
+type PrintA : Print {
+    print(text, self: Self) =
+        let _ = print("PrintA")
+        let _ = print(text)
+        true
+}
+
+type PrintB : Print {
+    data: str
+
+    print(text, self: Self) =
+        let _ = print("PrintB")
+        let _ = print(self.data)
+        let _ = print(text)
+        true
+}
+
+type Print interface {
+    print(text: str, self: Self): bool
+}
+
+print_with(printer: Print) =
+    printer.print("implementation omitted")
+
+a: PrintA = {}
+b: PrintB = {data="PrintB 1"}
+c: PrintB = {data="PrintB 2"}
+
+main =
+    let _ = print_with(a)
+    let _ = print_with(b)
+    let _ = print_with(c)
+    true

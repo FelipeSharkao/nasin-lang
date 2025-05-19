@@ -51,6 +51,7 @@ pub enum InstrBody {
     StrPtr(ValueIdx, u64),
 
     Type(ValueIdx, Type),
+    Dispatch(ValueIdx, usize, usize),
 
     CompileError,
 }
@@ -129,6 +130,9 @@ impl Display for InstrBody {
             InstrBody::StrLen(v) => write!(f, "str_len v{v}")?,
             InstrBody::StrPtr(v, idx) => write!(f, "str_ptr v{v} {idx}")?,
             InstrBody::Type(v, ty) => write!(f, "type v{v} {ty}")?,
+            InstrBody::Dispatch(v, mod_idx, ty_idx) => {
+                write!(f, "dispatch v{v} {mod_idx}-{ty_idx}")?
+            }
             InstrBody::CompileError => write!(f, "compile_error")?,
         }
         Ok(())
@@ -137,8 +141,8 @@ impl Display for InstrBody {
 
 #[derive(Debug, Clone, new)]
 pub struct Instr {
-    pub body: InstrBody,
-    pub loc: Loc,
+    pub body:    InstrBody,
+    pub loc:     Loc,
     #[new(default)]
     pub results: Vec<ValueIdx>,
 }

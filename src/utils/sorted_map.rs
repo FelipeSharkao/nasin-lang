@@ -1,12 +1,13 @@
 use std::borrow::Borrow;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
+use std::ops::{Index, IndexMut};
 
 use super::indented;
 
 /// Ordered map that uses  binary search internally. Lookup is O(log(n)), but it
 /// guarantees order when iterating. Useful for small maps (<50) that are iterated a lot.
-#[derive(PartialEq, Eq, Hash, Clone, Default)]
+#[derive(PartialEq, Eq, Hash, Clone)]
 pub struct SortedMap<K: Ord, V> {
     items: Vec<(K, V)>,
 }
@@ -96,6 +97,12 @@ impl<K: Ord, V> SortedMap<K, V> {
     }
 }
 
+impl<K: Ord, V> Default for SortedMap<K, V> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<K: Ord, V> From<HashMap<K, V>> for SortedMap<K, V> {
     fn from(value: HashMap<K, V>) -> Self {
         let mut this = Self::with_capacity(value.len());
@@ -125,6 +132,27 @@ impl<K: Ord, V> From<HashSet<(K, V)>> for SortedMap<K, V> {
         let mut this = Self::with_capacity(value.len());
         this.extend(value);
         this
+    }
+}
+
+impl<K: Ord, V, Q: ?Sized> Index<&Q> for SortedMap<K, V>
+where
+    K: Borrow<Q>,
+    Q: Ord,
+{
+    type Output = V;
+    fn index(&self, index: &Q) -> &Self::Output {
+        self.get(index).expect("no entry found for key")
+    }
+}
+
+impl<K: Ord, V, Q: ?Sized> IndexMut<&Q> for SortedMap<K, V>
+where
+    K: Borrow<Q>,
+    Q: Ord,
+{
+    fn index_mut(&mut self, index: &Q) -> &mut Self::Output {
+        self.get_mut(index).expect("no entry found for key")
     }
 }
 

@@ -17,8 +17,8 @@ pub enum ValueRefBody {
 pub struct ValueRef {
     pub body: ValueRefBody,
     #[new(default)]
-    pub ty: Option<b::Type>,
-    pub loc: b::Loc,
+    pub ty:   Option<b::Type>,
+    pub loc:  b::Loc,
 }
 impl ValueRef {
     pub fn is_never(&self) -> bool {

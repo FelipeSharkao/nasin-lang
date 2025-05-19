@@ -14,7 +14,7 @@ use crate::{bytecode as b, errors, utils};
 pub struct ExprParser<'a, 't> {
     pub module: ModuleParser<'a, 't>,
     pub scopes: ScopeStack<ScopePayload>,
-    func_idx: Option<usize>,
+    func_idx:   Option<usize>,
 }
 
 impl<'a, 't> ExprParser<'a, 't> {
@@ -517,7 +517,7 @@ impl<'a, 't> ExprParser<'a, 't> {
 pub struct ScopePayload {
     #[new(default)]
     pub instrs: Vec<b::Instr>,
-    idents: HashMap<String, ValueRef>,
+    idents:     HashMap<String, ValueRef>,
 }
 impl utils::ScopePayload for ScopePayload {
     type Result = Vec<b::Instr>;

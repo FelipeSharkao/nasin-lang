@@ -38,7 +38,7 @@ impl SourceManager {
 pub struct Source {
     pub path: PathBuf,
     #[derivative(Debug = "ignore")]
-    content: LazyTransform<File, SourceContent>,
+    content:  LazyTransform<File, SourceContent>,
 }
 impl Source {
     pub fn open(path: PathBuf) -> io::Result<Self> {
@@ -65,7 +65,7 @@ impl From<&Source> for b::Source {
 pub struct SourceContent {
     pub text: String,
     /// Indexes of each line after the first (which is implied to be at index 0)
-    lines: Vec<usize>,
+    lines:    Vec<usize>,
 }
 impl SourceContent {
     pub fn new(text: String) -> Self {

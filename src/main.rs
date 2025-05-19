@@ -1,6 +1,8 @@
-use std::env;
+use std::io::IsTerminal;
 use std::path::PathBuf;
 use std::process::exit;
+use std::str::FromStr;
+use std::{env, fs, io};
 
 use clap::{Parser, Subcommand};
 use nasin::config::BuildConfig;
@@ -47,19 +49,7 @@ enum CliCommand {
 fn main() {
     //unsafe { compact_debug::enable(true) };
 
-    tracing_subscriber::registry()
-        .with(tracing_subscriber::fmt::layer().with_level(true).pretty())
-        .with(match env::var("LOG_LEVEL") {
-            Ok(s) => match s.as_str() {
-                "trace" => LevelFilter::TRACE,
-                "debug" => LevelFilter::DEBUG,
-                "info" => LevelFilter::INFO,
-                _ => LevelFilter::WARN,
-            },
-            _ => LevelFilter::WARN,
-        })
-        .with(filter_fn(|meta| meta.target().starts_with("nasin")))
-        .init();
+    prepare_tracing();
 
     let cli = Cli::parse();
 
@@ -103,4 +93,45 @@ fn main() {
             ctx.compile();
         }
     }
+}
+
+fn prepare_tracing() {
+    macro_rules! level {
+        () => {
+            tracing_subscriber::fmt::layer().with_level(true).pretty()
+        };
+    }
+
+    let file = env::var("LOG_FILE").ok().map(|log_file| {
+        let path = PathBuf::from_str(log_file.as_ref())
+            .expect("LOG_FILE should be a valid path");
+        fs::OpenOptions::new()
+            .append(true)
+            .create(true)
+            .open(path)
+            .expect("LOG_FILE should be writable")
+    });
+
+    tracing_subscriber::registry()
+        .with(if file.is_none() {
+            Some(
+                level!()
+                    .with_ansi(io::stderr().is_terminal())
+                    .with_writer(io::stderr),
+            )
+        } else {
+            None
+        })
+        .with(file.map(|file| level!().with_ansi(false).with_writer(file)))
+        .with(match env::var("LOG_LEVEL") {
+            Ok(s) => match s.as_str() {
+                "trace" => LevelFilter::TRACE,
+                "debug" => LevelFilter::DEBUG,
+                "info" => LevelFilter::INFO,
+                _ => LevelFilter::WARN,
+            },
+            _ => LevelFilter::WARN,
+        })
+        .with(filter_fn(|meta| meta.target().starts_with("nasin")))
+        .init();
 }

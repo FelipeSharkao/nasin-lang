@@ -3,13 +3,13 @@ use std::collections::HashMap;
 use std::mem;
 
 use cl::InstBuilder;
-use cranelift_shim as cl;
+use cranelift_shim::{self as cl, Module};
 use derive_new::new;
 use itertools::{izip, Itertools};
 
-use super::globals::{GlobalBinding, Globals};
-use super::types::{self, get_size, get_type};
-use super::FuncBinding;
+use super::context::{CodegenContext, GlobalBinding};
+use super::types;
+use crate::utils::unwrap;
 use crate::{bytecode as b, utils};
 
 #[derive(Debug, Clone, Copy)]
@@ -23,21 +23,26 @@ pub enum ResultPolicy {
 #[derive(Debug, Clone, Copy)]
 pub enum CallReturnPolicy {
     Normal,
-    StructReturn,
+    StructReturn(u32),
     NoReturn,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum Callee {
+    Direct(cl::FuncId),
+    Indirect(cl::SigRef, cl::Value),
+}
+
 #[derive(new)]
-pub struct FuncCodegen<'a, 'b, M: cl::Module> {
-    pub modules: &'a [b::Module],
+pub struct FuncCodegen<'a, 'b> {
+    pub ctx: CodegenContext<'a>,
     pub builder: Option<cl::FunctionBuilder<'b>>,
-    pub obj_module: M,
-    pub globals: Globals<'a>,
-    pub funcs: HashMap<(usize, usize), FuncBinding>,
     #[new(value = "utils::ScopeStack::empty()")]
     pub scopes: utils::ScopeStack<ScopePayload<'a>>,
     #[new(default)]
     pub values: HashMap<b::ValueIdx, types::RuntimeValue>,
+    #[new(default)]
+    imported_signatures: HashMap<(usize, usize), cl::SigRef>,
     #[new(default)]
     declared_funcs: HashMap<cl::FuncId, cl::FuncRef>,
 }
@@ -49,7 +54,7 @@ macro_rules! expect_builder {
             .expect("function builder should be defined")
     }};
 }
-impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
+impl<'a> FuncCodegen<'a, '_> {
     pub fn create_initial_block(
         &mut self,
         params: &'a [b::ValueIdx],
@@ -67,14 +72,14 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
         if let (ResultPolicy::StructReturn, Some(result)) = (result_policy, result) {
             let cl_value = cl_values.remove(0);
             let runtime_value =
-                types::RuntimeValue::new(cl_value.into(), mod_idx, result);
+                types::RuntimeValue::new(cl_value.into(), mod_idx, result).is_ptr(true);
             self.values.insert(result, runtime_value);
         }
 
-        for (v, cl_value) in izip!(params, cl_values) {
-            let runtime_value = types::RuntimeValue::new(cl_value.into(), mod_idx, *v);
-            self.values.insert(*v, runtime_value);
-        }
+        self.values.extend(izip!(
+            params.iter().copied(),
+            types::tuple_from_args(mod_idx, params, &cl_values, &self.ctx.modules),
+        ));
 
         expect_builder!(self).switch_to_block(block);
         self.scopes.begin(ScopePayload {
@@ -83,13 +88,13 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
             next_branches: vec![],
             ty: result
                 .clone()
-                .map(|v| Cow::Borrowed(&self.modules[mod_idx].values[v].ty)),
+                .map(|v| Cow::Borrowed(&self.ctx.modules[mod_idx].values[v].ty)),
             result,
         });
     }
-    pub fn finish(self) -> (M, Globals<'a>, HashMap<(usize, usize), FuncBinding>) {
+    pub fn finish(self) -> CodegenContext<'a> {
         assert!(self.scopes.len() == 1);
-        (self.obj_module, self.globals, self.funcs)
+        self.ctx
     }
     #[tracing::instrument(skip_all)]
     pub fn add_body(
@@ -136,7 +141,7 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
             | b::InstrBody::Lte(a, b) => {
                 let lhs = self.use_value(*a);
                 let rhs = self.use_value(*b);
-                let ty = &self.modules[mod_idx].values[*a].ty;
+                let ty = &self.ctx.modules[mod_idx].values[*a].ty;
 
                 let builder = expect_builder!(self);
 
@@ -244,9 +249,9 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
                     types::RuntimeValue::new(cl_value.into(), mod_idx, instr.results[0]),
                 );
             }
-            b::InstrBody::If(cond_v, then_, else_) => {
+            b::InstrBody::If(cond, then_, else_) => {
+                let cond = self.use_value(*cond);
                 let builder = expect_builder!(self);
-                let cond = self.values[cond_v].add_to_func(&mut self.obj_module, builder);
 
                 let then_block = builder.create_block();
                 let else_block = builder.create_block();
@@ -262,14 +267,15 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
                 };
 
                 if instr.results.len() > 0 {
-                    let module = &self.modules[mod_idx];
+                    let module = &self.ctx.modules[mod_idx];
                     let ty = &module.values[instr.results[0]].ty;
 
                     let next_block = builder.create_block();
-                    builder.append_block_param(
-                        next_block,
-                        get_type(ty, self.modules, &self.obj_module),
-                    );
+                    for native_ty in
+                        types::get_type(ty, self.ctx.modules, &self.ctx.obj_module)
+                    {
+                        builder.append_block_param(next_block, native_ty);
+                    }
 
                     scope.result = Some(instr.results[0]);
                     scope.ty = Some(Cow::Borrowed(ty));
@@ -297,33 +303,49 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
                 }
             }
             b::InstrBody::Loop(inputs, body) => {
-                let builder = expect_builder!(self);
-
-                let loop_block = builder.create_block();
+                let loop_block = {
+                    let builder = expect_builder!(self);
+                    builder.create_block()
+                };
 
                 let mut loop_args = vec![];
                 for (loop_v, initial_v) in inputs {
                     let initial_runtime_value = self.values[initial_v];
-                    let initial_value =
-                        initial_runtime_value.add_to_func(&self.obj_module, builder);
-                    loop_args.push(initial_value);
+                    let initial_values = self.use_values(*initial_v);
+                    loop_args.extend(initial_values.iter().cloned());
 
-                    let native_ty =
-                        initial_runtime_value.native_type(self.modules, &self.obj_module);
-                    let loop_value = builder.append_block_param(loop_block, native_ty);
+                    let loop_values = initial_values
+                        .into_iter()
+                        .map(|initial_value| {
+                            let builder = expect_builder!(self);
+                            let native_ty = builder.func.dfg.value_type(initial_value);
+                            builder.append_block_param(loop_block, native_ty)
+                        })
+                        .collect_vec();
+
+                    let src = initial_runtime_value.src.with_values(&loop_values);
                     self.values.insert(
                         *loop_v,
-                        types::RuntimeValue::new(loop_value.into(), mod_idx, *loop_v),
+                        types::RuntimeValue::new(src, mod_idx, *loop_v)
+                            .is_ptr(initial_runtime_value.is_ptr),
                     );
                 }
+
+                let builder = expect_builder!(self);
                 builder.ins().jump(loop_block, &loop_args);
 
                 let continue_block = builder.create_block();
                 let (result, ty) = if instr.results.len() > 0 {
+                    assert_eq!(instr.results.len(), 1);
                     let result = instr.results[0];
-                    let ty = &self.modules[mod_idx].values[result].ty;
-                    let native_ty = types::get_type(ty, self.modules, &self.obj_module);
-                    builder.append_block_param(continue_block, native_ty);
+
+                    let ty = &self.ctx.modules[mod_idx].values[result].ty;
+                    for native_ty in
+                        types::get_type(ty, self.ctx.modules, &self.ctx.obj_module)
+                    {
+                        builder.append_block_param(continue_block, native_ty);
+                    }
+
                     (Some(result), Some(Cow::Borrowed(ty)))
                 } else {
                     (None, None)
@@ -351,46 +373,54 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
                 }
             }
             b::InstrBody::Break(v) => {
-                let builder = expect_builder!(self);
-
-                let ty = &self.modules[mod_idx].values[*v].ty;
-                let mut cl_value =
-                    self.values[v].add_to_func(&mut self.obj_module, builder);
+                let runtime_value = self.values[v];
+                let ty = &self.ctx.modules[mod_idx].values[*v].ty;
+                let mut cl_values: Vec<_>;
 
                 match result_policy {
                     ResultPolicy::Normal => {
+                        cl_values = self.use_values(*v);
                         if let Some(prev_scope) = self.scopes.get(self.scopes.len() - 2) {
-                            builder.ins().jump(prev_scope.block, &[cl_value]);
-                            cl_value = builder.block_params(prev_scope.block)[0];
+                            let builder = expect_builder!(self);
+                            builder.ins().jump(prev_scope.block, &cl_values);
+                            cl_values = builder.block_params(prev_scope.block).to_vec();
                         }
                     }
                     ResultPolicy::Return => {
-                        builder.ins().return_(&[cl_value]);
+                        cl_values = self.use_values(*v);
+                        expect_builder!(self).ins().return_(&cl_values);
                     }
                     ResultPolicy::StructReturn => {
+                        let cl_value = self.use_value(*v);
                         if let Some(res) = self.scopes.last().result {
-                            let size =
-                                types::get_size(ty, self.modules, &self.obj_module);
+                            let size = types::get_size(
+                                ty,
+                                self.ctx.modules,
+                                &self.ctx.obj_module,
+                            );
 
-                            let res_cl = self.values[&res]
-                                .add_to_func(&mut self.obj_module, builder);
+                            let res_cl = self.use_value(res);
 
                             self.copy_bytes(res_cl, cl_value, size);
                         }
                         expect_builder!(self).ins().return_(&[]);
+                        cl_values = vec![cl_value];
                     }
-                    ResultPolicy::Global => {}
+                    ResultPolicy::Global => {
+                        cl_values = self.use_values(*v);
+                    }
                 }
 
                 let scope = self.scopes.last();
                 let result = scope.result.unwrap();
+                let src = runtime_value.src.with_values(&cl_values);
                 self.values.insert(
                     result,
-                    types::RuntimeValue::new(cl_value.into(), mod_idx, result),
+                    types::RuntimeValue::new(src, mod_idx, result)
+                        .is_ptr(runtime_value.is_ptr),
                 );
             }
             b::InstrBody::Continue(vs) => {
-                let builder = expect_builder!(self);
                 let block = self
                     .scopes
                     .last_loop()
@@ -399,10 +429,10 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
 
                 let values = vs
                     .into_iter()
-                    .map(|v| self.values[v].add_to_func(&mut self.obj_module, builder))
+                    .flat_map(|v| self.use_values(*v))
                     .collect_vec();
 
-                builder.ins().jump(block, &values);
+                expect_builder!(self).ins().jump(block, &values);
                 self.scopes.last_mut().mark_as_never();
             }
             b::InstrBody::Call(func_mod_idx, func_idx, vs) => {
@@ -410,24 +440,32 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
 
                 let args = vs
                     .into_iter()
-                    .map(|v| self.values[v].add_to_func(&mut self.obj_module, builder))
+                    .flat_map(|v| self.use_values(*v))
                     .collect_vec();
 
                 if let Some(value) = self.call(*func_mod_idx, *func_idx, args) {
+                    let ty = &self.ctx.modules[mod_idx].values[instr.results[0]].ty;
+
+                    let mut is_ptr = false;
+                    if let &b::TypeBody::TypeRef(ty_mod_idx, ty_idx) = &ty.body {
+                        let typebody =
+                            &self.ctx.modules[ty_mod_idx].typedefs[ty_idx].body;
+                        is_ptr = matches!(typebody, b::TypeDefBody::Record(_))
+                    };
+
                     self.values.insert(
                         instr.results[0],
-                        types::RuntimeValue::new(value.into(), mod_idx, instr.results[0]),
+                        types::RuntimeValue::new(value.into(), mod_idx, instr.results[0])
+                            .is_ptr(is_ptr),
                     );
                 }
             }
             b::InstrBody::IndirectCall(func_v, vs) => {
-                let builder = expect_builder!(self);
-
-                let func = self.values[func_v].clone();
+                let func = self.values[func_v];
 
                 let mut args = vs
                     .into_iter()
-                    .map(|v| self.values[v].add_to_func(&mut self.obj_module, builder))
+                    .flat_map(|v| self.use_values(*v))
                     .collect_vec();
 
                 match &func.src {
@@ -438,6 +476,49 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
                         args.push(*self_value);
 
                         if let Some(value) = self.call(*func_mod_idx, *func_idx, args) {
+                            let ty =
+                                &self.ctx.modules[mod_idx].values[instr.results[0]].ty;
+
+                            let mut is_ptr = false;
+                            if let &b::TypeBody::TypeRef(ty_mod_idx, ty_idx) = &ty.body {
+                                let typebody =
+                                    &self.ctx.modules[ty_mod_idx].typedefs[ty_idx].body;
+                                is_ptr = matches!(typebody, b::TypeDefBody::Record(_))
+                            };
+
+                            self.values.insert(
+                                instr.results[0],
+                                types::RuntimeValue::new(
+                                    value.into(),
+                                    mod_idx,
+                                    instr.results[0],
+                                ),
+                            );
+                        }
+                    }
+                    types::ValueSource::AppliedMethodInderect(
+                        self_value,
+                        callee,
+                        ref_func_ref,
+                    ) => {
+                        args.push(*self_value);
+
+                        if let Some(value) = self.call_indirect(
+                            ref_func_ref.0,
+                            ref_func_ref.1,
+                            *callee,
+                            args,
+                        ) {
+                            let ty =
+                                &self.ctx.modules[mod_idx].values[instr.results[0]].ty;
+
+                            let mut is_ptr = false;
+                            if let &b::TypeBody::TypeRef(ty_mod_idx, ty_idx) = &ty.body {
+                                let typebody =
+                                    &self.ctx.modules[ty_mod_idx].typedefs[ty_idx].body;
+                                is_ptr = matches!(typebody, b::TypeDefBody::Record(_))
+                            };
+
                             self.values.insert(
                                 instr.results[0],
                                 types::RuntimeValue::new(
@@ -454,17 +535,19 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
             b::InstrBody::GetField(source_v, name) => {
                 let builder = expect_builder!(self);
 
-                let source_ty = &self.modules[mod_idx].values[*source_v].ty;
+                let source_ty = &self.ctx.modules[mod_idx].values[*source_v].ty;
                 let source = &self.values[source_v];
                 let b::Type {
-                    body: b::TypeBody::TypeRef(ty_mod_idx, ty_idx),
+                    body:
+                        b::TypeBody::TypeRef(ty_mod_idx, ty_idx)
+                        | b::TypeBody::SelfType(ty_mod_idx, ty_idx),
                     ..
                 } = source_ty
                 else {
                     panic!("type should be a typeref");
                 };
                 let b::TypeDefBody::Record(rec) =
-                    &self.modules[*ty_mod_idx].typedefs[*ty_idx].body
+                    &self.ctx.modules[*ty_mod_idx].typedefs[*ty_idx].body
                 else {
                     panic!("type should be a record type");
                 };
@@ -474,59 +557,130 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
                     if k == name {
                         break;
                     }
-                    offset += get_type(&v.ty, self.modules, &self.obj_module).bytes();
+                    for native_ty in
+                        types::get_type(&v.ty, self.ctx.modules, &self.ctx.obj_module)
+                    {
+                        offset += native_ty.bytes();
+                    }
                 }
 
-                let source_value = source.add_to_func(&mut self.obj_module, builder);
+                let ty = &self.ctx.modules[mod_idx].values[instr.results[0]].ty;
+
+                let field_ty =
+                    types::get_type(&ty, self.ctx.modules, &self.ctx.obj_module);
+                assert_eq!(field_ty.len(), 1, "how do whe load this?");
+
+                let source_value =
+                    source.add_value_to_func(&mut self.ctx.obj_module, builder);
                 let value = builder.ins().load(
-                    source.native_type(self.modules, &self.obj_module).clone(),
+                    field_ty[0],
                     cl::MemFlags::new(),
                     source_value,
                     offset as i32,
                 );
+
+                let mut is_ptr = false;
+                if let &b::TypeBody::TypeRef(ty_mod_idx, ty_idx) = &ty.body {
+                    let typebody = &self.ctx.modules[ty_mod_idx].typedefs[ty_idx].body;
+                    is_ptr = matches!(
+                        typebody,
+                        b::TypeDefBody::Record(_) | b::TypeDefBody::Interface(_)
+                    );
+                };
+
                 self.values.insert(
                     instr.results[0],
-                    types::RuntimeValue::new(value.into(), mod_idx, instr.results[0]),
+                    types::RuntimeValue::new(value.into(), mod_idx, instr.results[0])
+                        .is_ptr(is_ptr),
                 );
             }
             b::InstrBody::GetMethod(source_v, name) => {
                 let builder = expect_builder!(self);
 
-                let source_ty = &self.modules[mod_idx].values[*source_v].ty;
+                let source_ty = &self.ctx.modules[mod_idx].values[*source_v].ty;
                 let source = &self.values[source_v];
-                let b::Type {
-                    body: b::TypeBody::TypeRef(ty_mod_idx, ty_idx),
-                    ..
-                } = source_ty
-                else {
+                let b::TypeBody::TypeRef(ty_mod_idx, ty_idx) = &source_ty.body else {
                     panic!("type should be a typeref");
                 };
 
-                let method = match &self.modules[*ty_mod_idx].typedefs[*ty_idx].body {
-                    b::TypeDefBody::Record(rec) => rec
-                        .methods
-                        .iter()
-                        .find(|(k, _)| k == name)
-                        .map(|(_, v)| v)
-                        .expect("method should be present in record"),
-                };
+                match &self.ctx.modules[*ty_mod_idx].typedefs[*ty_idx].body {
+                    b::TypeDefBody::Record(rec) => {
+                        let value =
+                            source.add_value_to_func(&self.ctx.obj_module, builder);
+                        let method = &rec.methods[name];
 
-                let value = source.add_to_func(&self.obj_module, builder);
-                self.values.insert(
-                    instr.results[0],
-                    types::RuntimeValue::new(
-                        types::ValueSource::AppliedMethod(value, method.func_ref),
-                        mod_idx,
-                        instr.results[0],
-                    ),
-                );
+                        self.values.insert(
+                            instr.results[0],
+                            types::RuntimeValue::new(
+                                types::ValueSource::AppliedMethod(value, method.func_ref),
+                                mod_idx,
+                                instr.results[0],
+                            ),
+                        );
+                    }
+                    b::TypeDefBody::Interface(iface) => {
+                        let (src, vtable) = match &source.src {
+                            types::ValueSource::DynDispatched(dispatched) => {
+                                (dispatched.src, dispatched.vtable)
+                            }
+                            _ => {
+                                let ptr = source
+                                    .add_value_to_func(&self.ctx.obj_module, builder);
+                                let src_value = builder.ins().load(
+                                    self.ctx.obj_module.isa().pointer_type(),
+                                    cl::MemFlags::new(),
+                                    ptr,
+                                    0,
+                                );
+                                let vtable_value = builder.ins().load(
+                                    self.ctx.obj_module.isa().pointer_type(),
+                                    cl::MemFlags::new(),
+                                    ptr,
+                                    self.ctx.obj_module.isa().pointer_bytes() as i32,
+                                );
+                                (src_value, vtable_value)
+                            }
+                        };
+
+                        let method = &iface.methods[name];
+
+                        let offset = self
+                            .ctx
+                            .vtables_desc
+                            .get(&(*ty_mod_idx, *ty_idx))
+                            .expect("Interface should already be defined")
+                            .method_offset(name, &self.ctx.obj_module)
+                            .unwrap();
+
+                        let func_ptr = builder.ins().load(
+                            self.ctx.obj_module.isa().pointer_type(),
+                            cl::MemFlags::new(),
+                            vtable,
+                            offset as i32,
+                        );
+
+                        self.values.insert(
+                            instr.results[0],
+                            types::RuntimeValue::new(
+                                types::ValueSource::AppliedMethodInderect(
+                                    src,
+                                    func_ptr,
+                                    method.func_ref,
+                                ),
+                                mod_idx,
+                                instr.results[0],
+                            ),
+                        );
+                    }
+                };
             }
             b::InstrBody::ArrayLen(source_v) | b::InstrBody::StrLen(source_v) => {
                 let builder = expect_builder!(self);
 
-                let source = self.values[source_v].add_to_func(&self.obj_module, builder);
+                let source = self.values[source_v]
+                    .add_value_to_func(&self.ctx.obj_module, builder);
                 let value = builder.ins().load(
-                    self.obj_module.isa().pointer_type(),
+                    self.ctx.obj_module.isa().pointer_type(),
                     cl::MemFlags::new(),
                     source,
                     0,
@@ -542,14 +696,18 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
             }
             b::InstrBody::ArrayPtr(source_v, idx)
             | b::InstrBody::StrPtr(source_v, idx) => {
-                let source_ty = &self.modules[mod_idx].values[*source_v].ty;
-                let source = self.values[source_v].clone();
-                let cl_source =
-                    source.add_to_func(&mut self.obj_module, expect_builder!(self));
+                let source_ty = &self.ctx.modules[mod_idx].values[*source_v].ty;
+                let source = self.values[source_v];
+                let cl_source = source
+                    .add_value_to_func(&mut self.ctx.obj_module, expect_builder!(self));
 
                 let (item_size, len) = match &source_ty.body {
                     b::TypeBody::Array(array_ty) => (
-                        get_size(&array_ty.item, &self.modules, &self.obj_module),
+                        types::get_size(
+                            &array_ty.item,
+                            &self.ctx.modules,
+                            &self.ctx.obj_module,
+                        ),
                         array_ty.len,
                     ),
                     b::TypeBody::String(str_ty) => (1, str_ty.len),
@@ -564,11 +722,11 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
 
                     let idx_value = builder
                         .ins()
-                        .iconst(self.obj_module.isa().pointer_type(), unsafe {
+                        .iconst(self.ctx.obj_module.isa().pointer_type(), unsafe {
                             mem::transmute::<_, i64>(*idx)
                         });
                     let len = builder.ins().load(
-                        self.obj_module.isa().pointer_type(),
+                        self.ctx.obj_module.isa().pointer_type(),
                         cl::MemFlags::new(),
                         cl_source,
                         0,
@@ -582,18 +740,51 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
 
                 let builder = expect_builder!(self);
 
-                let offset =
-                    self.obj_module.isa().pointer_bytes() as u64 + idx * item_size as u64;
+                let offset = self.ctx.obj_module.isa().pointer_bytes() as u64
+                    + idx * item_size as u64;
                 let offset_value = builder
                     .ins()
-                    .iconst(self.obj_module.isa().pointer_type(), unsafe {
+                    .iconst(self.ctx.obj_module.isa().pointer_type(), unsafe {
                         mem::transmute::<_, i64>(offset)
                     });
                 let value = builder.ins().iadd(cl_source, offset_value);
 
                 self.values.insert(
                     instr.results[0],
-                    types::RuntimeValue::new(value.into(), mod_idx, instr.results[0]),
+                    types::RuntimeValue::new(value.into(), mod_idx, instr.results[0])
+                        .is_ptr(true),
+                );
+            }
+            b::InstrBody::Dispatch(v, iface_mod_idx, iface_ty_idx) => {
+                let builder = expect_builder!(self);
+
+                let ty = &self.ctx.modules[mod_idx].values[*v].ty;
+                let b::TypeBody::TypeRef(ty_mod_idx, ty_idx) = &ty.body else {
+                    panic!("type should be a typeref");
+                };
+                let vtable_ref = types::VTableRef::new(
+                    (*iface_mod_idx, *iface_ty_idx),
+                    (*ty_mod_idx, *ty_idx),
+                );
+                let vtable_data = self.ctx.vtables_impl[&vtable_ref];
+                let vtable_gv = self
+                    .ctx
+                    .obj_module
+                    .declare_data_in_func(vtable_data, &mut builder.func);
+                let vtable = builder
+                    .ins()
+                    .global_value(self.ctx.obj_module.isa().pointer_type(), vtable_gv);
+
+                let src = self.use_value(*v);
+
+                let dispatched = types::DynDispatched::new(src, vtable.into());
+                self.values.insert(
+                    instr.results[0],
+                    types::RuntimeValue::new(
+                        dispatched.into(),
+                        mod_idx,
+                        instr.results[0],
+                    ),
                 );
             }
             b::InstrBody::Type(..) => {}
@@ -618,7 +809,7 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
             let value = 'match_b: {
                 match &instr.body {
                     b::InstrBody::CreateNumber(n) => {
-                        let module = &self.modules[mod_idx];
+                        let module = &self.ctx.modules[mod_idx];
                         let ty = &module.values[instr.results[0]].ty;
 
                         macro_rules! parse_num {
@@ -645,7 +836,7 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
                             b::TypeBody::U32 => parse_num!(u32, I32),
                             b::TypeBody::U64 => parse_num!(u64, I64),
                             b::TypeBody::USize => {
-                                match this.obj_module.isa().pointer_bytes() {
+                                match this.ctx.obj_module.isa().pointer_bytes() {
                                     1 => parse_num!(u8, I8),
                                     2 => parse_num!(u16, I16),
                                     4 => parse_num!(u32, I32),
@@ -660,6 +851,7 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
                             | b::TypeBody::Bool
                             | b::TypeBody::String(_)
                             | b::TypeBody::TypeRef(_, _)
+                            | b::TypeBody::SelfType(_, _)
                             | b::TypeBody::Array(_)
                             | b::TypeBody::Ptr(_)
                             | b::TypeBody::Inferred(_)
@@ -676,9 +868,7 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
                         instr.results[0],
                     )),
                     b::InstrBody::CreateString(s) => {
-                        let (data, module) =
-                            this.globals.data_for_string(s, this.obj_module);
-                        this.obj_module = module;
+                        let data = this.ctx.data_for_string(s);
                         Some(types::RuntimeValue::new(
                             data.into(),
                             mod_idx,
@@ -686,62 +876,55 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
                         ))
                     }
                     b::InstrBody::CreateArray(vs) => {
-                        let (data, module) = this.globals.data_for_array(
+                        let data = this.ctx.data_for_array(
                             vs.iter().map(|v| this.values[v].src).collect_vec(),
-                            this.obj_module,
                         );
-                        this.obj_module = module;
                         let src = if let Some(data) = data {
                             data.into()
                         } else if this.builder.is_some() {
-                            this.create_stack_slot(
-                                vs.iter().map(|v| this.values[v]).collect_vec(),
-                            )
-                            .into()
+                            let values = vs.iter().map(|v| this.values[v]).collect_vec();
+                            this.create_stack_slot(&values).into()
                         } else {
                             break 'match_b None;
                         };
                         Some(types::RuntimeValue::new(src, mod_idx, instr.results[0]))
                     }
                     b::InstrBody::CreateRecord(fields) => {
-                        let module = &self.modules[mod_idx];
+                        let module = &self.ctx.modules[mod_idx];
                         let ty = &module.values[instr.results[0]].ty;
 
                         let values = types::tuple_from_record(
                             fields
                                 .iter()
-                                .map(|(name, v)| (name, this.values[v].clone()))
+                                .map(|(name, v)| (name, this.values[v]))
                                 .collect_vec(),
                             ty,
-                            this.modules,
+                            this.ctx.modules,
                         );
-                        let (data, module) = this.globals.data_for_tuple(
+                        let data = this.ctx.data_for_tuple(
                             values.iter().map(|value| value.src).collect_vec(),
-                            this.obj_module,
                         );
-                        this.obj_module = module;
                         let src = if let Some(data) = data {
                             data.into()
                         } else if this.builder.is_some() {
-                            this.create_stack_slot(values).into()
+                            this.create_stack_slot(&values).into()
                         } else {
                             break 'match_b None;
                         };
                         Some(types::RuntimeValue::new(src, mod_idx, instr.results[0]))
                     }
                     b::InstrBody::GetGlobal(mod_idx, global_idx) => Some(
-                        this.globals
+                        this.ctx
                             .get_global(*mod_idx, *global_idx)
                             .expect("global idx out of range")
-                            .value
-                            .clone(),
+                            .value,
                     ),
                     _ => None,
                 }
             };
 
-            if let Some(value) = value {
-                this.values.insert(instr.results[0], value);
+            if let Some(value) = &value {
+                this.values.insert(instr.results[0], *value);
             }
 
             (this, value)
@@ -755,13 +938,22 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
 
         let builder = expect_builder!(self);
 
-        let ty = value.native_type(self.modules, &self.obj_module);
-        let value = value.add_to_func(&mut self.obj_module, builder);
+        let ty = value.native_type(self.ctx.modules, &self.ctx.obj_module);
         let global_value = self
+            .ctx
             .obj_module
             .declare_data_in_func(*data_id, &mut builder.func);
-        let ptr = builder.ins().global_value(ty, global_value);
-        builder.ins().store(cl::MemFlags::new(), value, ptr, 0);
+        let ptr = builder
+            .ins()
+            .global_value(self.ctx.obj_module.isa().pointer_type(), global_value);
+
+        let mut offset = 0;
+        for v in value.add_values_to_func(&mut self.ctx.obj_module, builder) {
+            builder
+                .ins()
+                .store(cl::MemFlags::new(), v, ptr, offset as i32);
+            offset += builder.func.dfg.value_type(v).bytes();
+        }
     }
 
     pub fn call(
@@ -770,60 +962,88 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
         func_idx: usize,
         args: impl Into<Vec<cl::Value>>,
     ) -> Option<cl::Value> {
+        let func_id = self
+            .ctx
+            .funcs
+            .get(&(func_mod_idx, func_idx))
+            .unwrap()
+            .func_id
+            .expect("Function should be declared");
+
+        self.native_call(
+            Callee::Direct(func_id),
+            args,
+            self.func_return_policy(func_mod_idx, func_idx),
+        )
+    }
+
+    pub fn call_indirect(
+        &mut self,
+        ref_func_mod_idx: usize,
+        ref_func_idx: usize,
+        callee: cl::Value,
+        args: impl Into<Vec<cl::Value>>,
+    ) -> Option<cl::Value> {
         let builder = expect_builder!(self);
 
-        let mut args: Vec<_> = args.into();
+        let sig_ref = *self
+            .imported_signatures
+            .entry((ref_func_mod_idx, ref_func_idx))
+            .or_insert_with(|| {
+                let sig = self.ctx.funcs[&(ref_func_mod_idx, ref_func_idx)]
+                    .signature
+                    .clone();
+                builder.import_signature(sig)
+            });
 
-        let func_id = self.funcs.get(&(func_mod_idx, func_idx)).unwrap().func_id;
-        let func = &self.modules[func_mod_idx].funcs[func_idx];
-
-        let ret_ty = &self.modules[func_mod_idx].values[func.ret].ty;
-        let ret_policy = if ret_ty.is_never() {
-            CallReturnPolicy::NoReturn
-        } else if ret_ty.is_aggregate(&self.modules) {
-            let size = types::get_size(ret_ty, &self.modules, &self.obj_module);
-            let ss_data =
-                cl::StackSlotData::new(cl::StackSlotKind::ExplicitSlot, size as u32);
-            let ss = builder.create_sized_stack_slot(ss_data);
-            let stack_addr =
-                builder
-                    .ins()
-                    .stack_addr(self.obj_module.isa().pointer_type(), ss, 0);
-            args.insert(0, stack_addr);
-
-            CallReturnPolicy::StructReturn
-        } else {
-            CallReturnPolicy::Normal
-        };
-
-        self.native_call(func_id, &args, ret_policy)
+        self.native_call(
+            Callee::Indirect(sig_ref, callee),
+            args,
+            self.func_return_policy(ref_func_mod_idx, ref_func_idx),
+        )
     }
 
     pub fn native_call(
         &mut self,
-        func_id: cl::FuncId,
-        args: &[cl::Value],
+        callee: Callee,
+        args: impl Into<Vec<cl::Value>>,
         ret_policy: CallReturnPolicy,
     ) -> Option<cl::Value> {
         let builder = expect_builder!(self);
 
-        let func_ref = match self.declared_funcs.get(&func_id) {
-            Some(func_ref) => *func_ref,
-            None => {
-                let func_ref =
-                    self.obj_module.declare_func_in_func(func_id, builder.func);
-                self.declared_funcs.insert(func_id, func_ref);
-                func_ref
+        let mut args = args.into();
+
+        if let CallReturnPolicy::StructReturn(size) = ret_policy {
+            let ss_data = cl::StackSlotData::new(cl::StackSlotKind::ExplicitSlot, size);
+            let ss = builder.create_sized_stack_slot(ss_data);
+            let stack_addr =
+                builder
+                    .ins()
+                    .stack_addr(self.ctx.obj_module.isa().pointer_type(), ss, 0);
+            args.insert(0, stack_addr);
+        }
+
+        let instr = match callee {
+            Callee::Direct(func_id) => {
+                let func_ref = self.declared_funcs.entry(func_id).or_insert_with(|| {
+                    let func_ref = self
+                        .ctx
+                        .obj_module
+                        .declare_func_in_func(func_id, builder.func);
+                    func_ref
+                });
+
+                builder.ins().call(*func_ref, &args)
             }
+            Callee::Indirect(sig, ptr) => builder.ins().call_indirect(sig, ptr, &args),
         };
 
-        let instr = builder.ins().call(func_ref, args);
         let results = builder.inst_results(instr);
         assert!(results.len() <= 1);
 
         match ret_policy {
             CallReturnPolicy::Normal => Some(results[0]),
-            CallReturnPolicy::StructReturn => Some(args[0]),
+            CallReturnPolicy::StructReturn(..) => Some(args[0]),
             CallReturnPolicy::NoReturn => {
                 builder.ins().trap(cl::TrapCode::UnreachableCodeReached);
                 self.scopes.last_mut().mark_as_never();
@@ -833,35 +1053,37 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
     }
 
     fn use_value(&mut self, v: b::ValueIdx) -> cl::Value {
-        let Some(runtime_value) = self.values.get(&v) else {
-            panic!("value should be present in scope: {v}");
-        };
-        let cl_value =
-            runtime_value.add_to_func(&mut self.obj_module, expect_builder!(self));
-        cl_value
+        let runtime_value =
+            unwrap!(self.values.get(&v), "value should be present in scope: {v}");
+        runtime_value.add_value_to_func(&mut self.ctx.obj_module, expect_builder!(self))
     }
 
-    fn create_stack_slot(
+    fn use_values(&mut self, v: b::ValueIdx) -> Vec<cl::Value> {
+        let runtime_value =
+            unwrap!(self.values.get(&v), "value should be present in scope: {v}");
+        runtime_value.add_values_to_func(&mut self.ctx.obj_module, expect_builder!(self))
+    }
+
+    fn create_stack_slot<'v>(
         &mut self,
-        values: impl IntoIterator<Item = types::RuntimeValue>,
+        values: impl IntoIterator<Item = &'v types::RuntimeValue> + 'v,
     ) -> cl::StackSlot {
         let Some(func) = &mut self.builder else {
             panic!("cannot add stack slot without a function");
         };
 
         let mut size = 0;
-        let values = values
-            .into_iter()
-            .map(|v| {
-                let offset = size;
-                size += v.native_type(self.modules, &self.obj_module).bytes();
-                (offset, v.add_to_func(&self.obj_module, func))
-            })
-            .collect_vec();
+        let mut stored_values = Vec::new();
+        for v in values {
+            for v in v.add_values_to_func(&self.ctx.obj_module, func) {
+                stored_values.push((size, v));
+                size += func.func.dfg.value_type(v).bytes();
+            }
+        }
 
         let ss_data = cl::StackSlotData::new(cl::StackSlotKind::ExplicitSlot, size);
         let ss = func.create_sized_stack_slot(ss_data);
-        for (offset, value) in values {
+        for (offset, value) in stored_values {
             func.ins().stack_store(value, ss, offset as i32);
         }
 
@@ -873,12 +1095,12 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
         builder.ins().trapz(cond, code);
     }
 
-    fn copy_bytes(&mut self, dst: cl::Value, src: cl::Value, size: usize) {
+    fn copy_bytes(&mut self, dst: cl::Value, src: cl::Value, size: u32) {
         let builder = expect_builder!(self);
 
         let mut offset: i32 = 0;
         loop {
-            let remaining = size - (offset as usize);
+            let remaining = size - (offset as u32);
 
             let mut copy = |ty: cl::types::Type| {
                 let tmp = builder.ins().load(ty, cl::MemFlags::new(), src, offset);
@@ -899,6 +1121,23 @@ impl<'a, M: cl::Module> FuncCodegen<'a, '_, M> {
             } else {
                 break;
             }
+        }
+    }
+
+    fn func_return_policy(
+        &self,
+        func_mod_idx: usize,
+        func_idx: usize,
+    ) -> CallReturnPolicy {
+        let func = &self.ctx.modules[func_mod_idx].funcs[func_idx];
+        let ret_ty = &self.ctx.modules[func_mod_idx].values[func.ret].ty;
+        if ret_ty.is_never() {
+            CallReturnPolicy::NoReturn
+        } else if ret_ty.is_aggregate(&self.ctx.modules) {
+            let size = types::get_size(ret_ty, &self.ctx.modules, &self.ctx.obj_module);
+            CallReturnPolicy::StructReturn(size as u32)
+        } else {
+            CallReturnPolicy::Normal
         }
     }
 }

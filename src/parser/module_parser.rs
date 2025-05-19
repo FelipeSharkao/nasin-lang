@@ -18,16 +18,16 @@ const SELF_INDENT: &str = "Self";
 #[derive(new)]
 pub struct ModuleParser<'a, 't> {
     #[new(value = "TypeParser::new(ctx, src_idx, mod_idx)")]
-    pub types: TypeParser<'a>,
+    pub types:   TypeParser<'a, 't>,
     #[new(default)]
     pub globals: Vec<DeclaredGlobal<'t>>,
     #[new(default)]
-    pub funcs: Vec<DeclaredFunc<'t>>,
+    pub funcs:   Vec<DeclaredFunc<'t>>,
     #[new(default)]
-    pub values: Vec<b::Value>,
+    pub values:  Vec<b::Value>,
     #[new(default)]
-    pub idents: HashMap<String, ValueRef>,
-    pub ctx: &'a context::BuildContext,
+    pub idents:  HashMap<String, ValueRef>,
+    pub ctx:     &'a context::BuildContext,
     pub src_idx: usize,
     pub mod_idx: usize,
 }
@@ -74,8 +74,10 @@ impl<'a, 't> ModuleParser<'a, 't> {
             }
         }
 
+        let typedefs = self.types.finish();
+
         let module = &mut self.ctx.lock_modules_mut()[self.mod_idx];
-        module.typedefs = self.types.typedefs;
+        module.typedefs = typedefs;
         module.globals = self.globals.into_iter().map(|x| x.global).collect();
         module.funcs = self.funcs.into_iter().map(|x| x.func).collect();
         module.values = self.values;
@@ -92,16 +94,17 @@ impl<'a, 't> ModuleParser<'a, 't> {
             match sym_node.kind() {
                 "type_decl" => {
                     let old_self_type = self.types.idents.get(SELF_INDENT).cloned();
-                    let self_type =
-                        b::TypeBody::TypeRef(self.mod_idx, self.types.typedefs.len());
+                    let ty_idx = self.types.typedefs.len();
+                    let self_type = b::TypeBody::SelfType(self.mod_idx, ty_idx);
                     self.types
                         .idents
                         .insert(SELF_INDENT.to_string(), self_type.clone());
 
-                    let methods = sym_node
-                        .field("body")
-                        .iter()
-                        .flat_map(|body_node| body_node.iter_field("methods"))
+                    let body_node = sym_node.required_field("body");
+                    let is_virt = body_node.kind() == "interface_type";
+
+                    let methods = body_node
+                        .iter_field("methods")
                         .map(|method_node| {
                             let method_ident_node =
                                 method_node.required_field("name").of_kind("ident");
@@ -109,7 +112,12 @@ impl<'a, 't> ModuleParser<'a, 't> {
                                 .get_text(&self.ctx.source(self.src_idx).content().text);
                             let func_name = format!("{name}.{method_name}");
 
-                            let func_idx = self.add_func(func_name, method_node);
+                            let func_idx = self.add_func(
+                                func_name,
+                                method_node,
+                                Some((self.mod_idx, ty_idx, method_name.to_string())),
+                                is_virt,
+                            );
 
                             (method_name, (self.mod_idx, func_idx))
                         })
@@ -125,7 +133,7 @@ impl<'a, 't> ModuleParser<'a, 't> {
                     }
                 }
                 "func_decl" => {
-                    self.add_func(name, sym_node);
+                    self.add_func(name, sym_node, None, false);
                 }
                 "global_decl" => {
                     self.add_global(name, sym_node);
@@ -177,7 +185,13 @@ impl<'a, 't> ModuleParser<'a, 't> {
         self.values.len() - 1
     }
 
-    fn add_func(&mut self, name: String, node: ts::Node<'t>) -> usize {
+    fn add_func(
+        &mut self,
+        name: String,
+        node: ts::Node<'t>,
+        method: Option<(usize, usize, String)>,
+        is_virt: bool,
+    ) -> usize {
         assert!(matches!(node.kind(), "func_decl" | "method"));
 
         let (params, params_names, params_locs): (Vec<_>, Vec<_>, Vec<_>) = node
@@ -206,7 +220,7 @@ impl<'a, 't> ModuleParser<'a, 't> {
             None => b::Type::unknown(None),
         };
 
-        let mut extn: Option<b::Extern> = None;
+        let mut extrn: Option<b::Extern> = None;
         for directive_node in node.iter_field("directives") {
             let args_nodes: Vec<_> = directive_node.iter_field("args").collect();
             match directive_node
@@ -215,7 +229,7 @@ impl<'a, 't> ModuleParser<'a, 't> {
             {
                 "extern" => {
                     // TODO: error handling
-                    assert!(extn.is_none());
+                    assert!(extrn.is_none());
                     assert!(args_nodes.len() == 1);
                     assert!(args_nodes[0].kind() == "string_lit");
                     let symbol_name = utils::decode_string_lit(
@@ -223,7 +237,7 @@ impl<'a, 't> ModuleParser<'a, 't> {
                             .required_field("content")
                             .get_text(&self.ctx.source(self.src_idx).content().text),
                     );
-                    extn = Some(b::Extern { name: symbol_name });
+                    extrn = Some(b::Extern { name: symbol_name });
                 }
                 _ => todo!(),
             }
@@ -234,7 +248,9 @@ impl<'a, 't> ModuleParser<'a, 't> {
             name,
             params: params.clone(),
             ret: UNDEF_VALUE,
-            extn,
+            method,
+            extrn,
+            is_virt,
             body: vec![],
             loc,
         };
@@ -284,10 +300,10 @@ impl<'a, 't> ModuleParser<'a, 't> {
 }
 
 pub struct DeclaredFunc<'t> {
-    pub func: b::Func,
+    pub func:   b::Func,
     value_node: Option<ts::Node<'t>>,
-    params: Vec<(String, b::ValueIdx, b::Loc)>,
-    ret_ty: b::Type,
+    params:     Vec<(String, b::ValueIdx, b::Loc)>,
+    ret_ty:     b::Type,
 }
 
 pub struct DeclaredGlobal<'t> {

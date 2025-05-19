@@ -10,7 +10,7 @@ use crate::{bytecode as b, context, utils};
 #[error("{}:{}:{}: error: {detail}", loc.source_idx, loc.start_line, loc.start_col)]
 pub struct Error {
     detail: ErrorDetail,
-    loc: b::Loc,
+    loc:    b::Loc,
 }
 
 #[derive(Debug, Clone, Error, new)]
@@ -45,6 +45,7 @@ pub enum ErrorDetail {
     TypeMisatch(TypeMisatch),
     #[display("Type should be known at this point")]
     TypeNotFinal,
+    TypeNotInterface(TypeNotInterface),
     Todo(Todo),
 }
 
@@ -64,7 +65,7 @@ pub struct TypeNotFound {
 #[display("Expected type {}, found {}", &expected.body, &actual.body)]
 pub struct UnexpectedType {
     pub expected: b::Type,
-    pub actual: b::Type,
+    pub actual:   b::Type,
 }
 
 #[derive(Debug, Clone, Display, new)]
@@ -74,6 +75,12 @@ pub struct UnexpectedType {
 )]
 pub struct TypeMisatch {
     pub types: Vec<b::Type>,
+}
+
+#[derive(Debug, Clone, Display, new)]
+#[display("`{ty}` is not an interface type")]
+pub struct TypeNotInterface {
+    pub ty: b::Type,
 }
 
 #[derive(Debug, Clone, Display, new)]

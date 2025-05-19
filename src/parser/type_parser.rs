@@ -1,16 +1,16 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use derive_new::new;
 use itertools::Itertools;
 use tree_sitter as ts;
 
-use crate::utils::{IntoItem, TreeSitterUtils};
+use crate::utils::{IntoItem, SortedMap, TreeSitterUtils};
 use crate::{bytecode as b, context, errors};
 
 #[derive(new)]
-pub struct TypeParser<'a> {
+pub struct TypeParser<'a, 't> {
     #[new(default)]
-    pub typedefs: Vec<b::TypeDef>,
+    pub typedefs: Vec<DeclaredTypeDef<'a, 't>>,
     #[new(value = "default_idents()")]
     pub idents: HashMap<String, b::TypeBody>,
     ctx: &'a context::BuildContext,
@@ -18,8 +18,14 @@ pub struct TypeParser<'a> {
     mod_idx: usize,
 }
 
-impl<'a> TypeParser<'a> {
-    pub fn parse_type_expr<'t>(&self, node: ts::Node<'t>) -> b::Type {
+impl<'a, 't> TypeParser<'a, 't> {
+    pub fn finish(self) -> Vec<b::TypeDef> {
+        self.typedefs
+            .iter()
+            .map(|x| self.finish_typedef(x))
+            .collect()
+    }
+    pub fn parse_type_expr(&self, node: ts::Node<'t>) -> b::Type {
         let node = node.of_kind("type_expr").child(0).unwrap();
 
         let body = match node.kind() {
@@ -43,7 +49,10 @@ impl<'a> TypeParser<'a> {
                         .parse::<usize>()
                         .expect("Cannot cast length to integer")
                 });
-                b::TypeBody::Array(b::ArrayType::new(item_ty.into(), len))
+                b::TypeBody::Array(b::ArrayType::new(
+                    item_ty.into(),
+                    len.map(|x| x as u32),
+                ))
             }
             "generic_type" => {
                 let name = node
@@ -69,18 +78,50 @@ impl<'a> TypeParser<'a> {
         };
         b::Type::new(body, Some(b::Loc::from_node(self.src_idx, &node)))
     }
-
-    pub fn parse_type_decl<'t>(
+    pub fn parse_type_decl(
         &mut self,
         name: String,
         node: ts::Node<'t>,
-        methods_idx: HashMap<&str, (usize, usize)>,
+        methods_idx: HashMap<&'a str, (usize, usize)>,
     ) {
         assert_eq!(node.kind(), "type_decl");
 
         let body_node = node.required_field("body");
-        let (fields, methods) = match body_node.kind() {
-            "record_type" => {
+        let body = match body_node.kind() {
+            "record_type" => b::TypeDefBody::Record(b::RecordType {
+                fields:  SortedMap::new(),
+                methods: SortedMap::new(),
+                ifaces:  HashSet::new(),
+            }),
+            "interface_type" => b::TypeDefBody::Interface(b::InterfaceType {
+                methods: SortedMap::new(),
+            }),
+            v => panic!("Unexpected type body kind: {v}"),
+        };
+
+        let value = b::TypeDef {
+            name,
+            body,
+            loc: b::Loc::from_node(self.src_idx, &node),
+        };
+        self.idents.insert(
+            value.name.clone(),
+            b::TypeBody::TypeRef(self.mod_idx, self.typedefs.len()),
+        );
+        self.typedefs.push(DeclaredTypeDef {
+            typedef: value,
+            type_decl_node: Some(node),
+            methods_idx,
+        });
+    }
+
+    fn finish_typedef(&self, x: &DeclaredTypeDef) -> b::TypeDef {
+        let Some(node) = x.type_decl_node else {
+            return x.typedef.clone();
+        };
+        let body_node = node.required_field("body");
+        let body = match (body_node.kind(), &x.typedef.body) {
+            ("record_type", b::TypeDefBody::Record(rec)) => {
                 let fields = body_node
                     .iter_field("fields")
                     .map(|field_node| {
@@ -107,7 +148,8 @@ impl<'a> TypeParser<'a> {
                         let name = name_node
                             .get_text(&self.ctx.source(self.src_idx).content().text)
                             .to_string();
-                        let func_ref = methods_idx
+                        let func_ref = x
+                            .methods_idx
                             .get(&name as &str)
                             .expect("index of method's function should already be known");
 
@@ -123,22 +165,71 @@ impl<'a> TypeParser<'a> {
                     })
                     .collect();
 
-                (fields, methods)
-            }
-            v => panic!("Unexpected type body kind: {v}"),
-        };
+                let implements = node
+                    .iter_field("assertion")
+                    .map(|ty_node| self.parse_type_expr(ty_node))
+                    .filter_map(|ty| match ty.body {
+                        b::TypeBody::TypeRef(mod_idx, ty_idx) => Some((mod_idx, ty_idx)),
+                        _ => {
+                            self.ctx.push_error(errors::Error::new(
+                                errors::TypeNotInterface::new(ty).into(),
+                                b::Loc::from_node(self.src_idx, &node),
+                            ));
+                            None
+                        }
+                    })
+                    .collect();
 
-        let value = b::TypeDef {
-            name,
-            body: b::TypeDefBody::Record(b::RecordType { fields, methods }),
-            loc: b::Loc::from_node(self.src_idx, &node),
+                b::TypeDefBody::Record(b::RecordType {
+                    fields,
+                    methods,
+                    ifaces: implements,
+                    ..rec.clone()
+                })
+            }
+            ("interface_type", b::TypeDefBody::Interface(iface)) => {
+                let methods = body_node
+                    .iter_field("methods")
+                    .map(|method_node| {
+                        let name_node = method_node.required_field("name");
+                        let name = name_node
+                            .get_text(&self.ctx.source(self.src_idx).content().text)
+                            .to_string();
+                        let func_ref = x
+                            .methods_idx
+                            .get(&name as &str)
+                            .expect("index of method's function should already be known");
+
+                        let method = b::Method::new(
+                            b::NameWithLoc::new(
+                                name.clone(),
+                                b::Loc::from_node(self.src_idx, &name_node),
+                            ),
+                            *func_ref,
+                            b::Loc::from_node(self.src_idx, &method_node),
+                        );
+                        (name, method)
+                    })
+                    .collect();
+
+                b::TypeDefBody::Interface(b::InterfaceType {
+                    methods,
+                    ..iface.clone()
+                })
+            }
+            _ => unreachable!(),
         };
-        self.idents.insert(
-            value.name.clone(),
-            b::TypeBody::TypeRef(self.mod_idx, self.typedefs.len()),
-        );
-        self.typedefs.push(value);
+        b::TypeDef {
+            body,
+            ..x.typedef.clone()
+        }
     }
+}
+
+pub struct DeclaredTypeDef<'a, 't> {
+    pub typedef:    b::TypeDef,
+    type_decl_node: Option<ts::Node<'t>>,
+    methods_idx:    HashMap<&'a str, (usize, usize)>,
 }
 
 fn default_idents() -> HashMap<String, b::TypeBody> {
