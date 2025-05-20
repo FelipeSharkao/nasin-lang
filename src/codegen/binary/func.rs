@@ -901,15 +901,19 @@ impl<'a> FuncCodegen<'a, '_> {
                             ty,
                             this.ctx.modules,
                         );
-                        let data = this.ctx.data_for_tuple(
-                            values.iter().map(|value| value.src).collect_vec(),
-                        );
-                        let src = if let Some(data) = data {
-                            data.into()
-                        } else if this.builder.is_some() {
-                            this.create_stack_slot(&values).into()
+                        let src = if values.len() > 0 {
+                            let data = this.ctx.data_for_tuple(
+                                values.iter().map(|value| value.src).collect_vec(),
+                            );
+                            if let Some(data) = data {
+                                data.into()
+                            } else if this.builder.is_some() {
+                                this.create_stack_slot(&values).into()
+                            } else {
+                                break 'match_b None;
+                            }
                         } else {
-                            break 'match_b None;
+                            types::ValueSource::I64(1)
                         };
                         Some(types::RuntimeValue::new(src, mod_idx, instr.results[0]))
                     }
