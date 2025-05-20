@@ -862,7 +862,7 @@ impl<'a> TypeChecker<'a> {
             let params = match &instr.body {
                 b::InstrBody::Call(mod_idx, func_idx, args) => {
                     let args_types =
-                        args.iter().map(|v| &modules[*mod_idx].values[*v].ty);
+                        args.iter().map(|v| &modules[self.mod_idx].values[*v].ty);
                     let params_types = modules[*mod_idx].funcs[*func_idx]
                         .params
                         .iter()
