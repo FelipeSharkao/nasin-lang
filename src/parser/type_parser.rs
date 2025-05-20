@@ -106,7 +106,7 @@ impl<'a, 't> TypeParser<'a, 't> {
         };
         self.idents.insert(
             value.name.clone(),
-            b::TypeBody::TypeRef(self.mod_idx, self.typedefs.len()),
+            b::TypeRef::new(self.mod_idx, self.typedefs.len()).into(),
         );
         self.typedefs.push(DeclaredTypeDef {
             typedef: value,
@@ -120,105 +120,104 @@ impl<'a, 't> TypeParser<'a, 't> {
             return x.typedef.clone();
         };
         let body_node = node.required_field("body");
-        let body = match (body_node.kind(), &x.typedef.body) {
-            ("record_type", b::TypeDefBody::Record(rec)) => {
-                let fields = body_node
-                    .iter_field("fields")
-                    .map(|field_node| {
-                        let name_node = field_node.required_field("name");
-                        let name = name_node
-                            .get_text(&self.ctx.source(self.src_idx).content().text)
-                            .to_string();
-                        let record_field = b::RecordField::new(
-                            b::NameWithLoc::new(
-                                name.clone(),
-                                b::Loc::from_node(self.src_idx, &name_node),
-                            ),
-                            self.parse_type_expr(field_node.required_field("type")),
-                            b::Loc::from_node(self.src_idx, &field_node),
-                        );
-                        (name, record_field)
+        let body =
+            match (body_node.kind(), &x.typedef.body) {
+                ("record_type", b::TypeDefBody::Record(rec)) => {
+                    let fields = body_node
+                        .iter_field("fields")
+                        .map(|field_node| {
+                            let name_node = field_node.required_field("name");
+                            let name = name_node
+                                .get_text(&self.ctx.source(self.src_idx).content().text)
+                                .to_string();
+                            let record_field = b::RecordField::new(
+                                b::NameWithLoc::new(
+                                    name.clone(),
+                                    b::Loc::from_node(self.src_idx, &name_node),
+                                ),
+                                self.parse_type_expr(field_node.required_field("type")),
+                                b::Loc::from_node(self.src_idx, &field_node),
+                            );
+                            (name, record_field)
+                        })
+                        .collect();
+
+                    let methods = body_node
+                        .iter_field("methods")
+                        .map(|method_node| {
+                            let name_node = method_node.required_field("name");
+                            let name = name_node
+                                .get_text(&self.ctx.source(self.src_idx).content().text)
+                                .to_string();
+                            let func_ref = x.methods_idx.get(&name as &str).expect(
+                                "index of method's function should already be known",
+                            );
+
+                            let method = b::Method::new(
+                                b::NameWithLoc::new(
+                                    name.clone(),
+                                    b::Loc::from_node(self.src_idx, &name_node),
+                                ),
+                                *func_ref,
+                                b::Loc::from_node(self.src_idx, &method_node),
+                            );
+                            (name, method)
+                        })
+                        .collect();
+
+                    let implements = node
+                        .iter_field("assertion")
+                        .map(|ty_node| self.parse_type_expr(ty_node))
+                        .filter_map(|ty| match ty.body {
+                            b::TypeBody::TypeRef(t) => Some((t.mod_idx, t.idx)),
+                            _ => {
+                                self.ctx.push_error(errors::Error::new(
+                                    errors::TypeNotInterface::new(ty).into(),
+                                    b::Loc::from_node(self.src_idx, &node),
+                                ));
+                                None
+                            }
+                        })
+                        .collect();
+
+                    b::TypeDefBody::Record(b::RecordType {
+                        fields,
+                        methods,
+                        ifaces: implements,
+                        ..rec.clone()
                     })
-                    .collect();
+                }
+                ("interface_type", b::TypeDefBody::Interface(iface)) => {
+                    let methods = body_node
+                        .iter_field("methods")
+                        .map(|method_node| {
+                            let name_node = method_node.required_field("name");
+                            let name = name_node
+                                .get_text(&self.ctx.source(self.src_idx).content().text)
+                                .to_string();
+                            let func_ref = x.methods_idx.get(&name as &str).expect(
+                                "index of method's function should already be known",
+                            );
 
-                let methods = body_node
-                    .iter_field("methods")
-                    .map(|method_node| {
-                        let name_node = method_node.required_field("name");
-                        let name = name_node
-                            .get_text(&self.ctx.source(self.src_idx).content().text)
-                            .to_string();
-                        let func_ref = x
-                            .methods_idx
-                            .get(&name as &str)
-                            .expect("index of method's function should already be known");
+                            let method = b::Method::new(
+                                b::NameWithLoc::new(
+                                    name.clone(),
+                                    b::Loc::from_node(self.src_idx, &name_node),
+                                ),
+                                *func_ref,
+                                b::Loc::from_node(self.src_idx, &method_node),
+                            );
+                            (name, method)
+                        })
+                        .collect();
 
-                        let method = b::Method::new(
-                            b::NameWithLoc::new(
-                                name.clone(),
-                                b::Loc::from_node(self.src_idx, &name_node),
-                            ),
-                            *func_ref,
-                            b::Loc::from_node(self.src_idx, &method_node),
-                        );
-                        (name, method)
+                    b::TypeDefBody::Interface(b::InterfaceType {
+                        methods,
+                        ..iface.clone()
                     })
-                    .collect();
-
-                let implements = node
-                    .iter_field("assertion")
-                    .map(|ty_node| self.parse_type_expr(ty_node))
-                    .filter_map(|ty| match ty.body {
-                        b::TypeBody::TypeRef(mod_idx, ty_idx) => Some((mod_idx, ty_idx)),
-                        _ => {
-                            self.ctx.push_error(errors::Error::new(
-                                errors::TypeNotInterface::new(ty).into(),
-                                b::Loc::from_node(self.src_idx, &node),
-                            ));
-                            None
-                        }
-                    })
-                    .collect();
-
-                b::TypeDefBody::Record(b::RecordType {
-                    fields,
-                    methods,
-                    ifaces: implements,
-                    ..rec.clone()
-                })
-            }
-            ("interface_type", b::TypeDefBody::Interface(iface)) => {
-                let methods = body_node
-                    .iter_field("methods")
-                    .map(|method_node| {
-                        let name_node = method_node.required_field("name");
-                        let name = name_node
-                            .get_text(&self.ctx.source(self.src_idx).content().text)
-                            .to_string();
-                        let func_ref = x
-                            .methods_idx
-                            .get(&name as &str)
-                            .expect("index of method's function should already be known");
-
-                        let method = b::Method::new(
-                            b::NameWithLoc::new(
-                                name.clone(),
-                                b::Loc::from_node(self.src_idx, &name_node),
-                            ),
-                            *func_ref,
-                            b::Loc::from_node(self.src_idx, &method_node),
-                        );
-                        (name, method)
-                    })
-                    .collect();
-
-                b::TypeDefBody::Interface(b::InterfaceType {
-                    methods,
-                    ..iface.clone()
-                })
-            }
-            _ => unreachable!(),
-        };
+                }
+                _ => unreachable!(),
+            };
         b::TypeDef {
             body,
             ..x.typedef.clone()

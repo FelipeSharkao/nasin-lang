@@ -2,14 +2,15 @@ use std::borrow::Cow;
 use std::fmt;
 use std::hash::Hash;
 
-use derive_more::Display;
+use derive_more::{Display, From};
 use derive_new::new;
+use derive_setters::Setters;
 use itertools::{chain, izip, Itertools};
 
 use super::{Loc, Module, TypeDef, TypeDefBody};
 use crate::utils::{self, unordered};
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, From)]
 pub enum TypeBody {
     Void,
     Never,
@@ -35,10 +36,10 @@ pub enum TypeBody {
     Inferred(InferredType),
     String(StringType),
     Array(ArrayType),
+    #[from(skip)]
     Ptr(Box<Type>),
     Func(Box<FuncType>),
-    TypeRef(usize, usize),
-    SelfType(usize, usize),
+    TypeRef(TypeRef),
 }
 impl Display for TypeBody {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -87,8 +88,13 @@ impl Display for TypeBody {
             TypeBody::Func(func) => {
                 write!(f, "func {}: {}", func.params.iter().join(", "), &func.ret)?
             }
-            TypeBody::TypeRef(mod_idx, ty_idx) => write!(f, "type {mod_idx}-{ty_idx}")?,
-            TypeBody::SelfType(mod_idx, ty_idx) => write!(f, "self {mod_idx}-{ty_idx}")?,
+            TypeBody::TypeRef(ty_ref) => write!(
+                f,
+                "{} {}-{}",
+                if ty_ref.is_self { "self" } else { "type" },
+                ty_ref.mod_idx,
+                ty_ref.idx,
+            )?,
         }
         Ok(())
     }
@@ -145,11 +151,9 @@ impl Type {
     pub fn is_aggregate(&self, modules: &[Module]) -> bool {
         match &self.body {
             //TypeBody::String(_) | TypeBody::Array(_) => true,
-            TypeBody::TypeRef(mod_idx, ty_idx) | TypeBody::SelfType(mod_idx, ty_idx) => {
-                match &modules[*mod_idx].typedefs[*ty_idx].body {
-                    TypeDefBody::Record(_) | TypeDefBody::Interface(_) => true,
-                }
-            }
+            TypeBody::TypeRef(t) => match &modules[t.mod_idx].typedefs[t.idx].body {
+                TypeDefBody::Record(_) | TypeDefBody::Interface(_) => true,
+            },
             _ => false,
         }
     }
@@ -205,8 +209,8 @@ impl Type {
     pub fn field<'a>(&'a self, name: &str, modules: &'a [Module]) -> Option<&'a Type> {
         match &self.body {
             TypeBody::Inferred(v) => v.members.get(name),
-            TypeBody::TypeRef(mod_idx, ty_idx) | TypeBody::SelfType(mod_idx, ty_idx) => {
-                match &modules.get(*mod_idx)?.typedefs.get(*ty_idx)?.body {
+            TypeBody::TypeRef(t) => {
+                match &modules.get(t.mod_idx)?.typedefs.get(t.idx)?.body {
                     TypeDefBody::Record(rec) => Some(&rec.fields.get(name)?.ty),
                     TypeDefBody::Interface(_) => None,
                 }
@@ -220,14 +224,11 @@ impl Type {
         name: &str,
         modules: &'a [Module],
     ) -> Option<Cow<'a, Type>> {
-        let (mod_idx, ty_idx) = match &self.body {
-            TypeBody::TypeRef(mod_idx, ty_idx) | TypeBody::SelfType(mod_idx, ty_idx) => {
-                (*mod_idx, *ty_idx)
-            }
-            _ => return None,
+        let TypeBody::TypeRef(t) = &self.body else {
+            return None;
         };
 
-        let typedef = modules.get(mod_idx)?.typedefs.get(ty_idx)?;
+        let typedef = modules.get(t.mod_idx)?.typedefs.get(t.idx)?;
         let method = match &typedef.body {
             TypeDefBody::Record(rec) => rec.methods.get(name),
             TypeDefBody::Interface(iface) => iface.methods.get(name),
@@ -377,18 +378,9 @@ impl Type {
                     return None;
                 }
             }
-            (
-                body!(
-                    TypeBody::TypeRef(a_mod_idx, a_ty_idx)
-                        | TypeBody::SelfType(a_mod_idx, a_ty_idx)
-                ),
-                body!(
-                    TypeBody::TypeRef(b_mod_idx, b_ty_idx)
-                        | TypeBody::SelfType(b_mod_idx, b_ty_idx)
-                ),
-            ) => {
-                let a_ty = &modules[*a_mod_idx].typedefs[*a_ty_idx];
-                let b_ty = &modules[*b_mod_idx].typedefs[*b_ty_idx];
+            (body!(TypeBody::TypeRef(a)), body!(TypeBody::TypeRef(b))) => {
+                let a_ty = &modules[a.mod_idx].typedefs[a.idx];
+                let b_ty = &modules[b.mod_idx].typedefs[b.idx];
 
                 macro_rules! body {
                     ($pat:pat) => {
@@ -396,43 +388,35 @@ impl Type {
                     };
                 }
 
-                let (r_mod_idx, r_ty_idx) =
-                    match ((a_mod_idx, a_ty_idx, a_ty), (b_mod_idx, b_ty_idx, b_ty)) {
+                let (mod_idx, ty_idx) =
+                    match ((a.mod_idx, a.idx, a_ty), (b.mod_idx, b.idx, b_ty)) {
                         (
                             (_, _, body!(TypeDefBody::Record(_))),
                             (_, _, body!(TypeDefBody::Record(_))),
-                        ) if (a_mod_idx, a_ty_idx) == (b_mod_idx, b_ty_idx) => {
-                            (*a_mod_idx, *a_ty_idx)
-                        }
+                        ) if a.is_same_of(b) => (a.mod_idx, a.idx),
                         (
                             (_, _, body!(TypeDefBody::Interface(_))),
                             (_, _, body!(TypeDefBody::Interface(_))),
-                        ) if (a_mod_idx, a_ty_idx) == (b_mod_idx, b_ty_idx) => {
-                            (*a_mod_idx, *a_ty_idx)
-                        }
+                        ) if a.is_same_of(b) => (a.mod_idx, a.idx),
                         unordered!(
                             (r_mod_idx, r_ty_idx, body!(TypeDefBody::Record(rec))),
                             (i_mod_idx, i_ty_idx, body!(TypeDefBody::Interface(..))),
                         ) => {
                             let extends = rec.ifaces.iter().any(|(mod_idx, ty_idx)| {
-                                i_mod_idx == mod_idx && i_ty_idx == ty_idx
+                                i_mod_idx == *mod_idx && i_ty_idx == *ty_idx
                             });
                             if !extends {
                                 return None;
                             }
 
-                            (*r_mod_idx, *r_ty_idx)
+                            (r_mod_idx, r_ty_idx)
                         }
                         _ => return None,
                     };
 
-                if matches!(&self.body, TypeBody::SelfType(..))
-                    || matches!(&other.body, TypeBody::SelfType(..))
-                {
-                    TypeBody::SelfType(r_mod_idx, r_ty_idx)
-                } else {
-                    TypeBody::TypeRef(r_mod_idx, r_ty_idx)
-                }
+                TypeRef::new(mod_idx, ty_idx)
+                    .is_self(a.is_self || b.is_self)
+                    .into()
             }
             _ => return None,
         };
@@ -525,11 +509,12 @@ impl Type {
                     return None;
                 }
             }
-            unordered!(
-                body!(TypeBody::TypeRef(a_mod_idx, a_ty_idx)),
-                body!(TypeBody::SelfType(b_mod_idx, b_ty_idx))
-            ) if a_mod_idx == b_mod_idx && a_ty_idx == b_ty_idx => {
-                TypeBody::TypeRef(*a_mod_idx, *a_ty_idx)
+            unordered!(body!(TypeBody::TypeRef(a)), body!(TypeBody::TypeRef(b)))
+                if a.is_same_of(b) =>
+            {
+                TypeRef::new(a.mod_idx, a.idx)
+                    .is_self(a.is_self && b.is_self)
+                    .into()
             }
             (a, b) => {
                 if &a.body == &b.body {
@@ -565,6 +550,19 @@ impl Display for Type {
         }
         write!(f, ")")?;
         Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Setters, new)]
+pub struct TypeRef {
+    pub mod_idx: usize,
+    pub idx:     usize,
+    #[new(value = "false")]
+    pub is_self: bool,
+}
+impl TypeRef {
+    pub fn is_same_of(&self, other: &TypeRef) -> bool {
+        (self.mod_idx, self.idx) == (other.mod_idx, other.idx)
     }
 }
 

@@ -9,3 +9,4 @@
 ./bin/nasin b tests/record_type.nsn -o tests/out/record_type && ./tests/out/record_type
 ./bin/nasin b tests/return_record.nsn -o tests/out/return_record && ./tests/out/return_record
 ./bin/nasin b tests/method.nsn -o tests/out/method && ./tests/out/method
+./bin/nasin b tests/interface.nsn -o tests/out/interface && ./tests/out/interface

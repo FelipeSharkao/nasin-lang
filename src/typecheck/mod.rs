@@ -389,7 +389,7 @@ impl<'a> TypeChecker<'a> {
                 self.add_constraint(*v, Constraint::Is(ty.clone()));
             }
             b::InstrBody::Dispatch(v, mod_idx, ty_idx) => {
-                let ty = b::Type::new(b::TypeBody::TypeRef(*mod_idx, *ty_idx), None);
+                let ty = b::Type::new(b::TypeRef::new(*mod_idx, *ty_idx).into(), None);
                 self.add_constraint(*v, Constraint::Is(ty));
             }
             b::InstrBody::Break(_) | b::InstrBody::CompileError => {}
@@ -767,13 +767,11 @@ impl<'a> TypeChecker<'a> {
     ) -> Vec<b::ValueIdx> {
         let module = &modules[self.mod_idx];
         let parent = &module.values[v].ty;
-        let (mod_idx, ty_idx) = match &parent.body {
-            b::TypeBody::TypeRef(mod_idx, ty_idx)
-            | b::TypeBody::SelfType(mod_idx, ty_idx) => (*mod_idx, *ty_idx),
-            _ => return vec![],
+        let b::TypeBody::TypeRef(ty_ref) = &parent.body else {
+            return vec![];
         };
-        let Some(func) = modules.get(mod_idx).and_then(|module| {
-            let method = match &module.typedefs.get(ty_idx)?.body {
+        let Some(func) = modules.get(ty_ref.mod_idx).and_then(|module| {
+            let method = match &module.typedefs.get(ty_ref.idx)?.body {
                 b::TypeDefBody::Record(rec) => rec.methods.get(name)?,
                 b::TypeDefBody::Interface(iface) => iface.methods.get(name)?,
             };
@@ -888,16 +886,13 @@ impl<'a> TypeChecker<'a> {
                     if arg_ty.body == param_ty.body {
                         return None;
                     }
-                    let (param_mod_idx, param_ty_idx) = match &param_ty.body {
-                        b::TypeBody::TypeRef(param_mod_idx, param_ty_idx)
-                        | b::TypeBody::SelfType(param_mod_idx, param_ty_idx) => {
-                            (*param_mod_idx, *param_ty_idx)
-                        }
-                        _ => return None,
+                    let b::TypeBody::TypeRef(param_ty_ref) = &param_ty.body else {
+                        return None;
                     };
-                    let param_ty_def = &modules[param_mod_idx].typedefs[param_ty_idx];
+                    let param_ty_def =
+                        &modules[param_ty_ref.mod_idx].typedefs[param_ty_ref.idx];
                     if matches!(&param_ty_def.body, b::TypeDefBody::Interface(_)) {
-                        Some((i, *v, (param_mod_idx, param_ty_idx)))
+                        Some((i, *v, (param_ty_ref.mod_idx, param_ty_ref.idx)))
                     } else {
                         None
                     }
@@ -913,7 +908,7 @@ impl<'a> TypeChecker<'a> {
 
             let value_start = module.values.len();
             module.values.extend(params.iter().map(|(_, _, iface)| {
-                let ty = b::Type::new(b::TypeBody::TypeRef(iface.0, iface.1), None);
+                let ty = b::Type::new(b::TypeRef::new(iface.0, iface.1).into(), None);
                 b::Value::new(ty, loc)
             }));
 

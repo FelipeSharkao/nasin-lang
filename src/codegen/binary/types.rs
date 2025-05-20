@@ -4,20 +4,16 @@ use std::mem;
 use cranelift_shim::{self as cl, InstBuilder};
 use derive_more::{Display, From};
 use derive_new::new;
-use derive_setters::Setters;
 use itertools::Itertools;
-use tracing::Value;
 
 use crate::bytecode as b;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Display, Setters, new)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Display, new)]
 #[display("{value_idx}")]
 pub struct RuntimeValue {
     pub src: ValueSource,
     pub mod_idx: usize,
     pub value_idx: b::ValueIdx,
-    #[new(value = "false")]
-    pub is_ptr: bool,
 }
 impl RuntimeValue {
     pub fn ty<'m>(&self, modules: &'m [b::Module]) -> &'m b::Type {
@@ -236,10 +232,11 @@ pub fn tuple_from_record<'a>(
 ) -> Vec<RuntimeValue> {
     let fields: HashMap<_, _> = fields.into_iter().collect();
 
-    let b::TypeBody::TypeRef(i, j) = &ty.body else {
+    let b::TypeBody::TypeRef(ty_ref) = &ty.body else {
         panic!("type is not a record type");
     };
-    let b::TypeDefBody::Record(rec) = &modules[*i].typedefs[*j].body else {
+    let b::TypeDefBody::Record(rec) = &modules[ty_ref.mod_idx].typedefs[ty_ref.idx].body
+    else {
         panic!("type is not a record type");
     };
 
@@ -267,24 +264,20 @@ pub fn tuple_from_args(
         .map(|v| {
             let ty = &modules[mod_idx].values[*v].ty;
 
-            let (src, is_ptr) = match &ty.body {
-                b::TypeBody::TypeRef(ty_mod_idx, ty_idx) => {
-                    let typebody = &modules[*ty_mod_idx].typedefs[*ty_idx].body;
+            let src = match &ty.body {
+                b::TypeBody::TypeRef(ty_ref) => {
+                    let typebody = &modules[ty_ref.mod_idx].typedefs[ty_ref.idx].body;
                     match typebody {
                         b::TypeDefBody::Interface(_) => {
-                            let dispatched =
-                                DynDispatched::new(next_value!(), next_value!());
-                            (dispatched.into(), true)
+                            DynDispatched::new(next_value!(), next_value!()).into()
                         }
-                        b::TypeDefBody::Record(_) => (next_value!().into(), true),
+                        b::TypeDefBody::Record(_) => next_value!().into(),
                     }
                 }
-                b::TypeBody::Array(_) | b::TypeBody::String(_) => {
-                    (next_value!().into(), true)
-                }
-                _ => (next_value!().into(), false),
+                b::TypeBody::Array(_) | b::TypeBody::String(_) => next_value!().into(),
+                _ => next_value!().into(),
             };
-            RuntimeValue::new(src, mod_idx, *v).is_ptr(is_ptr)
+            RuntimeValue::new(src, mod_idx, *v)
         })
         .collect_vec()
 }
@@ -309,9 +302,9 @@ pub fn get_type(
         b::TypeBody::USize
         | b::TypeBody::String(_)
         | b::TypeBody::Array(_)
-        | b::TypeBody::Ptr(_)
-        | b::TypeBody::SelfType(_, _) => vec![obj_module.isa().pointer_type()],
-        b::TypeBody::TypeRef(i, j) => match &modules[*i].typedefs[*j].body {
+        | b::TypeBody::Ptr(_) => vec![obj_module.isa().pointer_type()],
+        b::TypeBody::TypeRef(t) if t.is_self => vec![obj_module.isa().pointer_type()],
+        b::TypeBody::TypeRef(t) => match &modules[t.mod_idx].typedefs[t.idx].body {
             b::TypeDefBody::Record(_) => vec![obj_module.isa().pointer_type()],
             b::TypeDefBody::Interface(_) => vec![obj_module.isa().pointer_type(); 2],
         },
@@ -343,7 +336,8 @@ pub fn get_size(
                     .map(|ty| ty.bytes())
                     .sum::<u32>()
         }),
-        b::TypeBody::TypeRef(i, j) => match &modules[*i].typedefs[*j].body {
+        b::TypeBody::TypeRef(t) if t.is_self => ptr,
+        b::TypeBody::TypeRef(t) => match &modules[t.mod_idx].typedefs[t.idx].body {
             b::TypeDefBody::Record(rec) => rec
                 .fields
                 .values()
@@ -364,8 +358,7 @@ pub fn get_size(
         | b::TypeBody::USize
         | b::TypeBody::F32
         | b::TypeBody::F64
-        | b::TypeBody::Ptr(_)
-        | b::TypeBody::SelfType(_, _) => get_type(ty, modules, obj_module)
+        | b::TypeBody::Ptr(_) => get_type(ty, modules, obj_module)
             .into_iter()
             .map(|ty| ty.bytes())
             .sum(),

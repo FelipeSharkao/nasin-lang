@@ -95,10 +95,10 @@ impl<'a, 't> ModuleParser<'a, 't> {
                 "type_decl" => {
                     let old_self_type = self.types.idents.get(SELF_INDENT).cloned();
                     let ty_idx = self.types.typedefs.len();
-                    let self_type = b::TypeBody::SelfType(self.mod_idx, ty_idx);
+                    let self_type = b::TypeRef::new(self.mod_idx, ty_idx).is_self(true);
                     self.types
                         .idents
-                        .insert(SELF_INDENT.to_string(), self_type.clone());
+                        .insert(SELF_INDENT.to_string(), self_type.into());
 
                     let body_node = sym_node.required_field("body");
                     let is_virt = body_node.kind() == "interface_type";
@@ -149,8 +149,8 @@ impl<'a, 't> ModuleParser<'a, 't> {
             if item.name.starts_with('_') {
                 continue;
             }
-            let ty = b::TypeBody::TypeRef(mod_idx, i);
-            self.types.idents.insert(item.name.clone(), ty);
+            let ty_ref = b::TypeRef::new(mod_idx, i);
+            self.types.idents.insert(item.name.clone(), ty_ref.into());
         }
 
         for (i, item) in enumerate(&module.funcs) {

@@ -72,7 +72,7 @@ impl<'a> FuncCodegen<'a, '_> {
         if let (ResultPolicy::StructReturn, Some(result)) = (result_policy, result) {
             let cl_value = cl_values.remove(0);
             let runtime_value =
-                types::RuntimeValue::new(cl_value.into(), mod_idx, result).is_ptr(true);
+                types::RuntimeValue::new(cl_value.into(), mod_idx, result);
             self.values.insert(result, runtime_value);
         }
 
@@ -324,11 +324,8 @@ impl<'a> FuncCodegen<'a, '_> {
                         .collect_vec();
 
                     let src = initial_runtime_value.src.with_values(&loop_values);
-                    self.values.insert(
-                        *loop_v,
-                        types::RuntimeValue::new(src, mod_idx, *loop_v)
-                            .is_ptr(initial_runtime_value.is_ptr),
-                    );
+                    self.values
+                        .insert(*loop_v, types::RuntimeValue::new(src, mod_idx, *loop_v));
                 }
 
                 let builder = expect_builder!(self);
@@ -414,11 +411,8 @@ impl<'a> FuncCodegen<'a, '_> {
                 let scope = self.scopes.last();
                 let result = scope.result.unwrap();
                 let src = runtime_value.src.with_values(&cl_values);
-                self.values.insert(
-                    result,
-                    types::RuntimeValue::new(src, mod_idx, result)
-                        .is_ptr(runtime_value.is_ptr),
-                );
+                self.values
+                    .insert(result, types::RuntimeValue::new(src, mod_idx, result));
             }
             b::InstrBody::Continue(vs) => {
                 let block = self
@@ -436,27 +430,15 @@ impl<'a> FuncCodegen<'a, '_> {
                 self.scopes.last_mut().mark_as_never();
             }
             b::InstrBody::Call(func_mod_idx, func_idx, vs) => {
-                let builder = expect_builder!(self);
-
                 let args = vs
                     .into_iter()
                     .flat_map(|v| self.use_values(*v))
                     .collect_vec();
 
                 if let Some(value) = self.call(*func_mod_idx, *func_idx, args) {
-                    let ty = &self.ctx.modules[mod_idx].values[instr.results[0]].ty;
-
-                    let mut is_ptr = false;
-                    if let &b::TypeBody::TypeRef(ty_mod_idx, ty_idx) = &ty.body {
-                        let typebody =
-                            &self.ctx.modules[ty_mod_idx].typedefs[ty_idx].body;
-                        is_ptr = matches!(typebody, b::TypeDefBody::Record(_))
-                    };
-
                     self.values.insert(
                         instr.results[0],
-                        types::RuntimeValue::new(value.into(), mod_idx, instr.results[0])
-                            .is_ptr(is_ptr),
+                        types::RuntimeValue::new(value.into(), mod_idx, instr.results[0]),
                     );
                 }
             }
@@ -476,16 +458,6 @@ impl<'a> FuncCodegen<'a, '_> {
                         args.push(*self_value);
 
                         if let Some(value) = self.call(*func_mod_idx, *func_idx, args) {
-                            let ty =
-                                &self.ctx.modules[mod_idx].values[instr.results[0]].ty;
-
-                            let mut is_ptr = false;
-                            if let &b::TypeBody::TypeRef(ty_mod_idx, ty_idx) = &ty.body {
-                                let typebody =
-                                    &self.ctx.modules[ty_mod_idx].typedefs[ty_idx].body;
-                                is_ptr = matches!(typebody, b::TypeDefBody::Record(_))
-                            };
-
                             self.values.insert(
                                 instr.results[0],
                                 types::RuntimeValue::new(
@@ -509,16 +481,6 @@ impl<'a> FuncCodegen<'a, '_> {
                             *callee,
                             args,
                         ) {
-                            let ty =
-                                &self.ctx.modules[mod_idx].values[instr.results[0]].ty;
-
-                            let mut is_ptr = false;
-                            if let &b::TypeBody::TypeRef(ty_mod_idx, ty_idx) = &ty.body {
-                                let typebody =
-                                    &self.ctx.modules[ty_mod_idx].typedefs[ty_idx].body;
-                                is_ptr = matches!(typebody, b::TypeDefBody::Record(_))
-                            };
-
                             self.values.insert(
                                 instr.results[0],
                                 types::RuntimeValue::new(
@@ -537,17 +499,11 @@ impl<'a> FuncCodegen<'a, '_> {
 
                 let source_ty = &self.ctx.modules[mod_idx].values[*source_v].ty;
                 let source = &self.values[source_v];
-                let b::Type {
-                    body:
-                        b::TypeBody::TypeRef(ty_mod_idx, ty_idx)
-                        | b::TypeBody::SelfType(ty_mod_idx, ty_idx),
-                    ..
-                } = source_ty
-                else {
+                let b::TypeBody::TypeRef(ty_ref) = &source_ty.body else {
                     panic!("type should be a typeref");
                 };
                 let b::TypeDefBody::Record(rec) =
-                    &self.ctx.modules[*ty_mod_idx].typedefs[*ty_idx].body
+                    &self.ctx.modules[ty_ref.mod_idx].typedefs[ty_ref.idx].body
                 else {
                     panic!("type should be a record type");
                 };
@@ -579,19 +535,9 @@ impl<'a> FuncCodegen<'a, '_> {
                     offset as i32,
                 );
 
-                let mut is_ptr = false;
-                if let &b::TypeBody::TypeRef(ty_mod_idx, ty_idx) = &ty.body {
-                    let typebody = &self.ctx.modules[ty_mod_idx].typedefs[ty_idx].body;
-                    is_ptr = matches!(
-                        typebody,
-                        b::TypeDefBody::Record(_) | b::TypeDefBody::Interface(_)
-                    );
-                };
-
                 self.values.insert(
                     instr.results[0],
-                    types::RuntimeValue::new(value.into(), mod_idx, instr.results[0])
-                        .is_ptr(is_ptr),
+                    types::RuntimeValue::new(value.into(), mod_idx, instr.results[0]),
                 );
             }
             b::InstrBody::GetMethod(source_v, name) => {
@@ -599,11 +545,11 @@ impl<'a> FuncCodegen<'a, '_> {
 
                 let source_ty = &self.ctx.modules[mod_idx].values[*source_v].ty;
                 let source = &self.values[source_v];
-                let b::TypeBody::TypeRef(ty_mod_idx, ty_idx) = &source_ty.body else {
+                let b::TypeBody::TypeRef(ty_ref) = &source_ty.body else {
                     panic!("type should be a typeref");
                 };
 
-                match &self.ctx.modules[*ty_mod_idx].typedefs[*ty_idx].body {
+                match &self.ctx.modules[ty_ref.mod_idx].typedefs[ty_ref.idx].body {
                     b::TypeDefBody::Record(rec) => {
                         let value =
                             source.add_value_to_func(&self.ctx.obj_module, builder);
@@ -647,7 +593,7 @@ impl<'a> FuncCodegen<'a, '_> {
                         let offset = self
                             .ctx
                             .vtables_desc
-                            .get(&(*ty_mod_idx, *ty_idx))
+                            .get(&(ty_ref.mod_idx, ty_ref.idx))
                             .expect("Interface should already be defined")
                             .method_offset(name, &self.ctx.obj_module)
                             .unwrap();
@@ -751,20 +697,19 @@ impl<'a> FuncCodegen<'a, '_> {
 
                 self.values.insert(
                     instr.results[0],
-                    types::RuntimeValue::new(value.into(), mod_idx, instr.results[0])
-                        .is_ptr(true),
+                    types::RuntimeValue::new(value.into(), mod_idx, instr.results[0]),
                 );
             }
             b::InstrBody::Dispatch(v, iface_mod_idx, iface_ty_idx) => {
                 let builder = expect_builder!(self);
 
                 let ty = &self.ctx.modules[mod_idx].values[*v].ty;
-                let b::TypeBody::TypeRef(ty_mod_idx, ty_idx) = &ty.body else {
+                let b::TypeBody::TypeRef(ty_ref) = &ty.body else {
                     panic!("type should be a typeref");
                 };
                 let vtable_ref = types::VTableRef::new(
                     (*iface_mod_idx, *iface_ty_idx),
-                    (*ty_mod_idx, *ty_idx),
+                    (ty_ref.mod_idx, ty_ref.idx),
                 );
                 let vtable_data = self.ctx.vtables_impl[&vtable_ref];
                 let vtable_gv = self
@@ -850,8 +795,7 @@ impl<'a> FuncCodegen<'a, '_> {
                             | b::TypeBody::Never
                             | b::TypeBody::Bool
                             | b::TypeBody::String(_)
-                            | b::TypeBody::TypeRef(_, _)
-                            | b::TypeBody::SelfType(_, _)
+                            | b::TypeBody::TypeRef(_)
                             | b::TypeBody::Array(_)
                             | b::TypeBody::Ptr(_)
                             | b::TypeBody::Inferred(_)
@@ -942,7 +886,6 @@ impl<'a> FuncCodegen<'a, '_> {
 
         let builder = expect_builder!(self);
 
-        let ty = value.native_type(self.ctx.modules, &self.ctx.obj_module);
         let global_value = self
             .ctx
             .obj_module

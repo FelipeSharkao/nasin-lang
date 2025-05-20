@@ -1,4 +1,4 @@
-:i count 11
+:i count 12
 :b shell 69
 ./bin/nasin b tests/hello.nsn -o tests/out/hello && ./tests/out/hello
 :i returncode 0
@@ -98,6 +98,22 @@ Hello from record
 Compiled program to tests/out/method
 Hello from record
 Hi method
+
+:b stderr 0
+
+:b shell 81
+./bin/nasin b tests/interface.nsn -o tests/out/interface && ./tests/out/interface
+:i returncode 0
+:b stdout 148
+Compiled program to tests/out/interface
+PrintA
+implementation omitted
+PrintB
+PrintB 1
+implementation omitted
+PrintB
+PrintB 2
+implementation omitted
 
 :b stderr 0
 
