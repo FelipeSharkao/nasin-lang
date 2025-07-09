@@ -1,7 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
 use derive_new::new;
-use itertools::Itertools;
+use itertools::{izip, Itertools};
 use tree_sitter as ts;
 
 use crate::utils::{IntoItem, SortedMap, TreeSitterUtils};
@@ -16,32 +16,22 @@ pub struct TypeParser<'a, 't> {
     ctx: &'a context::BuildContext,
     src_idx: usize,
     mod_idx: usize,
+    #[new(value = "0")]
+    generics_count: usize,
 }
 
 impl<'a, 't> TypeParser<'a, 't> {
-    pub fn finish(self) -> Vec<b::TypeDef> {
-        self.typedefs
-            .iter()
-            .map(|x| self.finish_typedef(x))
+    pub fn finish(mut self) -> Vec<b::TypeDef> {
+        (0..self.typedefs.len())
+            .map(|i| self.finish_typedef(i))
             .collect()
     }
-    pub fn parse_type_expr(&self, node: ts::Node<'t>) -> b::Type {
+
+    pub fn parse_type_expr(&mut self, node: ts::Node<'t>) -> b::Type {
         let node = node.of_kind("type_expr").child(0).unwrap();
 
         let body = match node.kind() {
-            "ident" => {
-                let ident = node.get_text(&self.ctx.source(self.src_idx).content().text);
-                match self.idents.get(ident) {
-                    Some(body) => body.clone(),
-                    None => {
-                        self.ctx.push_error(errors::Error::new(
-                            errors::TypeNotFound::new(ident.to_string()).into(),
-                            b::Loc::from_node(self.src_idx, &node),
-                        ));
-                        b::TypeBody::unknown()
-                    }
-                }
-            }
+            "ident" => self.get_type_from_ident(node),
             "array_type" => {
                 let item_ty = self.parse_type_expr(node.required_field("item_type"));
                 let len = node.field("length").map(|n| {
@@ -55,34 +45,47 @@ impl<'a, 't> TypeParser<'a, 't> {
                 ))
             }
             "generic_type" => {
-                let name = node
-                    .required_field("name")
-                    .of_kind("ident")
-                    .get_text(&self.ctx.source(self.src_idx).content().text);
+                let name_node = node.required_field("name").of_kind("ident");
+                let name =
+                    name_node.get_text(&self.ctx.source(self.src_idx).content().text);
 
                 let args = node
                     .iter_field("args")
                     .map(|arg_node| self.parse_type_expr(arg_node))
                     .collect_vec();
 
-                match name {
-                    "Ptr" => {
-                        // TODO: Better error handling
-                        assert!(args.len() == 1, "Ptr accepts only one parameter");
-                        b::TypeBody::Ptr(args.into_item(0).unwrap().into())
+                if name == "Ptr" {
+                    if args.len() != 1 {
+                        self.ctx.push_error(errors::Error::new(
+                            errors::WrongGenericsNumber::new(1, args.len()).into(),
+                            b::Loc::from_node(self.src_idx, &node),
+                        ));
                     }
-                    _ => panic!("unhandled generic type: `{name}`"),
+                    b::TypeBody::Ptr(
+                        args.into_item(0)
+                            .unwrap_or_else(|| b::Type::unknown(None))
+                            .into(),
+                    )
+                } else {
+                    let base_ty = b::Type::new(
+                        self.get_type_from_ident(name_node),
+                        Some(b::Loc::from_node(self.src_idx, &name_node)),
+                    );
+                    b::GenericInstanceType::new(base_ty.into(), args).into()
                 }
             }
             k => panic!("Unhandled type node `{k}`"),
         };
+
         b::Type::new(body, Some(b::Loc::from_node(self.src_idx, &node)))
     }
+
     pub fn parse_type_decl(
         &mut self,
         name: String,
         node: ts::Node<'t>,
         methods_idx: HashMap<&'a str, (usize, usize)>,
+        generics: HashMap<&'a str, usize>,
     ) {
         assert_eq!(node.kind(), "type_decl");
 
@@ -102,6 +105,7 @@ impl<'a, 't> TypeParser<'a, 't> {
         let value = b::TypeDef {
             name,
             body,
+            generics: generics.values().copied().collect(),
             loc: b::Loc::from_node(self.src_idx, &node),
         };
         self.idents.insert(
@@ -112,123 +116,184 @@ impl<'a, 't> TypeParser<'a, 't> {
             typedef: value,
             type_decl_node: Some(node),
             methods_idx,
+            generics,
         });
     }
 
-    fn finish_typedef(&self, x: &DeclaredTypeDef) -> b::TypeDef {
-        let Some(node) = x.type_decl_node else {
-            return x.typedef.clone();
+    /// Parse generics from the node and add each to the idents map.
+    pub fn parse_generics(&mut self, node: ts::Node<'t>) -> HashMap<&'a str, usize> {
+        let old_idents = self.idents.clone();
+        node.iter_field("generics")
+            .map(|gen_node| {
+                let idx = self.generics_count;
+                self.generics_count += 1;
+
+                let name =
+                    gen_node.get_text(&self.ctx.source(self.src_idx).content().text);
+                self.idents.insert(
+                    name.to_string(),
+                    b::GenericRef::new(self.mod_idx, idx).into(),
+                );
+
+                (name, idx)
+            })
+            .collect()
+    }
+
+    fn finish_typedef(&mut self, i: usize) -> b::TypeDef {
+        let typedef = self.typedefs[i].typedef.clone();
+
+        let Some(node) = self.typedefs[i].type_decl_node else {
+            return typedef;
         };
+
+        let old_idents = self.idents.clone();
+        for (name, gen_idx) in self.typedefs[i].generics.iter() {
+            self.idents.insert(
+                name.to_string(),
+                b::GenericRef::new(self.mod_idx, *gen_idx).into(),
+            );
+        }
+
         let body_node = node.required_field("body");
-        let body =
-            match (body_node.kind(), &x.typedef.body) {
-                ("record_type", b::TypeDefBody::Record(rec)) => {
-                    let fields = body_node
-                        .iter_field("fields")
-                        .map(|field_node| {
-                            let name_node = field_node.required_field("name");
-                            let name = name_node
-                                .get_text(&self.ctx.source(self.src_idx).content().text)
-                                .to_string();
-                            let record_field = b::RecordField::new(
-                                b::NameWithLoc::new(
-                                    name.clone(),
-                                    b::Loc::from_node(self.src_idx, &name_node),
-                                ),
-                                self.parse_type_expr(field_node.required_field("type")),
-                                b::Loc::from_node(self.src_idx, &field_node),
-                            );
-                            (name, record_field)
-                        })
-                        .collect();
+        let body = match (body_node.kind(), &typedef.body) {
+            ("record_type", b::TypeDefBody::Record(rec)) => {
+                let fields = body_node
+                    .iter_field("fields")
+                    .map(|field_node| {
+                        let name_node = field_node.required_field("name");
+                        let name = name_node
+                            .get_text(&self.ctx.source(self.src_idx).content().text)
+                            .to_string();
+                        let record_field = b::RecordField::new(
+                            b::NameWithLoc::new(
+                                name.clone(),
+                                b::Loc::from_node(self.src_idx, &name_node),
+                            ),
+                            self.parse_type_expr(field_node.required_field("type")),
+                            b::Loc::from_node(self.src_idx, &field_node),
+                        );
+                        (name, record_field)
+                    })
+                    .collect();
 
-                    let methods = body_node
-                        .iter_field("methods")
-                        .map(|method_node| {
-                            let name_node = method_node.required_field("name");
-                            let name = name_node
-                                .get_text(&self.ctx.source(self.src_idx).content().text)
-                                .to_string();
-                            let func_ref = x.methods_idx.get(&name as &str).expect(
-                                "index of method's function should already be known",
-                            );
+                let methods = body_node
+                    .iter_field("methods")
+                    .map(|method_node| {
+                        let name_node = method_node.required_field("name");
+                        let name = name_node
+                            .get_text(&self.ctx.source(self.src_idx).content().text)
+                            .to_string();
+                        let func_ref = self.typedefs[i]
+                            .methods_idx
+                            .get(&name as &str)
+                            .expect("index of method's function should already be known");
 
-                            let method = b::Method::new(
-                                b::NameWithLoc::new(
-                                    name.clone(),
-                                    b::Loc::from_node(self.src_idx, &name_node),
-                                ),
-                                *func_ref,
-                                b::Loc::from_node(self.src_idx, &method_node),
-                            );
-                            (name, method)
-                        })
-                        .collect();
+                        let method = b::Method::new(
+                            b::NameWithLoc::new(
+                                name.clone(),
+                                b::Loc::from_node(self.src_idx, &name_node),
+                            ),
+                            *func_ref,
+                            b::Loc::from_node(self.src_idx, &method_node),
+                        );
+                        (name, method)
+                    })
+                    .collect();
 
-                    let implements = node
-                        .iter_field("assertion")
-                        .map(|ty_node| self.parse_type_expr(ty_node))
-                        .filter_map(|ty| match ty.body {
-                            b::TypeBody::TypeRef(t) => Some((t.mod_idx, t.idx)),
-                            _ => {
-                                self.ctx.push_error(errors::Error::new(
-                                    errors::TypeNotInterface::new(ty).into(),
-                                    b::Loc::from_node(self.src_idx, &node),
-                                ));
-                                None
+                let implements = node
+                    .iter_field("assertion")
+                    .filter_map(|ty_node| {
+                        let ty = self.parse_type_expr(ty_node);
+                        match &ty.body {
+                            b::TypeBody::TypeRef(t) => {
+                                return Some(b::InterfaceImpl::TypeRef(*t))
                             }
-                        })
-                        .collect();
-
-                    b::TypeDefBody::Record(b::RecordType {
-                        fields,
-                        methods,
-                        ifaces: implements,
-                        ..rec.clone()
+                            b::TypeBody::GenericInstance(gen_ins) => {
+                                if let b::TypeBody::TypeRef(t) = &gen_ins.ty.body {
+                                    return Some(b::InterfaceImpl::GenericInstance(
+                                        *t,
+                                        gen_ins.args.clone(),
+                                    ));
+                                }
+                            }
+                            _ => {}
+                        }
+                        self.ctx.push_error(errors::Error::new(
+                            errors::TypeNotInterface::new(ty).into(),
+                            b::Loc::from_node(self.src_idx, &node),
+                        ));
+                        None
                     })
-                }
-                ("interface_type", b::TypeDefBody::Interface(iface)) => {
-                    let methods = body_node
-                        .iter_field("methods")
-                        .map(|method_node| {
-                            let name_node = method_node.required_field("name");
-                            let name = name_node
-                                .get_text(&self.ctx.source(self.src_idx).content().text)
-                                .to_string();
-                            let func_ref = x.methods_idx.get(&name as &str).expect(
-                                "index of method's function should already be known",
-                            );
+                    .collect();
 
-                            let method = b::Method::new(
-                                b::NameWithLoc::new(
-                                    name.clone(),
-                                    b::Loc::from_node(self.src_idx, &name_node),
-                                ),
-                                *func_ref,
-                                b::Loc::from_node(self.src_idx, &method_node),
-                            );
-                            (name, method)
-                        })
-                        .collect();
+                b::TypeDefBody::Record(b::RecordType {
+                    fields,
+                    methods,
+                    ifaces: implements,
+                    ..rec.clone()
+                })
+            }
+            ("interface_type", b::TypeDefBody::Interface(iface)) => {
+                let methods = body_node
+                    .iter_field("methods")
+                    .map(|method_node| {
+                        let name_node = method_node.required_field("name");
+                        let name = name_node
+                            .get_text(&self.ctx.source(self.src_idx).content().text)
+                            .to_string();
+                        let func_ref = self.typedefs[i]
+                            .methods_idx
+                            .get(&name as &str)
+                            .expect("index of method's function should already be known");
 
-                    b::TypeDefBody::Interface(b::InterfaceType {
-                        methods,
-                        ..iface.clone()
+                        let method = b::Method::new(
+                            b::NameWithLoc::new(
+                                name.clone(),
+                                b::Loc::from_node(self.src_idx, &name_node),
+                            ),
+                            *func_ref,
+                            b::Loc::from_node(self.src_idx, &method_node),
+                        );
+                        (name, method)
                     })
-                }
-                _ => unreachable!(),
-            };
-        b::TypeDef {
-            body,
-            ..x.typedef.clone()
+                    .collect();
+
+                b::TypeDefBody::Interface(b::InterfaceType {
+                    methods,
+                    ..iface.clone()
+                })
+            }
+            _ => unreachable!(),
+        };
+
+        self.idents = old_idents;
+
+        b::TypeDef { body, ..typedef }
+    }
+
+    fn get_type_from_ident(&mut self, node: ts::Node<'t>) -> b::TypeBody {
+        assert_eq!(node.kind(), "ident");
+
+        let ident = node.get_text(&self.ctx.source(self.src_idx).content().text);
+        match self.idents.get(ident) {
+            Some(body) => body.clone(),
+            None => {
+                self.ctx.push_error(errors::Error::new(
+                    errors::TypeNotFound::new(ident.to_string()).into(),
+                    b::Loc::from_node(self.src_idx, &node),
+                ));
+                b::TypeBody::unknown()
+            }
         }
     }
 }
 
 pub struct DeclaredTypeDef<'a, 't> {
-    pub typedef:    b::TypeDef,
+    pub typedef: b::TypeDef,
     type_decl_node: Option<ts::Node<'t>>,
-    methods_idx:    HashMap<&'a str, (usize, usize)>,
+    methods_idx: HashMap<&'a str, (usize, usize)>,
+    generics: HashMap<&'a str, usize>,
 }
 
 fn default_idents() -> HashMap<String, b::TypeBody> {

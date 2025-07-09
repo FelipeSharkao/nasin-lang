@@ -1,4 +1,4 @@
-#![allow(irrefutable_let_patterns)]
+#![feature(let_chains)]
 
 pub mod bytecode;
 pub mod codegen;

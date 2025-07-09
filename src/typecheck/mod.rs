@@ -1,6 +1,6 @@
 mod constraints;
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::mem;
 
@@ -80,24 +80,22 @@ impl<'a> TypeChecker<'a> {
             let func = &modules[self.mod_idx].funcs[idx];
 
             if let Some((mod_idx, ty_idx, name)) = &func.method {
-                let parent_funcs = modules[*mod_idx].typedefs[*ty_idx]
+                let parent_methods = modules[*mod_idx].typedefs[*ty_idx]
                     .get_ifaces()
                     .into_iter()
-                    .filter_map(|(mod_idx, ty_idx)| {
-                        modules[mod_idx].typedefs[ty_idx].get_method(name)
-                    })
-                    .map(|f| f.func_ref);
-                for (parent_mod_idx, parent_func_idx) in parent_funcs {
-                    let parent_func = &modules[parent_mod_idx].funcs[parent_func_idx];
+                    .filter_map(|iface_impl| iface_impl.get_method(name, &*modules));
+                for (method, generics_ins) in parent_methods {
+                    let parent_func =
+                        &modules[method.func_ref.0].funcs[method.func_ref.1];
                     for (param, parent_param) in izip!(&func.params, &parent_func.params)
                     {
-                        if *mod_idx == parent_mod_idx {
+                        if *mod_idx == method.func_ref.0 {
                             self.add_constraint(
                                 *param,
                                 Constraint::TypeOf(*parent_param),
                             );
                         } else {
-                            let v = &modules[parent_mod_idx].values[*parent_param];
+                            let v = &modules[method.func_ref.0].values[*parent_param];
                             self.add_constraint(*param, Constraint::Is(v.ty.clone()));
                         }
                     }
@@ -484,6 +482,13 @@ impl<'a> TypeChecker<'a> {
             tracing::trace!(idx, ?success, "validated value");
         }
 
+        {
+            let module = &self.ctx.lock_modules()[self.mod_idx];
+            dbg!(izip!(&module.values, &self.value_constraints)
+                .enumerate()
+                .collect::<SortedMap<_, _>>());
+        }
+
         tracing::info!(success, "validation completed");
 
         success
@@ -771,10 +776,7 @@ impl<'a> TypeChecker<'a> {
             return vec![];
         };
         let Some(func) = modules.get(ty_ref.mod_idx).and_then(|module| {
-            let method = match &module.typedefs.get(ty_ref.idx)?.body {
-                b::TypeDefBody::Record(rec) => rec.methods.get(name)?,
-                b::TypeDefBody::Interface(iface) => iface.methods.get(name)?,
-            };
+            let method = module.typedefs.get(ty_ref.idx)?.get_method(name)?;
             if method.func_ref.0 == self.mod_idx {
                 module.funcs.get(method.func_ref.1)
             } else {
@@ -794,7 +796,7 @@ impl<'a> TypeChecker<'a> {
     ) -> Option<b::Type> {
         let module = &modules[self.mod_idx];
         let parent = &module.values[v].ty;
-        return parent.property(key, modules).map(|ty| ty.into_owned());
+        return parent.property_type(key, modules).map(|ty| ty.into_owned());
     }
 
     #[tracing::instrument(level = "trace", skip_all)]
@@ -832,8 +834,8 @@ impl<'a> TypeChecker<'a> {
             let modules = &self.ctx.lock_modules();
             let parent_ty = &modules[self.mod_idx].values[source_v].ty;
             (
-                parent_ty.field(&key, &modules).is_some(),
-                parent_ty.method(&key, &modules).is_some(),
+                parent_ty.field_type(&key, &modules).is_some(),
+                parent_ty.method_type(&key, &modules).is_some(),
             )
         };
 

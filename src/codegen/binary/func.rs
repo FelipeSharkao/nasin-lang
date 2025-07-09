@@ -549,7 +549,13 @@ impl<'a> FuncCodegen<'a, '_> {
                     panic!("type should be a typeref");
                 };
 
-                match &self.ctx.modules[ty_ref.mod_idx].typedefs[ty_ref.idx].body {
+                let typedef = &self.ctx.modules[ty_ref.mod_idx].typedefs[ty_ref.idx];
+
+                if typedef.generics.len() > 0 {
+                    todo!()
+                }
+
+                match &typedef.body {
                     b::TypeDefBody::Record(rec) => {
                         let value =
                             source.add_value_to_func(&self.ctx.obj_module, builder);
@@ -666,11 +672,10 @@ impl<'a> FuncCodegen<'a, '_> {
                     // Check length at runtime
                     let builder = expect_builder!(self);
 
-                    let idx_value = builder
-                        .ins()
-                        .iconst(self.ctx.obj_module.isa().pointer_type(), unsafe {
-                            mem::transmute::<_, i64>(*idx)
-                        });
+                    let idx_value = builder.ins().iconst(
+                        self.ctx.obj_module.isa().pointer_type(),
+                        (*idx).cast_signed(),
+                    );
                     let len = builder.ins().load(
                         self.ctx.obj_module.isa().pointer_type(),
                         cl::MemFlags::new(),
@@ -688,11 +693,10 @@ impl<'a> FuncCodegen<'a, '_> {
 
                 let offset = self.ctx.obj_module.isa().pointer_bytes() as u64
                     + idx * item_size as u64;
-                let offset_value = builder
-                    .ins()
-                    .iconst(self.ctx.obj_module.isa().pointer_type(), unsafe {
-                        mem::transmute::<_, i64>(offset)
-                    });
+                let offset_value = builder.ins().iconst(
+                    self.ctx.obj_module.isa().pointer_type(),
+                    offset.cast_signed(),
+                );
                 let value = builder.ins().iadd(cl_source, offset_value);
 
                 self.values.insert(
@@ -708,8 +712,8 @@ impl<'a> FuncCodegen<'a, '_> {
                     panic!("type should be a typeref");
                 };
                 let vtable_ref = types::VTableRef::new(
-                    (*iface_mod_idx, *iface_ty_idx),
-                    (ty_ref.mod_idx, ty_ref.idx),
+                    b::TypeRef::new(*iface_mod_idx, *iface_ty_idx),
+                    *ty_ref,
                 );
                 let vtable_data = self.ctx.vtables_impl[&vtable_ref];
                 let vtable_gv = self
@@ -771,6 +775,7 @@ impl<'a> FuncCodegen<'a, '_> {
                             }};
                         }
 
+                        #[allow(unnecessary_transmutes)]
                         match &ty.body {
                             b::TypeBody::I8 => parse_num!(i8, I8),
                             b::TypeBody::I16 => parse_num!(i16, I16),
@@ -791,11 +796,13 @@ impl<'a> FuncCodegen<'a, '_> {
                             }
                             b::TypeBody::F32 => parse_num!(f32, F32),
                             b::TypeBody::F64 => parse_num!(f64, F64),
+                            b::TypeBody::GenericInstance(_) => todo!(),
                             b::TypeBody::Void
                             | b::TypeBody::Never
                             | b::TypeBody::Bool
                             | b::TypeBody::String(_)
                             | b::TypeBody::TypeRef(_)
+                            | b::TypeBody::Generic(_)
                             | b::TypeBody::Array(_)
                             | b::TypeBody::Ptr(_)
                             | b::TypeBody::Inferred(_)

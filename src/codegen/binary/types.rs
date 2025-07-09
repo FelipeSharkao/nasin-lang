@@ -305,13 +305,19 @@ pub fn get_type(
         | b::TypeBody::Ptr(_) => vec![obj_module.isa().pointer_type()],
         b::TypeBody::TypeRef(t) if t.is_self => vec![obj_module.isa().pointer_type()],
         b::TypeBody::TypeRef(t) => match &modules[t.mod_idx].typedefs[t.idx].body {
-            b::TypeDefBody::Record(_) => vec![obj_module.isa().pointer_type()],
-            b::TypeDefBody::Interface(_) => vec![obj_module.isa().pointer_type(); 2],
+            b::TypeDefBody::Record(_) => {
+                vec![obj_module.isa().pointer_type()]
+            }
+            b::TypeDefBody::Interface(_) => {
+                vec![obj_module.isa().pointer_type(); 2]
+            }
         },
+        b::TypeBody::GenericInstance(_) => todo!(),
         b::TypeBody::AnyNumber
         | b::TypeBody::AnySignedNumber
         | b::TypeBody::AnyFloat
-        | b::TypeBody::Inferred(_) => panic!("Type must be resolved before codegen"),
+        | b::TypeBody::Inferred(_)
+        | b::TypeBody::Generic(_) => panic!("Type must be resolved before codegen"),
         b::TypeBody::Void => panic!("void type cannot be used directly"),
         b::TypeBody::Never => panic!("never type cannot be used directly"),
         b::TypeBody::AnyOpaque => panic!("anyopaque type cannot be used directly"),
@@ -362,10 +368,12 @@ pub fn get_size(
             .into_iter()
             .map(|ty| ty.bytes())
             .sum(),
+        b::TypeBody::GenericInstance(_) => todo!(),
         b::TypeBody::AnyNumber
         | b::TypeBody::AnySignedNumber
         | b::TypeBody::AnyFloat
-        | b::TypeBody::Inferred(_) => panic!("Type must be resolved before codegen"),
+        | b::TypeBody::Inferred(_)
+        | b::TypeBody::Generic(_) => panic!("Type must be resolved before codegen"),
         b::TypeBody::AnyOpaque => panic!("anyopaque cannot be used directly"),
         b::TypeBody::Func(_) => todo!("first-class functions are not supported yet"),
     }
@@ -391,6 +399,6 @@ impl VTableDesc {
 
 #[derive(new, Hash, PartialEq, Eq, Clone, Copy, Debug)]
 pub struct VTableRef {
-    pub iface: (usize, usize),
-    pub ty:    (usize, usize),
+    pub iface: b::TypeRef,
+    pub ty:    b::TypeRef,
 }

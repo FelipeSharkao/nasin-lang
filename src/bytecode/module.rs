@@ -1,4 +1,5 @@
-use std::collections::HashSet;
+use std::borrow::Cow;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::{cmp, fmt};
 
@@ -48,15 +49,22 @@ impl Display for Module {
         }
 
         for (i, typedef) in self.typedefs.iter().enumerate() {
-            write!(f, "\n    type {i} {}", &typedef.loc)?;
+            write!(f, "\n    type {i} {} ", &typedef.loc)?;
+            if typedef.generics.len() > 0 {
+                write!(f, "(generics")?;
+                for idx in &typedef.generics {
+                    write!(f, " {}", idx)?;
+                }
+                write!(f, ") ")?;
+            }
 
             match &typedef.body {
                 TypeDefBody::Record(v) => {
-                    write!(f, " record:")?;
+                    write!(f, "record:")?;
                     if v.ifaces.len() > 0 {
                         write!(f, "\n        implements")?;
                         for iface in &v.ifaces {
-                            write!(f, " ({}-{})", iface.0, iface.1)?;
+                            write!(f, " {}", iface)?;
                         }
                     }
                     for (name, field) in &v.fields {
@@ -67,7 +75,7 @@ impl Display for Module {
                     }
                 }
                 TypeDefBody::Interface(v) => {
-                    write!(f, " interface:")?;
+                    write!(f, "interface:")?;
                     for (name, method) in &v.methods {
                         write!(f, "\n        {name}(): {method}")?;
                     }
@@ -114,19 +122,24 @@ impl Display for Module {
 
 #[derive(Debug, Clone)]
 pub struct TypeDef {
-    pub name: String,
-    pub body: TypeDefBody,
-    pub loc:  Loc,
+    pub name:     String,
+    pub body:     TypeDefBody,
+    /// List of index of the (not yet implemented) module's list of generics
+    pub generics: Vec<usize>,
+    pub loc:      Loc,
 }
 impl TypeDef {
-    pub fn get_ifaces(&self) -> Vec<(usize, usize)> {
+    pub fn get_ifaces(&self) -> Vec<Cow<'_, InterfaceImpl>> {
         match &self.body {
-            TypeDefBody::Record(rec) => rec.ifaces.iter().cloned().collect(),
+            TypeDefBody::Record(rec) => rec.ifaces.iter().map(Cow::Borrowed).collect(),
             _ => vec![],
         }
     }
 
-    pub fn get_method(&self, name: &str) -> Option<&Method> {
+    pub fn get_method<'a>(&'a self, name: &str) -> Option<&'a Method> {
+        if self.generics.len() > 0 {
+            todo!()
+        }
         match &self.body {
             TypeDefBody::Record(rec) => rec.methods.get(name),
             TypeDefBody::Interface(iface) => iface.methods.get(name),
@@ -163,9 +176,64 @@ pub enum TypeDefBody {
 
 #[derive(Debug, Clone)]
 pub struct RecordType {
-    pub ifaces:  HashSet<(usize, usize)>,
+    pub ifaces:  HashSet<InterfaceImpl>,
     pub fields:  SortedMap<String, RecordField>,
     pub methods: SortedMap<String, Method>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Display)]
+pub enum InterfaceImpl {
+    #[display("{_0}")]
+    TypeRef(TypeRef),
+    #[display("{_0} of {}", _1.iter().join(", "))]
+    GenericInstance(TypeRef, Vec<Type>),
+}
+impl InterfaceImpl {
+    pub fn type_ref(&self) -> TypeRef {
+        match self {
+            Self::TypeRef(t) => *t,
+            Self::GenericInstance(t, _) => *t,
+        }
+    }
+
+    pub fn mod_idx(&self) -> usize {
+        self.type_ref().mod_idx
+    }
+
+    pub fn ty_idx(&self) -> usize {
+        self.type_ref().idx
+    }
+
+    pub fn get_method<'a>(
+        &'a self,
+        name: &str,
+        modules: &'a [Module],
+    ) -> Option<(&'a Method, HashMap<GenericRef, Cow<'a, Type>>)> {
+        let (typedef, method) = match self {
+            Self::TypeRef(t) | Self::GenericInstance(t, _) => {
+                let typedef = modules.get(t.mod_idx)?.typedefs.get(t.idx)?;
+
+                let method = match &typedef.body {
+                    TypeDefBody::Record(rec) => rec.methods.get(name)?,
+                    TypeDefBody::Interface(iface) => iface.methods.get(name)?,
+                };
+
+                (typedef, method)
+            }
+        };
+
+        let generics = match self {
+            Self::GenericInstance(t, args) => typedef
+                .generics
+                .iter()
+                .enumerate()
+                .map(|(i, x)| (GenericRef::new(t.mod_idx, *x), Cow::Borrowed(&args[i])))
+                .collect(),
+            _ => HashMap::new(),
+        };
+
+        Some((method, generics))
+    }
 }
 
 #[derive(Debug, Clone)]

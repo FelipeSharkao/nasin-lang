@@ -82,6 +82,7 @@ impl<'a, 't> ModuleParser<'a, 't> {
         module.funcs = self.funcs.into_iter().map(|x| x.func).collect();
         module.values = self.values;
     }
+
     pub fn add_root(&mut self, node: ts::Node<'t>) {
         node.of_kind("root");
 
@@ -93,12 +94,17 @@ impl<'a, 't> ModuleParser<'a, 't> {
 
             match sym_node.kind() {
                 "type_decl" => {
-                    let old_self_type = self.types.idents.get(SELF_INDENT).cloned();
+                    let mut old_idents = self.types.idents.clone();
+
                     let ty_idx = self.types.typedefs.len();
-                    let self_type = b::TypeRef::new(self.mod_idx, ty_idx).is_self(true);
+                    let self_type =
+                        b::TypeRef::new(self.mod_idx, ty_idx).with_is_self(true);
                     self.types
                         .idents
                         .insert(SELF_INDENT.to_string(), self_type.into());
+
+                    let generics = self.types.parse_generics(sym_node);
+                    let generics_idents = generics.keys().copied().collect_vec();
 
                     let body_node = sym_node.required_field("body");
                     let is_virt = body_node.kind() == "interface_type";
@@ -122,14 +128,17 @@ impl<'a, 't> ModuleParser<'a, 't> {
                             (method_name, (self.mod_idx, func_idx))
                         })
                         .collect();
-                    self.types.parse_type_decl(name, sym_node, methods);
+                    self.types
+                        .parse_type_decl(name, sym_node, methods, generics);
 
-                    if let Some(old_self_type) = old_self_type {
-                        self.types
-                            .idents
-                            .insert(SELF_INDENT.to_string(), old_self_type);
-                    } else {
-                        self.types.idents.remove(SELF_INDENT);
+                    // TODO: move adding the methods to `finish_typedef` so we don't have
+                    // to do this.
+                    for name in generics_idents.into_iter().chain([SELF_INDENT]) {
+                        if let Some(old_type) = old_idents.remove(name) {
+                            self.types.idents.insert(name.to_string(), old_type);
+                        } else {
+                            self.types.idents.remove(name);
+                        }
                     }
                 }
                 "func_decl" => {

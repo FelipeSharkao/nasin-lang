@@ -46,6 +46,7 @@ pub enum ErrorDetail {
     #[display("Type should be known at this point")]
     TypeNotFinal,
     TypeNotInterface(TypeNotInterface),
+    WrongGenericsNumber(WrongGenericsNumber),
     Todo(Todo),
 }
 
@@ -81,6 +82,13 @@ pub struct TypeMisatch {
 #[display("`{ty}` is not an interface type")]
 pub struct TypeNotInterface {
     pub ty: b::Type,
+}
+
+#[derive(Debug, Clone, Display, new)]
+#[display("Wrong number of generics. Expected {expected}, found {actual}")]
+pub struct WrongGenericsNumber {
+    pub expected: usize,
+    pub actual:   usize,
 }
 
 #[derive(Debug, Clone, Display, new)]

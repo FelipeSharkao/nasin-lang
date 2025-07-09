@@ -1,0 +1,20 @@
+type NopImpl(T) : Nop(T) {
+    nop(v: T, self: Self) = v
+}
+
+type Nop(T) interface {
+    nop(v: T, self: Self): T
+}
+
+main =
+    let nop_impl: NopImpl(u8) = {}
+    let nop: Nop(u8) = nop_impl
+    let v: u8 = 5
+    let _ = assert(nop.nop(v) == v)
+
+    let nop_impl: NopImpl(u64) = {}
+    let nop: Nop(u64) = nop_impl
+    let v: u64 = 5
+    let _ = assert(nop.nop(v) == v)
+
+    true

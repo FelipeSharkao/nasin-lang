@@ -91,8 +91,13 @@ impl<'a> CodegenContext<'a> {
     }
 
     pub fn insert_type(&mut self, mod_idx: usize, idx: usize) {
-        let ty = &self.modules[mod_idx].typedefs[idx];
-        match &ty.body {
+        let typedef = &self.modules[mod_idx].typedefs[idx];
+
+        if typedef.generics.len() > 0 {
+            todo!()
+        }
+
+        match &typedef.body {
             b::TypeDefBody::Record(rec) => {
                 self.insert_record_type(mod_idx, idx, rec);
             }
@@ -235,27 +240,31 @@ impl<'a> CodegenContext<'a> {
         idx: usize,
         rec: &b::RecordType,
     ) -> Vec<cl::DataId> {
-        let key = (mod_idx, idx);
+        let key = b::TypeRef::new(mod_idx, idx);
 
         rec.ifaces
             .iter()
-            .map(|iface_key| {
-                let key = types::VTableRef::new(*iface_key, key);
+            .map(|iface_impl| {
+                let key = types::VTableRef::new(iface_impl.type_ref(), key);
                 if let Some(data_id) = self.vtables_impl.get(&key) {
                     return *data_id;
                 }
 
                 let b::TypeDefBody::Interface(iface) =
-                    &self.modules[iface_key.0].typedefs[iface_key.1].body
+                    &self.modules[iface_impl.mod_idx()].typedefs[iface_impl.ty_idx()]
+                        .body
                 else {
                     panic!(
-                        "type {}-{} should be an interface, I don't know what I got",
-                        iface_key.0, iface_key.1
+                        "{} should be an interface, I don't know what I got",
+                        iface_impl.type_ref()
                     );
                 };
 
-                let vtable_desc =
-                    self.insert_interface_type(iface_key.0, iface_key.1, iface);
+                let vtable_desc = self.insert_interface_type(
+                    iface_impl.mod_idx(),
+                    iface_impl.ty_idx(),
+                    iface,
+                );
 
                 let tuple = vtable_desc
                     .methods

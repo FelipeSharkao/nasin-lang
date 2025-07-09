@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::collections::HashMap;
 use std::fmt;
 use std::hash::Hash;
 
@@ -7,97 +8,68 @@ use derive_new::new;
 use derive_setters::Setters;
 use itertools::{chain, izip, Itertools};
 
-use super::{Loc, Module, TypeDef, TypeDefBody};
+use super::{Loc, Module, TypeDefBody};
+use crate::bytecode::InterfaceImpl;
 use crate::utils::{self, unordered};
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, From)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, From, Display)]
 pub enum TypeBody {
+    #[display("void")]
     Void,
+    #[display("never")]
     Never,
+    #[display("bool")]
     Bool,
+    #[display("AnyNumber")]
     AnyOpaque,
     // FIXME: use interface/trait for this
+    #[display("AnySignedNumber")]
     AnyNumber,
     // FIXME: use interface/trait for this
+    #[display("AnyFloat")]
     AnySignedNumber,
     // FIXME: use interface/trait for this
+    #[display("anyopaque")]
     AnyFloat,
+    #[display("i8")]
     I8,
+    #[display("i16")]
     I16,
+    #[display("i32")]
     I32,
+    #[display("i64")]
     I64,
+    #[display("u8")]
     U8,
+    #[display("u16")]
     U16,
+    #[display("u32")]
     U32,
+    #[display("u64")]
     U64,
+    #[display("usize")]
     USize,
+    #[display("f32")]
     F32,
+    #[display("f64")]
     F64,
+    #[display("{_0}")]
     Inferred(InferredType),
+    #[display("{_0}")]
     String(StringType),
+    #[display("{_0}")]
     Array(ArrayType),
     #[from(skip)]
+    #[display("ptr {_0}")]
     Ptr(Box<Type>),
+    #[display("{_0}")]
     Func(Box<FuncType>),
+    #[display("{_0}")]
     TypeRef(TypeRef),
-}
-impl Display for TypeBody {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            TypeBody::Void => write!(f, "void")?,
-            TypeBody::Never => write!(f, "never")?,
-            TypeBody::Bool => write!(f, "bool")?,
-            TypeBody::AnyNumber => write!(f, "AnyNumber")?,
-            TypeBody::AnySignedNumber => write!(f, "AnySignedNumber")?,
-            TypeBody::AnyFloat => write!(f, "AnyFloat")?,
-            TypeBody::AnyOpaque => write!(f, "anyopaque")?,
-            TypeBody::I8 => write!(f, "i8")?,
-            TypeBody::I16 => write!(f, "i16")?,
-            TypeBody::I32 => write!(f, "i32")?,
-            TypeBody::I64 => write!(f, "i64")?,
-            TypeBody::U8 => write!(f, "u8")?,
-            TypeBody::U16 => write!(f, "u16")?,
-            TypeBody::U32 => write!(f, "u32")?,
-            TypeBody::U64 => write!(f, "u64")?,
-            TypeBody::USize => write!(f, "usize")?,
-            TypeBody::F32 => write!(f, "f32")?,
-            TypeBody::F64 => write!(f, "f64")?,
-            TypeBody::Inferred(v) => {
-                write!(f, "infered {{")?;
-                for (name, t) in &v.members {
-                    write!(f, " {name}: {t}")?;
-                }
-                for (name, t) in &v.properties {
-                    write!(f, " .{name}: {t}")?;
-                }
-                write!(f, " }}")?;
-            }
-            TypeBody::String(v) => {
-                write!(f, "string")?;
-                if let Some(len) = v.len {
-                    write!(f, " {}", len)?;
-                }
-            }
-            TypeBody::Array(v) => {
-                write!(f, "array {}", v.item)?;
-                if let Some(len) = v.len {
-                    write!(f, " {}", len)?;
-                }
-            }
-            TypeBody::Ptr(ty) => write!(f, "ptr {ty}")?,
-            TypeBody::Func(func) => {
-                write!(f, "func {}: {}", func.params.iter().join(", "), &func.ret)?
-            }
-            TypeBody::TypeRef(ty_ref) => write!(
-                f,
-                "{} {}-{}",
-                if ty_ref.is_self { "self" } else { "type" },
-                ty_ref.mod_idx,
-                ty_ref.idx,
-            )?,
-        }
-        Ok(())
-    }
+    #[display("{_0}")]
+    Generic(GenericRef),
+    #[display("{_0}")]
+    GenericInstance(GenericInstanceType),
 }
 impl TypeBody {
     pub fn unknown() -> Self {
@@ -106,6 +78,7 @@ impl TypeBody {
             properties: utils::SortedMap::new(),
         })
     }
+
     pub fn is_unknown(&self) -> bool {
         if let TypeBody::Inferred(i) = self {
             return i.members.is_empty() && i.properties.is_empty();
@@ -206,53 +179,80 @@ impl Type {
         matches!(&self.body, TypeBody::Never)
     }
 
-    pub fn field<'a>(&'a self, name: &str, modules: &'a [Module]) -> Option<&'a Type> {
+    pub fn field_type<'a>(
+        &'a self,
+        name: &str,
+        modules: &'a [Module],
+    ) -> Option<Cow<'a, Type>> {
         match &self.body {
-            TypeBody::Inferred(v) => v.members.get(name),
+            TypeBody::Inferred(v) => Some(Cow::Borrowed(v.members.get(name)?)),
             TypeBody::TypeRef(t) => {
-                match &modules.get(t.mod_idx)?.typedefs.get(t.idx)?.body {
-                    TypeDefBody::Record(rec) => Some(&rec.fields.get(name)?.ty),
+                let typedef = &modules.get(t.mod_idx)?.typedefs.get(t.idx)?;
+                match &typedef.body {
+                    TypeDefBody::Record(rec) => {
+                        Some(Cow::Borrowed(&rec.fields.get(name)?.ty))
+                    }
                     TypeDefBody::Interface(_) => None,
                 }
+            }
+            TypeBody::GenericInstance(gen_ins) => {
+                let mut field = gen_ins.ty.field_type(name, modules);
+                if let Some(field) = &mut field {
+                    let gens = gen_ins.ty.generics(modules);
+                    let subs: HashMap<_, _> = izip!(gens, &gen_ins.args).collect();
+                    field.to_mut().apply_generics(&subs)
+                }
+                field
             }
             _ => None,
         }
     }
 
-    pub fn method<'a>(
+    pub fn method_type<'a>(
         &'a self,
         name: &str,
         modules: &'a [Module],
     ) -> Option<Cow<'a, Type>> {
-        let TypeBody::TypeRef(t) = &self.body else {
-            return None;
-        };
+        match &self.body {
+            TypeBody::TypeRef(t) => {
+                let typedef = modules.get(t.mod_idx)?.typedefs.get(t.idx)?;
 
-        let typedef = modules.get(t.mod_idx)?.typedefs.get(t.idx)?;
-        let method = match &typedef.body {
-            TypeDefBody::Record(rec) => rec.methods.get(name),
-            TypeDefBody::Interface(iface) => iface.methods.get(name),
-        }?;
-        let method_mod = modules.get(method.func_ref.0)?;
-        let func = &method_mod.funcs[method.func_ref.1];
-        let params_tys = func
-            .params
-            .iter()
-            .map(|param| method_mod.values[*param].ty.clone())
-            .collect_vec();
-        let ret_ty = method_mod.values[func.ret].ty.clone();
-        Some(Cow::Owned(Type::new(
-            TypeBody::Func(Box::new(FuncType::new(params_tys, ret_ty))),
-            Some(method.loc),
-        )))
+                let method = match &typedef.body {
+                    TypeDefBody::Record(rec) => rec.methods.get(name),
+                    TypeDefBody::Interface(iface) => iface.methods.get(name),
+                }?;
+                let method_mod = modules.get(method.func_ref.0)?;
+                let func = &method_mod.funcs[method.func_ref.1];
+                let params_tys = func
+                    .params
+                    .iter()
+                    .map(|param| method_mod.values[*param].ty.clone())
+                    .collect_vec();
+                let ret_ty = method_mod.values[func.ret].ty.clone();
+                Some(Cow::Owned(Type::new(
+                    TypeBody::Func(Box::new(FuncType::new(params_tys, ret_ty))),
+                    Some(method.loc),
+                )))
+            }
+            TypeBody::GenericInstance(gen_ins) => {
+                let mut method = gen_ins.ty.method_type(name, modules);
+                if let Some(method) = &mut method {
+                    let gens = gen_ins.ty.generics(modules);
+                    let subs: HashMap<_, _> = izip!(gens, &gen_ins.args).collect();
+                    method.to_mut().apply_generics(&subs)
+                }
+                method
+            }
+            _ => None,
+        }
     }
 
-    pub fn property<'a>(
+    pub fn property_type<'a>(
         &'a self,
         name: &str,
         modules: &'a [Module],
     ) -> Option<Cow<'a, Type>> {
-        if let Some(ty) = self.method(name, modules) {
+        if let Some(ty) = self.method_type(name, modules) {
             let TypeBody::Func(func) = &ty.body else {
                 return None;
             };
@@ -278,8 +278,8 @@ impl Type {
         if let TypeBody::Inferred(v) = &self.body {
             return v.properties.get(name).map(|v| Cow::Borrowed(v));
         }
-        if let Some(ty) = self.field(name, modules) {
-            return Some(Cow::Borrowed(ty));
+        if let Some(ty) = self.field_type(name, modules) {
+            return Some(ty);
         }
         None
     }
@@ -363,13 +363,13 @@ impl Type {
             }
             unordered!(body!(TypeBody::Inferred(a)), b) => {
                 let has_all_members = a.members.iter().all(|(name, a_ty)| {
-                    other
-                        .field(name, modules)
-                        .is_some_and(|b_ty| a_ty.intersection(b_ty, modules).is_some())
+                    other.field_type(name, modules).is_some_and(|b_ty| {
+                        a_ty.intersection(b_ty.as_ref(), modules).is_some()
+                    })
                 });
                 let has_all_props = a.properties.iter().all(|(name, a_ty)| {
                     other
-                        .property(name, modules)
+                        .property_type(name, modules)
                         .is_some_and(|b_ty| a_ty.intersection(&b_ty, modules).is_some())
                 });
                 if has_all_members && has_all_props {
@@ -379,43 +379,18 @@ impl Type {
                 }
             }
             (body!(TypeBody::TypeRef(a)), body!(TypeBody::TypeRef(b))) => {
-                let a_ty = &modules[a.mod_idx].typedefs[a.idx];
-                let b_ty = &modules[b.mod_idx].typedefs[b.idx];
-
-                macro_rules! body {
-                    ($pat:pat) => {
-                        TypeDef { body: $pat, .. }
-                    };
-                }
-
-                let (mod_idx, ty_idx) =
-                    match ((a.mod_idx, a.idx, a_ty), (b.mod_idx, b.idx, b_ty)) {
-                        (
-                            (_, _, body!(TypeDefBody::Record(_))),
-                            (_, _, body!(TypeDefBody::Record(_))),
-                        ) if a.is_same_of(b) => (a.mod_idx, a.idx),
-                        (
-                            (_, _, body!(TypeDefBody::Interface(_))),
-                            (_, _, body!(TypeDefBody::Interface(_))),
-                        ) if a.is_same_of(b) => (a.mod_idx, a.idx),
-                        unordered!(
-                            (r_mod_idx, r_ty_idx, body!(TypeDefBody::Record(rec))),
-                            (i_mod_idx, i_ty_idx, body!(TypeDefBody::Interface(..))),
-                        ) => {
-                            let extends = rec.ifaces.iter().any(|(mod_idx, ty_idx)| {
-                                i_mod_idx == *mod_idx && i_ty_idx == *ty_idx
-                            });
-                            if !extends {
-                                return None;
-                            }
-
-                            (r_mod_idx, r_ty_idx)
-                        }
-                        _ => return None,
-                    };
+                let (mod_idx, ty_idx) = if a.is_same_of(&TypeBody::TypeRef(*b), modules) {
+                    (a.mod_idx, a.idx)
+                } else if a.extends(&TypeBody::TypeRef(*b), modules) {
+                    (a.mod_idx, a.idx)
+                } else if b.extends(&TypeBody::TypeRef(*b), modules) {
+                    (b.mod_idx, b.idx)
+                } else {
+                    return None;
+                };
 
                 TypeRef::new(mod_idx, ty_idx)
-                    .is_self(a.is_self || b.is_self)
+                    .with_is_self(a.is_self || b.is_self)
                     .into()
             }
             _ => return None,
@@ -495,12 +470,12 @@ impl Type {
             unordered!(body!(TypeBody::Inferred(a)), b) => {
                 let has_all_members = a.members.iter().all(|(name, a_ty)| {
                     other
-                        .field(name, modules)
-                        .is_some_and(|b_ty| a_ty.union(b_ty, modules).is_some())
+                        .field_type(name, modules)
+                        .is_some_and(|b_ty| a_ty.union(b_ty.as_ref(), modules).is_some())
                 });
                 let has_all_props = a.properties.iter().all(|(name, a_ty)| {
                     other
-                        .property(name, modules)
+                        .property_type(name, modules)
                         .is_some_and(|b_ty| a_ty.union(&b_ty, modules).is_some())
                 });
                 if has_all_members && has_all_props {
@@ -510,10 +485,10 @@ impl Type {
                 }
             }
             unordered!(body!(TypeBody::TypeRef(a)), body!(TypeBody::TypeRef(b)))
-                if a.is_same_of(b) =>
+                if a.is_same_of(&TypeBody::TypeRef(*b), modules) =>
             {
                 TypeRef::new(a.mod_idx, a.idx)
-                    .is_self(a.is_self && b.is_self)
+                    .with_is_self(a.is_self && b.is_self)
                     .into()
             }
             (a, b) => {
@@ -529,6 +504,68 @@ impl Type {
             (Some(_), Some(_)) | (None, None) => None,
         };
         Some(Type::new(body, loc))
+    }
+
+    pub fn generics(&self, modules: &[Module]) -> Vec<GenericRef> {
+        match &self.body {
+            TypeBody::TypeRef(t) => modules[t.mod_idx].typedefs[t.idx]
+                .generics
+                .iter()
+                .map(|i| GenericRef::new(t.mod_idx, *i))
+                .collect_vec(),
+            _ => vec![],
+        }
+    }
+
+    pub fn apply_generics<'a>(&mut self, subs: &HashMap<GenericRef, &'a Type>) {
+        match &mut self.body {
+            TypeBody::Generic(gen_ref) => {
+                if let Some(ty) = subs.get(gen_ref) {
+                    *self = (*ty).clone();
+                }
+            }
+            TypeBody::Inferred(t) => {
+                for prop in t.properties.values_mut() {
+                    prop.apply_generics(subs);
+                }
+                for member in t.members.values_mut() {
+                    member.apply_generics(subs);
+                }
+            }
+            TypeBody::Array(t) => {
+                t.item.apply_generics(subs);
+            }
+            TypeBody::Ptr(_) => todo!(),
+            TypeBody::Func(t) => {
+                for param in &mut t.params {
+                    param.apply_generics(subs);
+                }
+                t.ret.apply_generics(subs);
+            }
+            TypeBody::GenericInstance(t) => {
+                t.ty.apply_generics(subs);
+            }
+            TypeBody::Void
+            | TypeBody::Never
+            | TypeBody::Bool
+            | TypeBody::AnyOpaque
+            | TypeBody::AnyNumber
+            | TypeBody::AnySignedNumber
+            | TypeBody::AnyFloat
+            | TypeBody::I8
+            | TypeBody::I16
+            | TypeBody::I32
+            | TypeBody::I64
+            | TypeBody::U8
+            | TypeBody::U16
+            | TypeBody::U32
+            | TypeBody::U64
+            | TypeBody::USize
+            | TypeBody::F32
+            | TypeBody::F64
+            | TypeBody::String(..)
+            | TypeBody::TypeRef(..) => {}
+        }
     }
 }
 impl PartialEq for Type {
@@ -553,15 +590,81 @@ impl Display for Type {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Setters, new)]
+trait TypeOperations {
+    /// Returns true if the type is compatible with `other`, not necessary the exact same
+    /// type. If `self` is a supertype or a subtype of `other`, it will return false.
+    fn is_same_of(&self, other: &TypeBody, modules: &[Module]) -> bool;
+    /// Returns true if `self` is a subtype of `other`.
+    fn extends(&self, other: &TypeBody, modules: &[Module]) -> bool;
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Setters, new)]
+#[setters(into, prefix = "with_")]
 pub struct TypeRef {
     pub mod_idx: usize,
     pub idx:     usize,
     #[new(value = "false")]
     pub is_self: bool,
 }
-impl TypeRef {
-    pub fn is_same_of(&self, other: &TypeRef) -> bool {
+impl Display for TypeRef {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "{} {}-{}",
+            if self.is_self { "self" } else { "type" },
+            self.mod_idx,
+            self.idx,
+        )
+    }
+}
+impl TypeOperations for TypeRef {
+    fn is_same_of(&self, other: &TypeBody, _modules: &[Module]) -> bool {
+        match other {
+            TypeBody::TypeRef(other) => {
+                (self.mod_idx, self.idx) == (other.mod_idx, other.idx)
+            }
+            _ => false,
+        }
+    }
+
+    fn extends(&self, other: &TypeBody, modules: &[Module]) -> bool {
+        match other {
+            TypeBody::TypeRef(other) => {
+                let self_ty = &modules[self.mod_idx].typedefs[self.idx];
+                let other_ty = &modules[other.mod_idx].typedefs[other.idx];
+
+                match (&self_ty.body, &other_ty.body) {
+                    (TypeDefBody::Record(rec), TypeDefBody::Interface(..)) => {
+                        rec.ifaces.iter().any(|iface| match iface {
+                            InterfaceImpl::TypeRef(ity)
+                            | InterfaceImpl::GenericInstance(ity, _) => {
+                                (other.mod_idx, other.idx) == (ity.mod_idx, ity.idx)
+                            }
+                        })
+                    }
+                    _ => false,
+                }
+            }
+            _ => false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Display, new)]
+#[display("{ty} of {}", args.iter().join(", "))]
+pub struct GenericInstanceType {
+    pub ty:   Box<Type>,
+    pub args: Vec<Type>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Display, new)]
+#[display("generic {mod_idx}-{idx}")]
+pub struct GenericRef {
+    pub mod_idx: usize,
+    pub idx:     usize,
+}
+impl GenericRef {
+    pub fn is_same_of(&self, other: &GenericRef) -> bool {
         (self.mod_idx, self.idx) == (other.mod_idx, other.idx)
     }
 }
@@ -573,7 +676,6 @@ pub struct InferredType {
     /// Fields or applied methods
     pub properties: utils::SortedMap<String, Type>,
 }
-
 impl InferredType {
     pub fn new(
         members: impl IntoIterator<Item = (String, Type)>,
@@ -585,16 +687,47 @@ impl InferredType {
         }
     }
 }
+impl Display for InferredType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "infered {{")?;
+        for (name, t) in &self.members {
+            write!(f, " {name}: {t}")?;
+        }
+        for (name, t) in &self.properties {
+            write!(f, " .{name}: {t}")?;
+        }
+        write!(f, " }}")?;
+        Ok(())
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, new)]
 pub struct StringType {
     pub len: Option<u32>,
+}
+impl Display for StringType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "string")?;
+        if let Some(len) = self.len {
+            write!(f, " {}", len)?;
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, new)]
 pub struct ArrayType {
     pub item: Box<Type>,
     pub len:  Option<u32>,
+}
+impl Display for ArrayType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "array {}", self.item)?;
+        if let Some(len) = self.len {
+            write!(f, " {}", len)?;
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Display, new)]

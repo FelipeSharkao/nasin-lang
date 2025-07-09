@@ -1,4 +1,8 @@
-use std::borrow::Cow;
+use std::borrow::{Borrow, Cow};
+use std::collections::HashMap;
+use std::hash::Hash;
+use std::ops::{Deref, DerefMut, IndexMut};
+use std::usize;
 
 use tree_sitter as ts;
 
@@ -88,12 +92,12 @@ impl<'t> Iterator for TreeSitterChildren<'t> {
 }
 
 pub trait IntoItem<Q> {
-    type Item;
-    fn into_item(self, item: Q) -> Option<Self::Item>;
+    type Output;
+    fn into_item(self, key: Q) -> Option<Self::Output>;
 }
 impl<T, I: IntoIterator<Item = T>> IntoItem<usize> for I {
-    type Item = T;
-    fn into_item(self, n: usize) -> Option<Self::Item> {
+    type Output = T;
+    fn into_item(self, n: usize) -> Option<Self::Output> {
         self.into_iter().nth(n)
     }
 }
