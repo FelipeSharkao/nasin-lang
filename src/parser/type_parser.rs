@@ -100,7 +100,7 @@ impl<'a, 't> TypeParser<'a, 't> {
         };
 
         let value = b::TypeDef {
-            name,
+            name: name,
             body,
             loc: b::Loc::from_node(self.src_idx, &node),
         };

@@ -290,16 +290,9 @@ impl<'a, 't> ExprParser<'a, 't> {
                     value_ref.loc,
                 ))
             }
-            ValueRefBody::Func(_, _) => {
-                self.module.ctx.push_error(errors::Error::new(
-                    errors::Todo::new("function as value".to_string()).into(),
-                    value_ref.loc,
-                ));
-                self.add_instr_with_result(b::Instr::new(
-                    b::InstrBody::CompileError,
-                    value_ref.loc,
-                ))
-            }
+            ValueRefBody::Func(mod_idx, func_idx) => self.add_instr_with_result(
+                b::Instr::new(b::InstrBody::GetFunc(*mod_idx, *func_idx), value_ref.loc),
+            ),
             ValueRefBody::Value(v) => *v,
             ValueRefBody::Bool(v) => self.add_instr_with_result(b::Instr::new(
                 b::InstrBody::CreateBool(*v),

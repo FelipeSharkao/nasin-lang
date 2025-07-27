@@ -20,7 +20,7 @@ pub enum Constraint {
     IsProperty(b::ValueIdx, String),
     Members(SortedMap<String, b::ValueIdx>),
     HasProperty(String, b::ValueIdx),
-    Func(usize),
+    Func(Vec<usize>, usize),
 }
 impl Constraint {
     pub fn priority(&self) -> ConstraintPriority {

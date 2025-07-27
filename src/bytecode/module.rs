@@ -48,7 +48,11 @@ impl Display for Module {
         }
 
         for (i, typedef) in self.typedefs.iter().enumerate() {
-            write!(f, "\n    type {i} {}", &typedef.loc)?;
+            write!(
+                f,
+                "\n    type {i} {} {}",
+                &typedef.name, &typedef.loc
+            )?;
 
             match &typedef.body {
                 TypeDefBody::Record(v) => {
@@ -76,14 +80,18 @@ impl Display for Module {
         }
 
         for (i, global) in self.globals.iter().enumerate() {
-            write!(f, "\n    global {i} {} -> v{}", global.loc, global.value)?;
+            write!(
+                f,
+                "\n    global {i} {} {} -> v{}",
+                &global.name, global.loc, global.value
+            )?;
             if global.body.len() > 0 {
                 write!(f, ":\n{}", utils::indented(8, &global.body))?;
             }
         }
 
         for (i, func) in self.funcs.iter().enumerate() {
-            write!(f, "\n    func {i} {}", func.loc)?;
+            write!(f, "\n    func {i} {} {}", &func.name, func.loc)?;
 
             if func.params.len() > 0 {
                 write!(f, " (params")?;
@@ -116,7 +124,7 @@ impl Display for Module {
 pub struct TypeDef {
     pub name: String,
     pub body: TypeDefBody,
-    pub loc:  Loc,
+    pub loc: Loc,
 }
 impl TypeDef {
     pub fn get_ifaces(&self) -> Vec<(usize, usize)> {
@@ -145,14 +153,14 @@ pub struct Global {
 
 #[derive(Debug, Clone)]
 pub struct Func {
-    pub name:    String,
-    pub params:  Vec<ValueIdx>,
-    pub ret:     ValueIdx,
-    pub body:    Vec<Instr>,
-    pub method:  Option<(usize, usize, String)>,
-    pub extrn:   Option<Extern>,
+    pub name: String,
+    pub params: Vec<ValueIdx>,
+    pub ret: ValueIdx,
+    pub body: Vec<Instr>,
+    pub method: Option<(usize, usize, String)>,
+    pub extrn: Option<Extern>,
     pub is_virt: bool,
-    pub loc:     Loc,
+    pub loc: Loc,
 }
 
 #[derive(Debug, Clone, From)]

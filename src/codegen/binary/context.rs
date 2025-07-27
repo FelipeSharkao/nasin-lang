@@ -4,8 +4,9 @@ use cranelift_shim::{self as cl, Module};
 use derive_new::new;
 use itertools::repeat_n;
 
-use super::func::{FuncCodegen, ResultPolicy};
-use super::types;
+use super::func::FuncCodegen;
+use super::types::ReturnPolicy;
+use super::{types, FuncNS};
 use crate::{bytecode as b, config, utils};
 
 #[derive(Debug)]
@@ -13,9 +14,8 @@ pub struct FuncBinding {
     pub is_extrn: bool,
     pub is_virt: bool,
     pub symbol_name: String,
-    pub signature: cl::Signature,
     pub func_id: Option<cl::FuncId>,
-    pub result_policy: ResultPolicy,
+    pub proto: types::FuncPrototype,
 }
 
 #[derive(Debug, Clone)]
@@ -24,6 +24,19 @@ pub struct GlobalBinding {
     pub value: types::RuntimeValue,
     pub is_const: bool,
     pub is_entry_point: bool,
+}
+
+#[derive(Debug)]
+pub struct FuncClosureBinding {
+    pub symbol_name: String,
+    pub func_id: cl::FuncId,
+    pub func: cl::Function,
+    pub ret_policy: ReturnPolicy,
+}
+impl Into<types::FuncPrototype> for &FuncClosureBinding {
+    fn into(self) -> types::FuncPrototype {
+        types::FuncPrototype::new(self.func.signature.clone(), self.ret_policy)
+    }
 }
 
 #[derive(new)]
@@ -42,9 +55,13 @@ pub struct CodegenContext<'a> {
     #[new(default)]
     pub vtables_impl: HashMap<types::VTableRef, cl::DataId>,
     #[new(default)]
+    pub funcs_closures: HashMap<(usize, usize), FuncClosureBinding>,
+    #[new(default)]
     strings: HashMap<String, cl::DataId>,
     #[new(default)]
     tuples: HashMap<Vec<types::ValueSource>, cl::DataId>,
+    #[new(default)]
+    next_helper_id: u32,
 }
 impl<'a> CodegenContext<'a> {
     pub fn get_global(&self, mod_idx: usize, idx: usize) -> Option<&GlobalBinding> {
@@ -57,14 +74,16 @@ impl<'a> CodegenContext<'a> {
         let global_value = &module.values[global.value];
 
         // TODO: improve name mangling
-        let symbol_name = format!("$global_{mod_idx}_{idx}");
+        let symbol_name = global.name.clone();
 
         let (value, is_const) = utils::replace_with(self, |s| {
             let mut codegen = FuncCodegen::new(s, None);
 
             for instr in &global.body {
                 if let b::InstrBody::Break(v) = &instr.body {
-                    codegen.values.insert(global.value, codegen.values[v]);
+                    codegen
+                        .values
+                        .insert(global.value, codegen.values[v].clone());
                     break;
                 }
 
@@ -76,7 +95,7 @@ impl<'a> CodegenContext<'a> {
                 }
             }
 
-            (codegen.ctx, (codegen.values[&global.value], true))
+            (codegen.ctx, (codegen.values[&global.value].clone(), true))
         });
 
         self.globals.insert(
@@ -227,6 +246,49 @@ impl<'a> CodegenContext<'a> {
 
         self.data.insert(data_id, desc);
         data_id
+    }
+
+    pub fn closure_for_func(
+        &mut self,
+        mod_idx: usize,
+        func_idx: usize,
+    ) -> (cl::FuncId, types::FuncPrototype) {
+        let key = (mod_idx, func_idx);
+        if let Some(binding) = self.funcs_closures.get(&key) {
+            return (binding.func_id, binding.into());
+        }
+
+        let func_binding = &self.funcs[&key];
+        let mut sig = func_binding.proto.signature.clone();
+        sig.params.splice(
+            0..0,
+            [cl::AbiParam::new(self.obj_module.isa().pointer_type())],
+        );
+
+        let func = cl::Function::with_name_signature(
+            cl::UserFuncName::user(FuncNS::Helper.into(), self.next_helper_id),
+            sig,
+        );
+        self.next_helper_id += 1;
+
+        // TODO: improve name mangling
+        let symbol_name = format!("{}$$closure", &func_binding.symbol_name);
+
+        let func_id = self
+            .obj_module
+            .declare_function(&symbol_name, cl::Linkage::Local, &func.signature)
+            .unwrap();
+
+        let binding = FuncClosureBinding {
+            symbol_name,
+            func_id,
+            func,
+            ret_policy: func_binding.proto.ret_policy,
+        };
+        let proto = (&binding).into();
+
+        self.funcs_closures.insert(key, binding);
+        (func_id, proto)
     }
 
     fn insert_record_type(

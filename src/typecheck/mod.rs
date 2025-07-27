@@ -159,6 +159,32 @@ impl<'a> TypeChecker<'a> {
                     self.add_constraint(v, Constraint::Is(ty));
                 };
             }
+            &mut b::InstrBody::GetFunc(mod_idx, func_idx) => {
+                let v = instr.results[0];
+                if mod_idx == self.mod_idx {
+                    let (params, ret) = {
+                        let func = &self.ctx.lock_modules()[mod_idx].funcs[func_idx];
+                        (func.params.clone(), func.ret)
+                    };
+                    self.add_constraint(v, Constraint::Func(params, ret));
+                } else {
+                    let ty = {
+                        let module = &self.ctx.lock_modules()[mod_idx];
+                        let func = &module.funcs[func_idx];
+                        let params = func
+                            .params
+                            .iter()
+                            .map(|v| module.values[*v].ty.clone())
+                            .collect();
+                        let ret = module.values[func.ret].ty.clone();
+                        b::Type::new(
+                            Box::new(b::FuncType::new(params, ret)).into(),
+                            Some(func.loc.clone()),
+                        )
+                    };
+                    self.add_constraint(v, Constraint::Is(ty));
+                };
+            }
             b::InstrBody::GetProperty(source_v, name)
             | b::InstrBody::GetField(source_v, name)
             | b::InstrBody::GetMethod(source_v, name) => {
@@ -289,7 +315,7 @@ impl<'a> TypeChecker<'a> {
             b::InstrBody::IndirectCall(func, args) => {
                 let v = instr.results[0];
 
-                self.add_constraint(*func, Constraint::Func(args.len()));
+                self.add_constraint(*func, Constraint::Func(args.clone(), v));
 
                 for (i, arg) in enumerate(args) {
                     self.add_constraint(*arg, Constraint::ParameterOf(*func, i));
@@ -670,13 +696,29 @@ impl<'a> TypeChecker<'a> {
                         None,
                     )
                 }
-                Constraint::Func(n) => b::Type::new(
-                    b::TypeBody::Func(Box::new(b::FuncType {
-                        params: vec![b::Type::unknown(None); n],
-                        ret:    b::Type::unknown(None),
-                    })),
-                    None,
-                ),
+                Constraint::Func(params, ret) => {
+                    for param in &params {
+                        tracing::trace!(param, "will validate Func param");
+                        success = self.validate_value(*param, visited) && success;
+                    }
+                    tracing::trace!(ret, "will validate Func ret");
+                    success = self.validate_value(ret, visited) && success;
+
+                    let (params, ret) = {
+                        let module = &self.ctx.lock_modules()[self.mod_idx];
+                        let params = params
+                            .into_iter()
+                            .map(|v| module.values[v].ty.clone())
+                            .collect();
+                        let ret = module.values[ret].ty.clone();
+                        (params, ret)
+                    };
+
+                    b::Type::new(
+                        b::TypeBody::Func(Box::new(b::FuncType::new(params, ret))),
+                        None,
+                    )
+                }
             };
 
             tracing::trace!(?merge_with, "got type");
@@ -703,15 +745,7 @@ impl<'a> TypeChecker<'a> {
 
         {
             let value = &self.ctx.lock_modules()[self.mod_idx].values[idx];
-            if success
-                && matches!(
-                    &value.ty.body,
-                    b::TypeBody::AnyNumber
-                        | b::TypeBody::AnySignedNumber
-                        | b::TypeBody::AnyFloat
-                        | b::TypeBody::Inferred(_)
-                )
-            {
+            if success && value.ty.body.is_not_final() {
                 self.ctx.push_error(errors::Error::new(
                     errors::ErrorDetail::TypeNotFinal,
                     value.loc,

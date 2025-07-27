@@ -150,7 +150,9 @@ impl<'a, 't> ModuleParser<'a, 't> {
                 continue;
             }
             let ty_ref = b::TypeRef::new(mod_idx, i);
-            self.types.idents.insert(item.name.clone(), ty_ref.into());
+            self.types
+                .idents
+                .insert(item.name.clone(), ty_ref.into());
         }
 
         for (i, item) in enumerate(&module.funcs) {
@@ -245,7 +247,7 @@ impl<'a, 't> ModuleParser<'a, 't> {
 
         let loc = b::Loc::from_node(self.src_idx, &node);
         let func = b::Func {
-            name,
+            name: name,
             params: params.clone(),
             ret: UNDEF_VALUE,
             method,
@@ -278,7 +280,7 @@ impl<'a, 't> ModuleParser<'a, 't> {
 
         let is_entry_point = name == "main";
         let global = b::Global {
-            name,
+            name: name,
             value: UNDEF_VALUE,
             body: vec![],
             is_entry_point,

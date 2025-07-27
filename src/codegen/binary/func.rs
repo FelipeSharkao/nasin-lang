@@ -8,24 +8,9 @@ use derive_new::new;
 use itertools::{izip, Itertools};
 
 use super::context::{CodegenContext, GlobalBinding};
-use super::types;
+use super::types::{self, ResultPolicy, ReturnPolicy};
 use crate::utils::unwrap;
 use crate::{bytecode as b, utils};
-
-#[derive(Debug, Clone, Copy)]
-pub enum ResultPolicy {
-    Normal,
-    Global,
-    Return,
-    StructReturn,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum CallReturnPolicy {
-    Normal,
-    StructReturn(u32),
-    NoReturn,
-}
 
 #[derive(Debug, Clone, Copy)]
 pub enum Callee {
@@ -42,7 +27,7 @@ pub struct FuncCodegen<'a, 'b> {
     #[new(default)]
     pub values: HashMap<b::ValueIdx, types::RuntimeValue>,
     #[new(default)]
-    imported_signatures: HashMap<(usize, usize), cl::SigRef>,
+    imported_signatures: HashMap<cl::Signature, cl::SigRef>,
     #[new(default)]
     declared_funcs: HashMap<cl::FuncId, cl::FuncRef>,
 }
@@ -69,7 +54,11 @@ impl<'a> FuncCodegen<'a, '_> {
             (block, func.block_params(block).to_vec())
         };
 
-        if let (ResultPolicy::StructReturn, Some(result)) = (result_policy, result) {
+        if let (
+            ResultPolicy::Return(types::ReturnPolicy::StructReturn(_)),
+            Some(result),
+        ) = (result_policy, result)
+        {
             let cl_value = cl_values.remove(0);
             let runtime_value =
                 types::RuntimeValue::new(cl_value.into(), mod_idx, result);
@@ -78,7 +67,13 @@ impl<'a> FuncCodegen<'a, '_> {
 
         self.values.extend(izip!(
             params.iter().copied(),
-            types::tuple_from_args(mod_idx, params, &cl_values, &self.ctx.modules),
+            types::tuple_from_args(
+                mod_idx,
+                params,
+                &cl_values,
+                &self.ctx.modules,
+                &self.ctx.obj_module
+            ),
         ));
 
         expect_builder!(self).switch_to_block(block);
@@ -310,7 +305,7 @@ impl<'a> FuncCodegen<'a, '_> {
 
                 let mut loop_args = vec![];
                 for (loop_v, initial_v) in inputs {
-                    let initial_runtime_value = self.values[initial_v];
+                    let initial_runtime_value = self.values[initial_v].clone();
                     let initial_values = self.use_values(*initial_v);
                     loop_args.extend(initial_values.iter().cloned());
 
@@ -370,9 +365,11 @@ impl<'a> FuncCodegen<'a, '_> {
                 }
             }
             b::InstrBody::Break(v) => {
-                let runtime_value = self.values[v];
+                let Some(runtime_value) = self.values.get(v).cloned() else {
+                    panic!("value should be present in scope: {v}");
+                };
                 let ty = &self.ctx.modules[mod_idx].values[*v].ty;
-                let mut cl_values: Vec<_>;
+                let mut cl_values = vec![];
 
                 match result_policy {
                     ResultPolicy::Normal => {
@@ -383,11 +380,14 @@ impl<'a> FuncCodegen<'a, '_> {
                             cl_values = builder.block_params(prev_scope.block).to_vec();
                         }
                     }
-                    ResultPolicy::Return => {
+                    ResultPolicy::Return(ReturnPolicy::Normal) => {
                         cl_values = self.use_values(*v);
                         expect_builder!(self).ins().return_(&cl_values);
                     }
-                    ResultPolicy::StructReturn => {
+                    ResultPolicy::Return(ReturnPolicy::Void) => {
+                        expect_builder!(self).ins().return_(&[]);
+                    }
+                    ResultPolicy::Return(ReturnPolicy::StructReturn(_)) => {
                         let cl_value = self.use_value(*v);
                         if let Some(res) = self.scopes.last().result {
                             let size = types::get_size(
@@ -403,6 +403,7 @@ impl<'a> FuncCodegen<'a, '_> {
                         expect_builder!(self).ins().return_(&[]);
                         cl_values = vec![cl_value];
                     }
+                    ResultPolicy::Return(ReturnPolicy::NoReturn) => unreachable!(),
                     ResultPolicy::Global => {
                         cl_values = self.use_values(*v);
                     }
@@ -435,7 +436,7 @@ impl<'a> FuncCodegen<'a, '_> {
                     .flat_map(|v| self.use_values(*v))
                     .collect_vec();
 
-                if let Some(value) = self.call(*func_mod_idx, *func_idx, args) {
+                if let Some(value) = self.call_func(*func_mod_idx, *func_idx, args) {
                     self.values.insert(
                         instr.results[0],
                         types::RuntimeValue::new(value.into(), mod_idx, instr.results[0]),
@@ -443,56 +444,68 @@ impl<'a> FuncCodegen<'a, '_> {
                 }
             }
             b::InstrBody::IndirectCall(func_v, vs) => {
-                let func = self.values[func_v];
+                let func = self.values[func_v].clone();
 
                 let mut args = vs
                     .into_iter()
                     .flat_map(|v| self.use_values(*v))
                     .collect_vec();
 
-                match &func.src {
+                let value = match &func.src {
                     types::ValueSource::AppliedMethod(
                         self_value,
                         (func_mod_idx, func_idx),
                     ) => {
                         args.push(*self_value);
-
-                        if let Some(value) = self.call(*func_mod_idx, *func_idx, args) {
-                            self.values.insert(
-                                instr.results[0],
-                                types::RuntimeValue::new(
-                                    value.into(),
-                                    mod_idx,
-                                    instr.results[0],
-                                ),
-                            );
-                        }
+                        self.call_func(*func_mod_idx, *func_idx, args)
                     }
                     types::ValueSource::AppliedMethodInderect(
                         self_value,
                         callee,
-                        ref_func_ref,
+                        proto,
                     ) => {
                         args.push(*self_value);
-
-                        if let Some(value) = self.call_indirect(
-                            ref_func_ref.0,
-                            ref_func_ref.1,
-                            *callee,
-                            args,
-                        ) {
-                            self.values.insert(
-                                instr.results[0],
-                                types::RuntimeValue::new(
-                                    value.into(),
-                                    mod_idx,
-                                    instr.results[0],
-                                ),
-                            );
-                        }
+                        self.call_indirect(proto, *callee, args)
                     }
-                    _ => todo!("function as value"),
+                    types::ValueSource::FuncAsValue(func_as_value) => {
+                        args.splice(0..0, [func_as_value.env]);
+                        self.call_indirect(&func_as_value.proto, func_as_value.ptr, args)
+                    }
+                    _ => {
+                        todo!("call indirect: {:?}", &func.src);
+                    }
+                };
+
+                if let Some(value) = value {
+                    self.values.insert(
+                        instr.results[0],
+                        types::RuntimeValue::new(value.into(), mod_idx, instr.results[0]),
+                    );
                 }
+            }
+            b::InstrBody::GetFunc(mod_idx, func_idx) => {
+                let builder = expect_builder!(self);
+
+                let (closure_func_id, proto) =
+                    self.ctx.closure_for_func(*mod_idx, *func_idx);
+                let closure_func_ref = self
+                    .ctx
+                    .obj_module
+                    .declare_func_in_func(closure_func_id, builder.func);
+                let closure_ptr = builder.ins().func_addr(
+                    self.ctx.obj_module.isa().pointer_type(),
+                    closure_func_ref,
+                );
+
+                let env = builder
+                    .ins()
+                    .iconst(self.ctx.obj_module.isa().pointer_type(), 0);
+                let value = types::FuncAsValue::new(closure_ptr, env, proto);
+
+                self.values.insert(
+                    instr.results[0],
+                    types::RuntimeValue::new(value.into(), *mod_idx, instr.results[0]),
+                );
             }
             b::InstrBody::GetField(source_v, name) => {
                 let builder = expect_builder!(self);
@@ -605,13 +618,18 @@ impl<'a> FuncCodegen<'a, '_> {
                             offset as i32,
                         );
 
+                        let proto = types::FuncPrototype::from_func(
+                            method.func_ref.0,
+                            method.func_ref.1,
+                            self.ctx.modules,
+                            &self.ctx.obj_module,
+                        );
+
                         self.values.insert(
                             instr.results[0],
                             types::RuntimeValue::new(
                                 types::ValueSource::AppliedMethodInderect(
-                                    src,
-                                    func_ptr,
-                                    method.func_ref,
+                                    src, func_ptr, proto,
                                 ),
                                 mod_idx,
                                 instr.results[0],
@@ -643,7 +661,7 @@ impl<'a> FuncCodegen<'a, '_> {
             b::InstrBody::ArrayPtr(source_v, idx)
             | b::InstrBody::StrPtr(source_v, idx) => {
                 let source_ty = &self.ctx.modules[mod_idx].values[*source_v].ty;
-                let source = self.values[source_v];
+                let source = self.values[source_v].clone();
                 let cl_source = source
                     .add_value_to_func(&mut self.ctx.obj_module, expect_builder!(self));
 
@@ -821,12 +839,13 @@ impl<'a> FuncCodegen<'a, '_> {
                     }
                     b::InstrBody::CreateArray(vs) => {
                         let data = this.ctx.data_for_array(
-                            vs.iter().map(|v| this.values[v].src).collect_vec(),
+                            vs.iter().map(|v| this.values[v].src.clone()).collect_vec(),
                         );
                         let src = if let Some(data) = data {
                             data.into()
                         } else if this.builder.is_some() {
-                            let values = vs.iter().map(|v| this.values[v]).collect_vec();
+                            let values =
+                                vs.iter().map(|v| this.values[v].clone()).collect_vec();
                             this.create_stack_slot(&values).into()
                         } else {
                             break 'match_b None;
@@ -840,14 +859,17 @@ impl<'a> FuncCodegen<'a, '_> {
                         let values = types::tuple_from_record(
                             fields
                                 .iter()
-                                .map(|(name, v)| (name, this.values[v]))
+                                .map(|(name, v)| (name, this.values[v].clone()))
                                 .collect_vec(),
                             ty,
                             this.ctx.modules,
                         );
                         let src = if values.len() > 0 {
                             let data = this.ctx.data_for_tuple(
-                                values.iter().map(|value| value.src).collect_vec(),
+                                values
+                                    .iter()
+                                    .map(|value| value.src.clone())
+                                    .collect_vec(),
                             );
                             if let Some(data) = data {
                                 data.into()
@@ -865,14 +887,15 @@ impl<'a> FuncCodegen<'a, '_> {
                         this.ctx
                             .get_global(*mod_idx, *global_idx)
                             .expect("global idx out of range")
-                            .value,
+                            .value
+                            .clone(),
                     ),
                     _ => None,
                 }
             };
 
             if let Some(value) = &value {
-                this.values.insert(instr.results[0], *value);
+                this.values.insert(instr.results[0], value.clone());
             }
 
             (this, value)
@@ -903,7 +926,7 @@ impl<'a> FuncCodegen<'a, '_> {
         }
     }
 
-    pub fn call(
+    pub fn call_func(
         &mut self,
         func_mod_idx: usize,
         func_idx: usize,
@@ -917,50 +940,50 @@ impl<'a> FuncCodegen<'a, '_> {
             .func_id
             .expect("Function should be declared");
 
-        self.native_call(
+        self.call(
             Callee::Direct(func_id),
             args,
-            self.func_return_policy(func_mod_idx, func_idx),
+            ReturnPolicy::from_func(
+                func_mod_idx,
+                func_idx,
+                self.ctx.modules,
+                &self.ctx.obj_module,
+            ),
         )
     }
 
     pub fn call_indirect(
         &mut self,
-        ref_func_mod_idx: usize,
-        ref_func_idx: usize,
+        proto: &types::FuncPrototype,
         callee: cl::Value,
         args: impl Into<Vec<cl::Value>>,
     ) -> Option<cl::Value> {
         let builder = expect_builder!(self);
 
-        let sig_ref = *self
-            .imported_signatures
-            .entry((ref_func_mod_idx, ref_func_idx))
-            .or_insert_with(|| {
-                let sig = self.ctx.funcs[&(ref_func_mod_idx, ref_func_idx)]
-                    .signature
-                    .clone();
-                builder.import_signature(sig)
-            });
+        let sig = &proto.signature;
+        let sig_ref = match self.imported_signatures.get(sig) {
+            Some(sig_ref) => *sig_ref,
+            None => {
+                let sig_ref = builder.import_signature(sig.clone());
+                self.imported_signatures.insert(sig.clone(), sig_ref);
+                sig_ref
+            }
+        };
 
-        self.native_call(
-            Callee::Indirect(sig_ref, callee),
-            args,
-            self.func_return_policy(ref_func_mod_idx, ref_func_idx),
-        )
+        self.call(Callee::Indirect(sig_ref, callee), args, proto.ret_policy)
     }
 
-    pub fn native_call(
+    pub fn call(
         &mut self,
         callee: Callee,
         args: impl Into<Vec<cl::Value>>,
-        ret_policy: CallReturnPolicy,
+        ret_policy: ReturnPolicy,
     ) -> Option<cl::Value> {
         let builder = expect_builder!(self);
 
         let mut args = args.into();
 
-        if let CallReturnPolicy::StructReturn(size) = ret_policy {
+        if let ReturnPolicy::StructReturn(size) = ret_policy {
             let ss_data = cl::StackSlotData::new(cl::StackSlotKind::ExplicitSlot, size);
             let ss = builder.create_sized_stack_slot(ss_data);
             let stack_addr =
@@ -989,13 +1012,14 @@ impl<'a> FuncCodegen<'a, '_> {
         assert!(results.len() <= 1);
 
         match ret_policy {
-            CallReturnPolicy::Normal => Some(results[0]),
-            CallReturnPolicy::StructReturn(..) => Some(args[0]),
-            CallReturnPolicy::NoReturn => {
+            ReturnPolicy::Normal => Some(results[0]),
+            ReturnPolicy::StructReturn(..) => Some(args[0]),
+            ReturnPolicy::NoReturn => {
                 builder.ins().trap(cl::TrapCode::UnreachableCodeReached);
                 self.scopes.last_mut().mark_as_never();
                 None
             }
+            ReturnPolicy::Void => None,
         }
     }
 
@@ -1068,23 +1092,6 @@ impl<'a> FuncCodegen<'a, '_> {
             } else {
                 break;
             }
-        }
-    }
-
-    fn func_return_policy(
-        &self,
-        func_mod_idx: usize,
-        func_idx: usize,
-    ) -> CallReturnPolicy {
-        let func = &self.ctx.modules[func_mod_idx].funcs[func_idx];
-        let ret_ty = &self.ctx.modules[func_mod_idx].values[func.ret].ty;
-        if ret_ty.is_never() {
-            CallReturnPolicy::NoReturn
-        } else if ret_ty.is_aggregate(&self.ctx.modules) {
-            let size = types::get_size(ret_ty, &self.ctx.modules, &self.ctx.obj_module);
-            CallReturnPolicy::StructReturn(size as u32)
-        } else {
-            CallReturnPolicy::Normal
         }
     }
 }

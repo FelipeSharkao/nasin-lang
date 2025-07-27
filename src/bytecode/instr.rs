@@ -10,6 +10,7 @@ use crate::utils;
 #[derive(Debug, Clone)]
 pub enum InstrBody {
     GetGlobal(usize, usize),
+    GetFunc(usize, usize),
     GetProperty(ValueIdx, String),
     GetField(ValueIdx, String),
     GetMethod(ValueIdx, String),
@@ -60,6 +61,9 @@ impl Display for InstrBody {
         match self {
             InstrBody::GetGlobal(mod_idx, global_idx) => {
                 write!(f, "get_global {mod_idx}-{global_idx}")?
+            }
+            InstrBody::GetFunc(mod_idx, func_idx) => {
+                write!(f, "get_func {mod_idx}-{func_idx}")?
             }
             InstrBody::GetProperty(v, prop) => write!(f, "get_property v{v} .{prop}")?,
             InstrBody::GetField(v, field) => write!(f, "get_field v{v} .{field}")?,

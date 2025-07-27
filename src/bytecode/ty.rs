@@ -112,6 +112,32 @@ impl TypeBody {
         }
         false
     }
+    pub fn is_not_final(&self) -> bool {
+        if matches!(
+            self,
+            TypeBody::AnyNumber
+                | TypeBody::AnySignedNumber
+                | TypeBody::AnyFloat
+                | TypeBody::Inferred(_)
+        ) {
+            return true;
+        }
+
+        if let TypeBody::Func(func) = self {
+            return func.params.iter().any(|ty| ty.body.is_not_final())
+                || func.ret.body.is_not_final();
+        }
+
+        if let TypeBody::Array(arr) = self {
+            return arr.item.body.is_not_final();
+        }
+
+        if let TypeBody::Ptr(ty) = self {
+            return ty.body.is_not_final();
+        }
+
+        return false;
+    }
 }
 
 #[derive(Debug, Clone, new)]

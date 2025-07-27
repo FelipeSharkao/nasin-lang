@@ -1,4 +1,4 @@
-:i count 12
+:i count 13
 :b shell 69
 ./bin/nasin b tests/hello.nsn -o tests/out/hello && ./tests/out/hello
 :i returncode 0
@@ -98,6 +98,15 @@ Hello from record
 Compiled program to tests/out/method
 Hello from record
 Hi method
+
+:b stderr 0
+
+:b shell 93
+./bin/nasin b tests/func_as_value.nsn -o tests/out/func_as_value && ./tests/out/func_as_value
+:i returncode 0
+:b stdout 50
+Compiled program to tests/out/func_as_value
+Hello
 
 :b stderr 0
 

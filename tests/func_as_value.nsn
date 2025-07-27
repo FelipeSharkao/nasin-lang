@@ -1,0 +1,8 @@
+main =
+    call(print2)
+
+call(f): bool =
+    f("Hello")
+
+print2(msg) =
+    print(msg)
