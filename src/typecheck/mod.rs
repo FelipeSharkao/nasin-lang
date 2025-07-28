@@ -4,12 +4,11 @@ use std::collections::HashSet;
 use std::fmt::Debug;
 use std::mem;
 
-use cfor::cfor;
 use derive_new::new;
 use itertools::{enumerate, izip, Itertools};
 
 use self::constraints::Constraint;
-use crate::utils::SortedMap;
+use crate::utils::{cfor, SortedMap};
 use crate::{bytecode as b, context, errors, utils};
 
 #[derive(Debug, Clone, new)]
