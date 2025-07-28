@@ -160,29 +160,7 @@ impl<'a> TypeChecker<'a> {
             }
             &mut b::InstrBody::GetFunc(mod_idx, func_idx) => {
                 let v = instr.results[0];
-                if mod_idx == self.mod_idx {
-                    let (params, ret) = {
-                        let func = &self.ctx.lock_modules()[mod_idx].funcs[func_idx];
-                        (func.params.clone(), func.ret)
-                    };
-                    self.add_constraint(v, Constraint::Func(params, ret));
-                } else {
-                    let ty = {
-                        let module = &self.ctx.lock_modules()[mod_idx];
-                        let func = &module.funcs[func_idx];
-                        let params = func
-                            .params
-                            .iter()
-                            .map(|v| module.values[*v].ty.clone())
-                            .collect();
-                        let ret = module.values[func.ret].ty.clone();
-                        b::Type::new(
-                            Box::new(b::FuncType::new(params, ret)).into(),
-                            Some(func.loc.clone()),
-                        )
-                    };
-                    self.add_constraint(v, Constraint::Is(ty));
-                };
+                self.add_constraint(v, Constraint::GetFunc(mod_idx, func_idx));
             }
             b::InstrBody::GetProperty(source_v, name)
             | b::InstrBody::GetField(source_v, name)
@@ -314,7 +292,28 @@ impl<'a> TypeChecker<'a> {
             b::InstrBody::IndirectCall(func, args) => {
                 let v = instr.results[0];
 
-                self.add_constraint(*func, Constraint::Func(args.clone(), v));
+                let mut has_get_func = false;
+                for c in self
+                    .get_contraints_with(*func, |c| matches!(c, Constraint::GetFunc(..)))
+                {
+                    let Constraint::GetFunc(mod_idx, func_idx) = c else {
+                        continue;
+                    };
+                    has_get_func = true;
+
+                    let (params, ret) = {
+                        let func = &self.ctx.lock_modules()[mod_idx].funcs[func_idx];
+                        (func.params.clone(), func.ret)
+                    };
+
+                    for (param, arg) in izip!(&params, &*args) {
+                        self.add_constraint(*arg, Constraint::TypeOf(*param));
+                    }
+                    self.add_constraint(v, Constraint::TypeOf(ret));
+                }
+                if !has_get_func {
+                    self.add_constraint(*func, Constraint::Func(args.clone(), v));
+                }
 
                 for (i, arg) in enumerate(args) {
                     self.add_constraint(*arg, Constraint::ParameterOf(*func, i));
@@ -465,6 +464,39 @@ impl<'a> TypeChecker<'a> {
         }
 
         self.value_constraints[idx].insert(constraint);
+    }
+
+    fn get_contraints_with(
+        &self,
+        idx: b::ValueIdx,
+        f: impl Fn(&Constraint) -> bool,
+    ) -> Vec<Constraint> {
+        let mut constraints = vec![];
+        self.get_contraints_with_and_write(&mut constraints, idx, &f);
+        constraints
+    }
+
+    fn get_contraints_with_and_write<'w>(
+        &self,
+        constraints: &'w mut Vec<Constraint>,
+        idx: b::ValueIdx,
+        f: impl Fn(&Constraint) -> bool + Clone,
+    ) {
+        let same_of = {
+            let value: &b::Value = &self.ctx.lock_modules()[self.mod_idx].values[idx];
+            value.same_type_of.clone()
+        };
+        if same_of.len() > 0 {
+            for i in same_of {
+                self.get_contraints_with_and_write(constraints, i, f.clone());
+            }
+        } else {
+            for c in &self.value_constraints[idx] {
+                if f(c) {
+                    constraints.push(c.clone());
+                }
+            }
+        }
     }
 
     #[tracing::instrument(level = "trace", skip(self))]
@@ -695,6 +727,36 @@ impl<'a> TypeChecker<'a> {
                         None,
                     )
                 }
+                Constraint::GetFunc(mod_idx, func_idx) => {
+                    let (params, ret) = {
+                        let func = &self.ctx.lock_modules()[mod_idx].funcs[func_idx];
+                        (func.params.clone(), func.ret)
+                    };
+
+                    if mod_idx == self.mod_idx {
+                        for param in &params {
+                            tracing::trace!(param, "will validate GetFunc param");
+                            success = self.validate_value(*param, visited) && success;
+                        }
+                        tracing::trace!(ret, "will validate GetFunc ret");
+                        success = self.validate_value(ret, visited) && success;
+                    }
+
+                    let (params, ret) = {
+                        let module = &self.ctx.lock_modules()[self.mod_idx];
+                        let params = params
+                            .into_iter()
+                            .map(|v| module.values[v].ty.clone())
+                            .collect();
+                        let ret = module.values[ret].ty.clone();
+                        (params, ret)
+                    };
+
+                    b::Type::new(
+                        b::TypeBody::Func(Box::new(b::FuncType::new(params, ret))),
+                        None,
+                    )
+                }
                 Constraint::Func(params, ret) => {
                     for param in &params {
                         tracing::trace!(param, "will validate Func param");
@@ -745,6 +807,7 @@ impl<'a> TypeChecker<'a> {
         {
             let value = &self.ctx.lock_modules()[self.mod_idx].values[idx];
             if success && value.ty.body.is_not_final() {
+                tracing::trace!(?value.ty, "is not final");
                 self.ctx.push_error(errors::Error::new(
                     errors::ErrorDetail::TypeNotFinal,
                     value.loc,
