@@ -101,14 +101,16 @@ Hi method
 
 :b stderr 0
 
-:b shell 93
-./bin/nasin b tests/func_as_value.nsn -o tests/out/func_as_value && ./tests/out/func_as_value
-:i returncode 0
-:b stdout 50
-Compiled program to tests/out/func_as_value
-Hello
+:b shell 87
+./bin/nasin b tests/func_as_arg.nsn -o tests/out/func_as_arg && ./tests/out/func_as_arg
+:i returncode 101
+:b stdout 0
 
-:b stderr 0
+:b stderr 209
+
+thread 'main' panicked at src/main.rs:79:45:
+file not found: Os { code: 2, kind: NotFound, message: "No such file or directory" }
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
 
 :b shell 81
 ./bin/nasin b tests/interface.nsn -o tests/out/interface && ./tests/out/interface

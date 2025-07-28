@@ -20,7 +20,8 @@ pub enum Constraint {
     IsProperty(b::ValueIdx, String),
     Members(SortedMap<String, b::ValueIdx>),
     HasProperty(String, b::ValueIdx),
-    Func(Vec<usize>, usize),
+    GetFunc(usize, usize),
+    Func(Vec<b::ValueIdx>, b::ValueIdx),
 }
 impl Constraint {
     pub fn priority(&self) -> ConstraintPriority {
@@ -32,6 +33,7 @@ impl Constraint {
             | Self::ArrayElemPtr(..)
             | Self::ReturnOf(..)
             | Self::ParameterOf(..)
+            | Self::GetFunc(..)
             | Self::IsProperty(..) => ConstraintPriority::DerivedDefinedType,
             Self::Members(..) | Self::HasProperty(..) | Self::Func(..) => {
                 ConstraintPriority::DerivedInferredType
