@@ -104,10 +104,12 @@ impl<'a, 't> ExprParser<'a, 't> {
                 ValueRef::new(ValueRefBody::Number(number.to_string()), loc)
             }
             "string_lit" => {
-                let string =
-                    utils::decode_string_lit(node.required_field("content").get_text(
+                let string = match node.field("content") {
+                    Some(content) => utils::decode_string_lit(content.get_text(
                         &self.module.ctx.source(self.module.src_idx).content().text,
-                    ));
+                    )),
+                    None => "".to_string(),
+                };
                 let v = self.add_instr_with_result(b::Instr::new(
                     b::InstrBody::CreateString(string),
                     loc,
