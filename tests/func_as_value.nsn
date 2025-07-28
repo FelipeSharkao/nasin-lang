@@ -1,8 +1,15 @@
 main =
-    call(print2)
+    let f = if true then print_a else print_b
+    let _ = f("Hello direct")
+    call(f)
 
 call(f): bool =
-    f("Hello")
+    f("Hello indirect")
 
-print2(msg) =
+print_a(msg) =
+    let _ = print("PrintA")
+    print(msg)
+
+print_b(msg) =
+    let _ = print("PrintB")
     print(msg)

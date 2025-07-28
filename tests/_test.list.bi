@@ -104,9 +104,12 @@ Hi method
 :b shell 93
 ./bin/nasin b tests/func_as_value.nsn -o tests/out/func_as_value && ./tests/out/func_as_value
 :i returncode 0
-:b stdout 50
+:b stdout 86
 Compiled program to tests/out/func_as_value
-Hello
+PrintA
+Hello direct
+PrintA
+Hello indirect
 
 :b stderr 0
 
