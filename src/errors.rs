@@ -24,14 +24,21 @@ impl fmt::Display for DisplayError<'_> {
 
         let line = err.loc.start_line;
         let col = err.loc.start_col;
-        writeln!(f, "{}:{line}:{col}", src.path.display())?;
+        writeln!(
+            f,
+            "{}:{line}:{col} - error: {}",
+            src.path.display(),
+            err.detail
+        )?;
 
         let num = format!("{line}");
         let line_content = src.content().line(line).expect("line should be valid");
-        writeln!(f, "{} |", " ".repeat(num.len()))?;
-        writeln!(f, "{num} | {line_content}",)?;
-        writeln!(f, "{} | {}^", " ".repeat(num.len()), " ".repeat(col - 1))?;
-        writeln!(f, "error: {}", err.detail)?;
+        let leading_spaces = line_content
+            .chars()
+            .take_while(|c| c.len_utf8() == 1 && c.is_whitespace())
+            .count();
+        writeln!(f, "{num} | {}", &line_content[leading_spaces..])?;
+        writeln!(f, "{}^", " ".repeat(num.len() + col - leading_spaces + 2))?;
 
         Ok(())
     }
