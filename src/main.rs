@@ -1,13 +1,10 @@
 use std::io::IsTerminal;
 use std::path::PathBuf;
-use std::process::exit;
 use std::str::FromStr;
-use std::{env, fs, io};
+use std::{env, fs, io, process};
 
 use clap::{Parser, Subcommand};
-use nasin::config::BuildConfig;
-use nasin::context;
-use nasin::errors::DisplayError;
+use nasin::{build, build_run, EmitArgs};
 use tracing::level_filters::LevelFilter;
 use tracing_subscriber::filter::filter_fn;
 use tracing_subscriber::layer::SubscriberExt;
@@ -26,23 +23,17 @@ enum CliCommand {
     #[clap(alias = "b")]
     /// Build a source file
     Build {
-        /// Path to the file to compile
-        file: PathBuf,
         #[arg(long, short)]
         /// Path where to place the output file
-        out: Option<PathBuf>,
-        #[arg(long, short)]
-        /// Omit all messages
-        silent: bool,
-        #[arg(long)]
-        /// Whether to dump the AST of the source file
-        dump_ast: bool,
-        #[arg(long)]
-        /// Whether to dump the parsed bytecode of the source file
-        dump_bytecode: bool,
-        #[arg(long)]
-        /// Whether to dump the parsed CLIF of the source file, if using Cranelift
-        dump_clif: bool,
+        out:  Option<PathBuf>,
+        #[command(flatten)]
+        emit: EmitArgs,
+    },
+    #[clap(alias = "r")]
+    /// Build and run a source file
+    Run {
+        #[command(flatten)]
+        emit: EmitArgs,
     },
 }
 
@@ -53,45 +44,14 @@ fn main() {
 
     let cli = Cli::parse();
 
-    match cli.cmd {
-        CliCommand::Build {
-            file,
-            out,
-            silent,
-            dump_ast,
-            dump_bytecode,
-            dump_clif,
-        } => {
-            let mut ctx = context::BuildContext::new(BuildConfig {
-                out: out.unwrap_or_else(|| {
-                    env::current_dir()
-                        .unwrap()
-                        .to_owned()
-                        .join(file.file_stem().unwrap())
-                }),
-                silent,
-                dump_ast,
-                dump_bytecode,
-                dump_clif,
-            });
+    let result = match cli.cmd {
+        CliCommand::Build { out, emit } => build(emit, out),
+        CliCommand::Run { emit } => build_run(emit),
+    };
 
-            ctx.parse_library();
-            let src_idx = ctx.preload(file).expect("file not found");
-
-            ctx.parse(src_idx);
-
-            {
-                let errors = ctx.errors.lock().unwrap();
-                if errors.len() > 0 {
-                    for err in errors.iter() {
-                        eprintln!("{}", DisplayError::new(&ctx, err));
-                    }
-                    exit(1);
-                }
-            }
-
-            ctx.compile();
-        }
+    if let Err(error) = result {
+        eprintln!("{}", error);
+        process::exit(1);
     }
 }
 

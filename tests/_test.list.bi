@@ -1,111 +1,111 @@
 :i count 13
-:b shell 69
-./bin/nasin b tests/hello.nsn -o tests/out/hello && ./tests/out/hello
+:b shell 29
+./bin/nasin r tests/hello.nsn
 :i returncode 0
-:b stdout 42
-Compiled program to tests/out/hello
+:b stdout 44
+Compiled program to tests/build/hello
 Hello
 
 :b stderr 0
 
-:b shell 81
-./bin/nasin b tests/operators.nsn -o tests/out/operators && ./tests/out/operators
+:b shell 33
+./bin/nasin r tests/operators.nsn
 :i returncode 70
-:b stdout 40
-Compiled program to tests/out/operators
+:b stdout 42
+Compiled program to tests/build/operators
 
 :b stderr 29
 sanity check, this will fail
 
-:b shell 102
-./bin/nasin b tests/func_declaration.nsn -o tests/out/func_declaration && ./tests/out/func_declaration
+:b shell 40
+./bin/nasin r tests/func_declaration.nsn
 :i returncode 0
-:b stdout 53
-Compiled program to tests/out/func_declaration
+:b stdout 55
+Compiled program to tests/build/func_declaration
 Hello
 
 :b stderr 0
 
-:b shell 93
-./bin/nasin b tests/global_string.nsn -o tests/out/global_string && ./tests/out/global_string
-:i returncode 0
-:b stdout 62
-Compiled program to tests/out/global_string
-Hello from global
-
-:b stderr 0
-
-:b shell 123
-./bin/nasin b tests/global_string_from_func.nsn -o tests/out/global_string_from_func && ./tests/out/global_string_from_func
-:i returncode 0
-:b stdout 72
-Compiled program to tests/out/global_string_from_func
-Hello from global
-
-:b stderr 0
-
-:b shell 60
-./bin/nasin b tests/if.nsn -o tests/out/if && ./tests/out/if
-:i returncode 0
-:b stdout 54
-Compiled program to tests/out/if
-it's true
-it's false
-
-:b stderr 0
-
-:b shell 90
-./bin/nasin b tests/if_returning.nsn -o tests/out/if_returning && ./tests/out/if_returning
+:b shell 37
+./bin/nasin r tests/global_string.nsn
 :i returncode 0
 :b stdout 64
-Compiled program to tests/out/if_returning
+Compiled program to tests/build/global_string
+Hello from global
+
+:b stderr 0
+
+:b shell 47
+./bin/nasin r tests/global_string_from_func.nsn
+:i returncode 0
+:b stdout 74
+Compiled program to tests/build/global_string_from_func
+Hello from global
+
+:b stderr 0
+
+:b shell 26
+./bin/nasin r tests/if.nsn
+:i returncode 0
+:b stdout 56
+Compiled program to tests/build/if
 it's true
 it's false
 
 :b stderr 0
 
-:b shell 81
-./bin/nasin b tests/recursion.nsn -o tests/out/recursion && ./tests/out/recursion
+:b shell 36
+./bin/nasin r tests/if_returning.nsn
 :i returncode 0
-:b stdout 47
-Compiled program to tests/out/recursion
+:b stdout 66
+Compiled program to tests/build/if_returning
+it's true
+it's false
+
+:b stderr 0
+
+:b shell 33
+./bin/nasin r tests/recursion.nsn
+:i returncode 0
+:b stdout 49
+Compiled program to tests/build/recursion
 got 10
 
 :b stderr 0
 
-:b shell 87
-./bin/nasin b tests/record_type.nsn -o tests/out/record_type && ./tests/out/record_type
-:i returncode 0
-:b stdout 60
-Compiled program to tests/out/record_type
-Hello from record
-
-:b stderr 0
-
-:b shell 93
-./bin/nasin b tests/return_record.nsn -o tests/out/return_record && ./tests/out/return_record
+:b shell 35
+./bin/nasin r tests/record_type.nsn
 :i returncode 0
 :b stdout 62
-Compiled program to tests/out/return_record
+Compiled program to tests/build/record_type
 Hello from record
 
 :b stderr 0
 
-:b shell 72
-./bin/nasin b tests/method.nsn -o tests/out/method && ./tests/out/method
+:b shell 37
+./bin/nasin r tests/return_record.nsn
 :i returncode 0
-:b stdout 65
-Compiled program to tests/out/method
+:b stdout 64
+Compiled program to tests/build/return_record
+Hello from record
+
+:b stderr 0
+
+:b shell 30
+./bin/nasin r tests/method.nsn
+:i returncode 0
+:b stdout 67
+Compiled program to tests/build/method
 Hello from record
 Hi method
 
 :b stderr 0
 
-:b shell 93
-./bin/nasin b tests/func_as_value.nsn -o tests/out/func_as_value && ./tests/out/func_as_value
+:b shell 37
+./bin/nasin r tests/func_as_value.nsn
 :i returncode 0
-:b stdout 86
-Compiled program to tests/out/func_as_value
+:b stdout 88
+Compiled program to tests/build/func_as_value
 PrintA
 Hello direct
 PrintA
@@ -113,11 +113,11 @@ Hello indirect
 
 :b stderr 0
 
-:b shell 81
-./bin/nasin b tests/interface.nsn -o tests/out/interface && ./tests/out/interface
+:b shell 33
+./bin/nasin r tests/interface.nsn
 :i returncode 0
-:b stdout 148
-Compiled program to tests/out/interface
+:b stdout 150
+Compiled program to tests/build/interface
 PrintA
 implementation omitted
 PrintB

@@ -1,44 +1,52 @@
 use std::fmt;
+use std::sync::Arc;
 
 use derive_more::{Display, From};
 use derive_new::new;
 use thiserror::Error;
 
-use crate::{bytecode as b, context, utils};
+use crate::{bytecode as b, sources, utils};
 
-#[derive(Debug, Clone, Error, new)]
-#[error("{}:{}:{}: error: {detail}", loc.source_idx, loc.start_line, loc.start_col)]
+#[derive(Debug, Clone, new)]
 pub struct Error {
     detail: ErrorDetail,
     loc:    b::Loc,
 }
 
 #[derive(Debug, Clone, Error, new)]
-pub struct DisplayError<'a>(&'a context::BuildContext, &'a Error);
-impl fmt::Display for DisplayError<'_> {
+pub struct CompilerError {
+    source_manager: Arc<sources::SourceManager>,
+    errors: Vec<Error>,
+}
+impl fmt::Display for CompilerError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let DisplayError(ctx, err) = self;
+        let CompilerError {
+            source_manager,
+            errors,
+        } = self;
 
-        let idx = err.loc.source_idx;
-        let src = ctx.source(idx);
+        for err in errors {
+            let idx = err.loc.source_idx;
+            let src = source_manager.source(idx);
 
-        let line = err.loc.start_line;
-        let col = err.loc.start_col;
-        writeln!(
-            f,
-            "{}:{line}:{col} - error: {}",
-            src.path.display(),
-            err.detail
-        )?;
+            let line = err.loc.start_line;
+            let col = err.loc.start_col;
+            writeln!(
+                f,
+                "{}:{line}:{col} - error: {}",
+                src.path.display(),
+                err.detail
+            )?;
 
-        let num = format!("{line}");
-        let line_content = src.content().line(line).expect("line should be valid");
-        let leading_spaces = line_content
-            .chars()
-            .take_while(|c| c.len_utf8() == 1 && c.is_whitespace())
-            .count();
-        writeln!(f, "{num} | {}", &line_content[leading_spaces..])?;
-        writeln!(f, "{}^", " ".repeat(num.len() + col - leading_spaces + 2))?;
+            let num = format!("{line}");
+            let line_content = src.content().line(line).expect("line should be valid");
+            let leading_spaces = line_content
+                .chars()
+                .take_while(|c| c.len_utf8() == 1 && c.is_whitespace())
+                .count();
+            writeln!(f, "{num} | {}", &line_content[leading_spaces..])?;
+            writeln!(f, "{}^", " ".repeat(num.len() + col - leading_spaces + 2))?;
+        }
 
         Ok(())
     }

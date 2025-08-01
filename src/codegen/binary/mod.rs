@@ -15,7 +15,7 @@ use target_lexicon::Triple;
 use self::context::{CodegenContext, FuncBinding};
 use self::func::{Callee, FuncCodegen};
 use self::types::{ResultPolicy, ReturnPolicy};
-use crate::{bytecode as b, config, utils};
+use crate::{bytecode as b, cmd, config, utils};
 
 utils::number_enum!(pub FuncNS: u32 {
     User = 0,
@@ -435,15 +435,17 @@ impl BinaryCodegen<'_> {
             .unwrap();
 
         // TODO: windows support
-        let status = std::process::Command::new("ld")
-            .arg("-dynamic-linker")
-            .arg("/lib/ld-linux-x86-64.so.2")
-            .arg("-o")
-            .arg(&self.ctx.cfg.out)
-            .arg(&obj_path)
-            .arg("-lc")
-            .status()
-            .expect("failed to link object file");
+        let status = cmd!(
+            "ld",
+            "-dynamic-linker",
+            "/lib/ld-linux-x86-64.so.2",
+            "-o",
+            &self.ctx.cfg.out,
+            "-lc",
+            &obj_path
+        )
+        .status()
+        .expect("failed to link object file");
 
         if !status.success() {
             panic!("failed to link object file");

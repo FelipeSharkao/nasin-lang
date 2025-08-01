@@ -1,13 +1,13 @@
-./bin/nasin b tests/hello.nsn -o tests/out/hello && ./tests/out/hello
-./bin/nasin b tests/operators.nsn -o tests/out/operators && ./tests/out/operators
-./bin/nasin b tests/func_declaration.nsn -o tests/out/func_declaration && ./tests/out/func_declaration
-./bin/nasin b tests/global_string.nsn -o tests/out/global_string && ./tests/out/global_string
-./bin/nasin b tests/global_string_from_func.nsn -o tests/out/global_string_from_func && ./tests/out/global_string_from_func
-./bin/nasin b tests/if.nsn -o tests/out/if && ./tests/out/if
-./bin/nasin b tests/if_returning.nsn -o tests/out/if_returning && ./tests/out/if_returning
-./bin/nasin b tests/recursion.nsn -o tests/out/recursion && ./tests/out/recursion
-./bin/nasin b tests/record_type.nsn -o tests/out/record_type && ./tests/out/record_type
-./bin/nasin b tests/return_record.nsn -o tests/out/return_record && ./tests/out/return_record
-./bin/nasin b tests/method.nsn -o tests/out/method && ./tests/out/method
-./bin/nasin b tests/func_as_value.nsn -o tests/out/func_as_value && ./tests/out/func_as_value
-./bin/nasin b tests/interface.nsn -o tests/out/interface && ./tests/out/interface
+./bin/nasin r tests/hello.nsn
+./bin/nasin r tests/operators.nsn
+./bin/nasin r tests/func_declaration.nsn
+./bin/nasin r tests/global_string.nsn
+./bin/nasin r tests/global_string_from_func.nsn
+./bin/nasin r tests/if.nsn
+./bin/nasin r tests/if_returning.nsn
+./bin/nasin r tests/recursion.nsn
+./bin/nasin r tests/record_type.nsn
+./bin/nasin r tests/return_record.nsn
+./bin/nasin r tests/method.nsn
+./bin/nasin r tests/func_as_value.nsn
+./bin/nasin r tests/interface.nsn

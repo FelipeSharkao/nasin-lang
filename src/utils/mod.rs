@@ -1,5 +1,6 @@
 #![allow(unused_imports)]
 
+mod cmd;
 mod enumerate;
 mod idented;
 mod replace_with;
@@ -8,6 +9,7 @@ mod sorted_map;
 mod string_lit;
 mod traits;
 
+pub use cmd::*;
 pub use enumerate::*;
 pub use idented::*;
 pub use replace_with::*;
