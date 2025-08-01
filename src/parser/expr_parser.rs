@@ -28,7 +28,7 @@ impl<'a, 't> ExprParser<'a, 't> {
 
         for (ident, v, loc) in inputs.into_iter() {
             tracing::trace!(v, "insert input '{ident}'");
-            idents.insert(ident, ValueRef::new(ValueRefBody::Value(v), loc));
+            idents.insert(ident, ValueRef::new(ValueRefBody::Value(v), Some(loc)));
         }
 
         ExprParser {
@@ -50,7 +50,7 @@ impl<'a, 't> ExprParser<'a, 't> {
 
         if !scope.is_never() {
             instrs.push(b::Instr::new(
-                b::InstrBody::Break(result),
+                b::InstrBody::Break(Some(result)),
                 self.module.values[result].loc,
             ))
         }
@@ -80,7 +80,7 @@ impl<'a, 't> ExprParser<'a, 't> {
                 let loop_res = self.module.create_value(b::Type::unknown(None), loc);
                 instrs.extend([
                     loop_instr.with_results([loop_res]),
-                    b::Instr::new(b::InstrBody::Break(loop_res), loc),
+                    b::Instr::new(b::InstrBody::Break(Some(loop_res)), loc),
                 ]);
             } else {
                 instrs.push(loop_instr);
@@ -95,13 +95,13 @@ impl<'a, 't> ExprParser<'a, 't> {
 
         let loc = Loc::from_node(self.module.src_idx, &node);
         match node.kind() {
-            "true" => ValueRef::new(ValueRefBody::Bool(true), loc),
-            "false" => ValueRef::new(ValueRefBody::Bool(false), loc),
+            "true" => ValueRef::new(ValueRefBody::Bool(true), Some(loc)),
+            "false" => ValueRef::new(ValueRefBody::Bool(false), Some(loc)),
             "number" => {
                 let number = node.get_text(
                     &self.module.ctx.source(self.module.src_idx).content().text,
                 );
-                ValueRef::new(ValueRefBody::Number(number.to_string()), loc)
+                ValueRef::new(ValueRefBody::Number(number.to_string()), Some(loc))
             }
             "string_lit" => {
                 let string = match node.field("content") {
@@ -112,9 +112,9 @@ impl<'a, 't> ExprParser<'a, 't> {
                 };
                 let v = self.add_instr_with_result(b::Instr::new(
                     b::InstrBody::CreateString(string),
-                    loc,
+                    Some(loc),
                 ));
-                ValueRef::new(ValueRefBody::Value(v), loc)
+                ValueRef::new(ValueRefBody::Value(v), Some(loc))
             }
             "array_lit" => {
                 let items: Vec<_> = node
@@ -126,9 +126,9 @@ impl<'a, 't> ExprParser<'a, 't> {
                     .collect();
                 let v = self.add_instr_with_result(b::Instr::new(
                     b::InstrBody::CreateArray(items),
-                    loc,
+                    Some(loc),
                 ));
-                ValueRef::new(ValueRefBody::Value(v), loc)
+                ValueRef::new(ValueRefBody::Value(v), Some(loc))
             }
             "record_lit" => {
                 let fields = node
@@ -145,9 +145,9 @@ impl<'a, 't> ExprParser<'a, 't> {
                     .collect();
                 let v = self.add_instr_with_result(b::Instr::new(
                     b::InstrBody::CreateRecord(fields),
-                    loc,
+                    Some(loc),
                 ));
-                ValueRef::new(ValueRefBody::Value(v), loc)
+                ValueRef::new(ValueRefBody::Value(v), Some(loc))
             }
             "ident" => {
                 let ident = node.get_text(
@@ -158,9 +158,9 @@ impl<'a, 't> ExprParser<'a, 't> {
                 } else {
                     self.module.ctx.push_error(errors::Error::new(
                         errors::ValueNotFound::new(ident.to_string()).into(),
-                        loc,
+                        Some(loc),
                     ));
-                    ValueRef::new(ValueRefBody::CompileError, loc)
+                    ValueRef::new(ValueRefBody::CompileError, Some(loc))
                 }
             }
             "un_op" => {
@@ -230,7 +230,7 @@ impl<'a, 't> ExprParser<'a, 't> {
                 if !then_value_ref.is_never() {
                     let then_v = self.use_value_ref(&then_value_ref);
                     self.add_instr(b::Instr::new(
-                        b::InstrBody::Break(then_v),
+                        b::InstrBody::Break(Some(then_v)),
                         then_value_ref.loc,
                     ));
                 }
@@ -243,14 +243,14 @@ impl<'a, 't> ExprParser<'a, 't> {
                     if !else_value_ref.is_never() {
                         let else_v = self.use_value_ref(&else_value_ref);
                         self.add_instr(b::Instr::new(
-                            b::InstrBody::Break(else_v),
+                            b::InstrBody::Break(Some(else_v)),
                             else_value_ref.loc,
                         ));
                     }
                 } else {
                     self.module.ctx.push_error(errors::Error::new(
                         errors::Todo::new("if without else".to_string()).into(),
-                        loc,
+                        Some(loc),
                     ));
                 };
 
@@ -258,16 +258,16 @@ impl<'a, 't> ExprParser<'a, 't> {
 
                 let instr = b::Instr::new(
                     b::InstrBody::If(cond_v, then_instrs, else_instrs),
-                    loc,
+                    Some(loc),
                 );
 
                 if !scope.is_never() {
-                    let v = self.module.create_value(b::Type::unknown(None), loc);
+                    let v = self.module.create_value(b::Type::unknown(None), Some(loc));
                     self.add_instr(instr.with_results([v]));
-                    ValueRef::new(ValueRefBody::Value(v), loc)
+                    ValueRef::new(ValueRefBody::Value(v), Some(loc))
                 } else {
                     self.add_instr(instr);
-                    ValueRef::new(ValueRefBody::Never, loc)
+                    ValueRef::new(ValueRefBody::Never, Some(loc))
                 }
             }
             "macro" => {
@@ -313,7 +313,7 @@ impl<'a, 't> ExprParser<'a, 't> {
         if let Some(ty) = &value_ref.ty {
             self.add_instr(b::Instr::new(
                 b::InstrBody::Type(v, ty.clone()),
-                ty.loc.unwrap_or(value_ref.loc),
+                ty.loc.or(value_ref.loc),
             ));
         }
         v
@@ -338,9 +338,12 @@ impl<'a, 't> ExprParser<'a, 't> {
             "not" => b::InstrBody::Not(operand_v),
             kind => panic!("Unhandled unary operator: {kind}"),
         };
-        let loc = b::Loc::from_node(self.module.src_idx, &op).merge(&operand.loc);
-        let v = self.add_instr_with_result(b::Instr::new(body, loc));
-        ValueRef::new(ValueRefBody::Value(v), loc)
+        let mut loc = b::Loc::from_node(self.module.src_idx, &op);
+        if let Some(operand_loc) = &operand.loc {
+            loc = loc.merge(operand_loc);
+        }
+        let v = self.add_instr_with_result(b::Instr::new(body, Some(loc)));
+        ValueRef::new(ValueRefBody::Value(v), Some(loc))
     }
 
     fn add_bin_op(&mut self, op: ts::Node, left: ValueRef, right: ValueRef) -> ValueRef {
@@ -355,7 +358,7 @@ impl<'a, 't> ExprParser<'a, 't> {
             "double_star" => {
                 self.module.ctx.push_error(errors::Error::new(
                     errors::Todo::new("exponentiation".to_string()).into(),
-                    Loc::from_node(self.module.src_idx, &op),
+                    Some(Loc::from_node(self.module.src_idx, &op)),
                 ));
                 b::InstrBody::CompileError
             }
@@ -367,9 +370,15 @@ impl<'a, 't> ExprParser<'a, 't> {
             "lt_eq" => b::InstrBody::Lte(left_v, right_v),
             kind => panic!("Unhandled binary operator: {kind}"),
         };
-        let loc = left.loc.merge(&right.loc);
-        let v = self.add_instr_with_result(b::Instr::new(body, loc));
-        ValueRef::new(ValueRefBody::Value(v), loc)
+        let mut loc = b::Loc::from_node(self.module.src_idx, &op);
+        if let Some(left_loc) = &left.loc {
+            loc = loc.merge(left_loc);
+        }
+        if let Some(right_loc) = &right.loc {
+            loc = loc.merge(right_loc);
+        }
+        let v = self.add_instr_with_result(b::Instr::new(body, Some(loc)));
+        ValueRef::new(ValueRefBody::Value(v), Some(loc))
     }
 
     fn add_get_prop(
@@ -381,9 +390,9 @@ impl<'a, 't> ExprParser<'a, 't> {
         let source_v = self.use_value_ref(&parent);
         let v = self.add_instr_with_result(b::Instr::new(
             b::InstrBody::GetProperty(source_v, prop_name.to_string()),
-            loc,
+            Some(loc),
         ));
-        ValueRef::new(ValueRefBody::Value(v), loc)
+        ValueRef::new(ValueRefBody::Value(v), Some(loc))
     }
 
     fn add_call(
@@ -403,18 +412,21 @@ impl<'a, 't> ExprParser<'a, 't> {
                     && self.module.mod_idx == mod_idx
                     && self.func_idx.is_some_and(|i| i == func_idx)
                 {
-                    self.add_instr(b::Instr::new(b::InstrBody::Continue(args_vs), loc));
+                    self.add_instr(b::Instr::new(
+                        b::InstrBody::Continue(args_vs),
+                        Some(loc),
+                    ));
 
                     self.scopes.get_mut(0).unwrap().is_loop = true;
                     self.scopes.last_mut().mark_as_never();
 
-                    ValueRef::new(ValueRefBody::Never, loc)
+                    ValueRef::new(ValueRefBody::Never, Some(loc))
                 } else {
                     let v = self.add_instr_with_result(b::Instr::new(
                         b::InstrBody::Call(mod_idx, func_idx, args_vs),
-                        loc,
+                        Some(loc),
                     ));
-                    ValueRef::new(ValueRefBody::Value(v), loc)
+                    ValueRef::new(ValueRefBody::Value(v), Some(loc))
                 }
             }
             ValueRefBody::Value(..) | ValueRefBody::Global(_, _) => {
@@ -422,11 +434,13 @@ impl<'a, 't> ExprParser<'a, 't> {
 
                 let v = self.add_instr_with_result(b::Instr::new(
                     b::InstrBody::IndirectCall(callee_v, args_vs),
-                    loc,
+                    Some(loc),
                 ));
-                ValueRef::new(ValueRefBody::Value(v), loc)
+                ValueRef::new(ValueRefBody::Value(v), Some(loc))
             }
-            ValueRefBody::CompileError => ValueRef::new(ValueRefBody::CompileError, loc),
+            ValueRefBody::CompileError => {
+                ValueRef::new(ValueRefBody::CompileError, Some(loc))
+            }
             _ => {
                 panic!("Value is not a function")
             }
@@ -448,8 +462,8 @@ impl<'a, 't> ExprParser<'a, 't> {
                     _ => unreachable!(),
                 };
 
-                let v = self.add_instr_with_result(b::Instr::new(instr_body, loc));
-                ValueRef::new(ValueRefBody::Value(v), loc)
+                let v = self.add_instr_with_result(b::Instr::new(instr_body, Some(loc)));
+                ValueRef::new(ValueRefBody::Value(v), Some(loc))
             }
             "str_ptr" | "array_ptr" => {
                 // TODO: better error handling
@@ -473,8 +487,8 @@ impl<'a, 't> ExprParser<'a, 't> {
                     _ => unreachable!(),
                 };
 
-                let v = self.add_instr_with_result(b::Instr::new(instr_body, loc));
-                ValueRef::new(ValueRefBody::Value(v), loc)
+                let v = self.add_instr_with_result(b::Instr::new(instr_body, Some(loc)));
+                ValueRef::new(ValueRefBody::Value(v), Some(loc))
             }
             _ => {
                 panic!("unhandled macro: `{name}`")

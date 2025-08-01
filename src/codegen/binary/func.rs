@@ -365,55 +365,66 @@ impl<'a> FuncCodegen<'a, '_> {
                 }
             }
             b::InstrBody::Break(v) => {
-                let Some(runtime_value) = self.values.get(v).cloned() else {
-                    panic!("value should be present in scope: {v}");
-                };
-                let ty = &self.ctx.modules[mod_idx].values[*v].ty;
-                let mut cl_values = vec![];
+                if let Some(v) = v {
+                    let Some(runtime_value) = self.values.get(v).cloned() else {
+                        panic!("value should be present in scope: {v}");
+                    };
+                    let ty = &self.ctx.modules[mod_idx].values[*v].ty;
+                    let mut cl_values = vec![];
 
-                match result_policy {
-                    ResultPolicy::Normal => {
-                        cl_values = self.use_values(*v);
-                        if let Some(prev_scope) = self.scopes.get(self.scopes.len() - 2) {
-                            let builder = expect_builder!(self);
-                            builder.ins().jump(prev_scope.block, &cl_values);
-                            cl_values = builder.block_params(prev_scope.block).to_vec();
+                    match result_policy {
+                        ResultPolicy::Normal => {
+                            cl_values = self.use_values(*v);
+                            if let Some(prev_scope) =
+                                self.scopes.get(self.scopes.len() - 2)
+                            {
+                                let builder = expect_builder!(self);
+                                builder.ins().jump(prev_scope.block, &cl_values);
+                                cl_values =
+                                    builder.block_params(prev_scope.block).to_vec();
+                            }
+                        }
+                        ResultPolicy::Return(ReturnPolicy::Normal) => {
+                            cl_values = self.use_values(*v);
+                            expect_builder!(self).ins().return_(&cl_values);
+                        }
+                        ResultPolicy::Return(ReturnPolicy::Void) => {
+                            expect_builder!(self).ins().return_(&[]);
+                        }
+                        ResultPolicy::Return(ReturnPolicy::StructReturn(_)) => {
+                            let cl_value = self.use_value(*v);
+                            if let Some(res) = self.scopes.last().result {
+                                let size = types::get_size(
+                                    ty,
+                                    self.ctx.modules,
+                                    &self.ctx.obj_module,
+                                );
+
+                                let res_cl = self.use_value(res);
+
+                                self.copy_bytes(res_cl, cl_value, size);
+                            }
+                            expect_builder!(self).ins().return_(&[]);
+                            cl_values = vec![cl_value];
+                        }
+                        ResultPolicy::Return(ReturnPolicy::NoReturn) => unreachable!(),
+                        ResultPolicy::Global => {
+                            cl_values = self.use_values(*v);
                         }
                     }
-                    ResultPolicy::Return(ReturnPolicy::Normal) => {
-                        cl_values = self.use_values(*v);
-                        expect_builder!(self).ins().return_(&cl_values);
-                    }
-                    ResultPolicy::Return(ReturnPolicy::Void) => {
-                        expect_builder!(self).ins().return_(&[]);
-                    }
-                    ResultPolicy::Return(ReturnPolicy::StructReturn(_)) => {
-                        let cl_value = self.use_value(*v);
-                        if let Some(res) = self.scopes.last().result {
-                            let size = types::get_size(
-                                ty,
-                                self.ctx.modules,
-                                &self.ctx.obj_module,
-                            );
 
-                            let res_cl = self.use_value(res);
-
-                            self.copy_bytes(res_cl, cl_value, size);
-                        }
+                    let scope = self.scopes.last();
+                    let result = scope.result.unwrap();
+                    let src = runtime_value.src.with_values(&cl_values);
+                    self.values
+                        .insert(result, types::RuntimeValue::new(src, mod_idx, result));
+                } else {
+                    if let ResultPolicy::Return(ReturnPolicy::Void) = result_policy {
                         expect_builder!(self).ins().return_(&[]);
-                        cl_values = vec![cl_value];
-                    }
-                    ResultPolicy::Return(ReturnPolicy::NoReturn) => unreachable!(),
-                    ResultPolicy::Global => {
-                        cl_values = self.use_values(*v);
+                    } else {
+                        unreachable!()
                     }
                 }
-
-                let scope = self.scopes.last();
-                let result = scope.result.unwrap();
-                let src = runtime_value.src.with_values(&cl_values);
-                self.values
-                    .insert(result, types::RuntimeValue::new(src, mod_idx, result));
             }
             b::InstrBody::Continue(vs) => {
                 let block = self

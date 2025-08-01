@@ -33,10 +33,15 @@ pub struct BinaryCodegen<'a> {
     declared_funcs: HashMap<(usize, usize), cl::Function>,
     entry_func: Option<(cl::FuncId, cl::Function)>,
     module_ctx: cl::Context,
+    rt_start: Option<(usize, usize)>,
     next_func_id: u32,
 }
 impl<'a> BinaryCodegen<'a> {
-    pub fn new(modules: &'a [b::Module], cfg: &'a config::BuildConfig) -> Self {
+    pub fn new(
+        modules: &'a [b::Module],
+        rt_start: Option<(usize, usize)>,
+        cfg: &'a config::BuildConfig,
+    ) -> Self {
         let triple = Triple::host();
 
         let settings_builder = cl::settings::builder();
@@ -55,6 +60,7 @@ impl<'a> BinaryCodegen<'a> {
             module_ctx,
             declared_funcs: HashMap::new(),
             entry_func: None,
+            rt_start,
             next_func_id: 0,
         }
     }
@@ -224,12 +230,15 @@ impl BinaryCodegen<'_> {
 
                 codegen.scopes.end();
 
-                if !global.is_entry_point {
-                    let v = &self.ctx.modules[i].globals[j].value;
-                    let res = codegen.values[v].clone();
-                    codegen.store_global(res, &global);
-                }
+                let v = &self.ctx.modules[i].globals[j].value;
+                let res = codegen.values[v].clone();
+                codegen.store_global(res, &global);
+
                 codegen.values.clear();
+            }
+
+            if let Some((mod_idx, func_idx)) = this.rt_start {
+                codegen.call_func(mod_idx, func_idx, &[]);
             }
 
             let exit_code = codegen

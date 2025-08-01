@@ -18,18 +18,19 @@ const SELF_INDENT: &str = "Self";
 #[derive(new)]
 pub struct ModuleParser<'a, 't> {
     #[new(value = "TypeParser::new(ctx, src_idx, mod_idx)")]
-    pub types:   TypeParser<'a, 't>,
+    pub types:    TypeParser<'a, 't>,
     #[new(default)]
-    pub globals: Vec<DeclaredGlobal<'t>>,
+    pub globals:  Vec<DeclaredGlobal<'t>>,
     #[new(default)]
-    pub funcs:   Vec<DeclaredFunc<'t>>,
+    pub funcs:    Vec<DeclaredFunc<'t>>,
     #[new(default)]
-    pub values:  Vec<b::Value>,
+    pub values:   Vec<b::Value>,
     #[new(default)]
-    pub idents:  HashMap<String, ValueRef>,
-    pub ctx:     &'a context::BuildContext,
-    pub src_idx: usize,
-    pub mod_idx: usize,
+    pub idents:   HashMap<String, ValueRef>,
+    pub ctx:      &'a context::BuildContext,
+    pub src_idx:  usize,
+    pub mod_idx:  usize,
+    pub is_entry: bool,
 }
 
 impl<'a, 't> ModuleParser<'a, 't> {
@@ -47,7 +48,7 @@ impl<'a, 't> ModuleParser<'a, 't> {
             if global.global.value == UNDEF_VALUE {
                 let ty = global.ty.clone();
                 let loc = global.global.loc;
-                self.globals[i].global.value = self.create_value(ty, loc)
+                self.globals[i].global.value = self.create_value(ty, Some(loc))
             }
         }
 
@@ -150,9 +151,7 @@ impl<'a, 't> ModuleParser<'a, 't> {
                 continue;
             }
             let ty_ref = b::TypeRef::new(mod_idx, i);
-            self.types
-                .idents
-                .insert(item.name.clone(), ty_ref.into());
+            self.types.idents.insert(item.name.clone(), ty_ref.into());
         }
 
         for (i, item) in enumerate(&module.funcs) {
@@ -167,7 +166,8 @@ impl<'a, 't> ModuleParser<'a, 't> {
             if item.name.starts_with('_') {
                 continue;
             }
-            let mut value = ValueRef::new(ValueRefBody::Global(mod_idx, i), item.loc);
+            let mut value =
+                ValueRef::new(ValueRefBody::Global(mod_idx, i), Some(item.loc));
             if item.body.len() == 1 {
                 match &item.body[0].body {
                     b::InstrBody::CreateNumber(v) => {
@@ -182,7 +182,7 @@ impl<'a, 't> ModuleParser<'a, 't> {
             self.idents.insert(item.name.clone(), value);
         }
     }
-    pub fn create_value(&mut self, ty: b::Type, loc: b::Loc) -> b::ValueIdx {
+    pub fn create_value(&mut self, ty: b::Type, loc: Option<b::Loc>) -> b::ValueIdx {
         self.values.push(b::Value::new(ty, loc));
         self.values.len() - 1
     }
@@ -210,7 +210,7 @@ impl<'a, 't> ModuleParser<'a, 't> {
 
                 let loc = b::Loc::from_node(self.src_idx, &param_node);
                 (
-                    self.create_value(param_ty, loc),
+                    self.create_value(param_ty, Some(loc)),
                     param_name.to_string(),
                     b::Loc::from_node(self.src_idx, &param_name_node),
                 )
@@ -247,19 +247,20 @@ impl<'a, 't> ModuleParser<'a, 't> {
 
         let loc = b::Loc::from_node(self.src_idx, &node);
         let func = b::Func {
-            name: name,
+            name,
             params: params.clone(),
             ret: UNDEF_VALUE,
             method,
             extrn,
+            is_entry: false,
             is_virt,
             body: vec![],
-            loc,
+            loc: Some(loc),
         };
         let func_idx = self.funcs.len();
         self.idents.insert(
             func.name.clone(),
-            ValueRef::new(ValueRefBody::Func(self.mod_idx, func_idx), loc),
+            ValueRef::new(ValueRefBody::Func(self.mod_idx, func_idx), Some(loc)),
         );
         self.funcs.push(DeclaredFunc {
             func,
@@ -278,19 +279,19 @@ impl<'a, 't> ModuleParser<'a, 't> {
             None => b::Type::unknown(None),
         };
 
-        let is_entry_point = name == "main";
+        let is_main = name == "main";
+
         let global = b::Global {
-            name: name,
+            name,
             value: UNDEF_VALUE,
             body: vec![],
-            is_entry_point,
             loc: b::Loc::from_node(self.src_idx, &node),
         };
         self.idents.insert(
             global.name.clone(),
             ValueRef::new(
                 ValueRefBody::Global(self.mod_idx, self.globals.len()),
-                b::Loc::from_node(self.src_idx, &node),
+                Some(b::Loc::from_node(self.src_idx, &node)),
             ),
         );
         self.globals.push(DeclaredGlobal {
@@ -298,6 +299,11 @@ impl<'a, 't> ModuleParser<'a, 't> {
             value_node: node.required_field("value"),
             ty,
         });
+
+        if is_main {
+            let mut main = self.ctx.main.write().unwrap();
+            *main = Some((self.mod_idx, self.globals.len() - 1));
+        }
     }
 }
 

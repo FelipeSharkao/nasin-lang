@@ -44,15 +44,13 @@ impl Display for Module {
                         .join(" | ")
                 )?;
             }
-            write!(f, " {}", value.loc)?;
+            if let Some(loc) = &value.loc {
+                write!(f, " {}", loc)?;
+            }
         }
 
         for (i, typedef) in self.typedefs.iter().enumerate() {
-            write!(
-                f,
-                "\n    type {i} {} {}",
-                &typedef.name, &typedef.loc
-            )?;
+            write!(f, "\n    type {i} {} {}", &typedef.name, &typedef.loc)?;
 
             match &typedef.body {
                 TypeDefBody::Record(v) => {
@@ -91,7 +89,10 @@ impl Display for Module {
         }
 
         for (i, func) in self.funcs.iter().enumerate() {
-            write!(f, "\n    func {i} {} {}", &func.name, func.loc)?;
+            write!(f, "\n    func {i} {}", &func.name)?;
+            if let Some(loc) = &func.loc {
+                write!(f, " {}", loc)?;
+            }
 
             if func.params.len() > 0 {
                 write!(f, " (params")?;
@@ -124,7 +125,7 @@ impl Display for Module {
 pub struct TypeDef {
     pub name: String,
     pub body: TypeDefBody,
-    pub loc: Loc,
+    pub loc:  Loc,
 }
 impl TypeDef {
     pub fn get_ifaces(&self) -> Vec<(usize, usize)> {
@@ -144,23 +145,23 @@ impl TypeDef {
 
 #[derive(Debug, Clone)]
 pub struct Global {
-    pub name: String,
+    pub name:  String,
     pub value: ValueIdx,
-    pub body: Vec<Instr>,
-    pub is_entry_point: bool,
-    pub loc: Loc,
+    pub body:  Vec<Instr>,
+    pub loc:   Loc,
 }
 
 #[derive(Debug, Clone)]
 pub struct Func {
-    pub name: String,
-    pub params: Vec<ValueIdx>,
-    pub ret: ValueIdx,
-    pub body: Vec<Instr>,
-    pub method: Option<(usize, usize, String)>,
-    pub extrn: Option<Extern>,
-    pub is_virt: bool,
-    pub loc: Loc,
+    pub name:     String,
+    pub params:   Vec<ValueIdx>,
+    pub ret:      ValueIdx,
+    pub body:     Vec<Instr>,
+    pub method:   Option<(usize, usize, String)>,
+    pub extrn:    Option<Extern>,
+    pub is_entry: bool,
+    pub is_virt:  bool,
+    pub loc:      Option<Loc>,
 }
 
 #[derive(Debug, Clone, From)]
@@ -213,7 +214,7 @@ pub struct Source {
     pub path: PathBuf,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Display)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Display, Default)]
 #[display(":{start_line}:{start_col}-{end_line}:{end_col}")]
 #[debug(":{start_line}:{start_col}-{end_line}:{end_col}")]
 pub struct Loc {

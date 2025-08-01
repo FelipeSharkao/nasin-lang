@@ -36,7 +36,7 @@ impl<'a, 't> TypeParser<'a, 't> {
                     None => {
                         self.ctx.push_error(errors::Error::new(
                             errors::TypeNotFound::new(ident.to_string()).into(),
-                            b::Loc::from_node(self.src_idx, &node),
+                            Some(b::Loc::from_node(self.src_idx, &node)),
                         ));
                         b::TypeBody::unknown()
                     }
@@ -100,7 +100,7 @@ impl<'a, 't> TypeParser<'a, 't> {
         };
 
         let value = b::TypeDef {
-            name: name,
+            name,
             body,
             loc: b::Loc::from_node(self.src_idx, &node),
         };
@@ -173,7 +173,7 @@ impl<'a, 't> TypeParser<'a, 't> {
                             _ => {
                                 self.ctx.push_error(errors::Error::new(
                                     errors::TypeNotInterface::new(ty).into(),
-                                    b::Loc::from_node(self.src_idx, &node),
+                                    Some(b::Loc::from_node(self.src_idx, &node)),
                                 ));
                                 None
                             }

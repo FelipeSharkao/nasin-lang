@@ -55,7 +55,7 @@ pub fn build(emit: EmitArgs, out: Option<PathBuf>) -> Result<(), CompilerError> 
     ctx.parse_library();
     let src_idx = ctx.preload(emit.file).expect("file not found");
 
-    ctx.parse(src_idx);
+    ctx.parse(src_idx, true);
 
     if { ctx.errors.lock().unwrap() }.len() > 0 {
         let source_manager = Arc::new(ctx.source_manager);

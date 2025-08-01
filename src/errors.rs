@@ -10,7 +10,7 @@ use crate::{bytecode as b, sources, utils};
 #[derive(Debug, Clone, new)]
 pub struct Error {
     detail: ErrorDetail,
-    loc:    b::Loc,
+    loc:    Option<b::Loc>,
 }
 
 #[derive(Debug, Clone, Error, new)]
@@ -26,26 +26,31 @@ impl fmt::Display for CompilerError {
         } = self;
 
         for err in errors {
-            let idx = err.loc.source_idx;
-            let src = source_manager.source(idx);
+            if let Some(loc) = &err.loc {
+                let idx = loc.source_idx;
+                let src = source_manager.source(idx);
 
-            let line = err.loc.start_line;
-            let col = err.loc.start_col;
-            writeln!(
-                f,
-                "{}:{line}:{col} - error: {}",
-                src.path.display(),
-                err.detail
-            )?;
+                let line = loc.start_line;
+                let col = loc.start_col;
+                writeln!(
+                    f,
+                    "{}:{line}:{col} - error: {}",
+                    src.path.display(),
+                    err.detail
+                )?;
 
-            let num = format!("{line}");
-            let line_content = src.content().line(line).expect("line should be valid");
-            let leading_spaces = line_content
-                .chars()
-                .take_while(|c| c.len_utf8() == 1 && c.is_whitespace())
-                .count();
-            writeln!(f, "{num} | {}", &line_content[leading_spaces..])?;
-            writeln!(f, "{}^", " ".repeat(num.len() + col - leading_spaces + 2))?;
+                let num = format!("{line}");
+                let line_content =
+                    src.content().line(line).expect("line should be valid");
+                let leading_spaces = line_content
+                    .chars()
+                    .take_while(|c| c.len_utf8() == 1 && c.is_whitespace())
+                    .count();
+                writeln!(f, "{num} | {}", &line_content[leading_spaces..])?;
+                writeln!(f, "{}^", " ".repeat(num.len() + col - leading_spaces + 2))?;
+            } else {
+                writeln!(f, "error: {}", &err.detail)?;
+            }
         }
 
         Ok(())

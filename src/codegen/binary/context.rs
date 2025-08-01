@@ -23,7 +23,6 @@ pub struct GlobalBinding {
     pub symbol_name: String,
     pub value: types::RuntimeValue,
     pub is_const: bool,
-    pub is_entry_point: bool,
 }
 
 #[derive(Debug)]
@@ -81,9 +80,11 @@ impl<'a> CodegenContext<'a> {
 
             for instr in &global.body {
                 if let b::InstrBody::Break(v) = &instr.body {
-                    codegen
-                        .values
-                        .insert(global.value, codegen.values[v].clone());
+                    if let Some(v) = v {
+                        codegen
+                            .values
+                            .insert(global.value, codegen.values[v].clone());
+                    }
                     break;
                 }
 
@@ -104,7 +105,6 @@ impl<'a> CodegenContext<'a> {
                 symbol_name,
                 value,
                 is_const,
-                is_entry_point: global.is_entry_point,
             },
         );
     }

@@ -43,7 +43,7 @@ pub enum InstrBody {
         #[debug("...")] Vec<Instr>,
     ),
     Loop(Vec<(ValueIdx, ValueIdx)>, #[debug("...")] Vec<Instr>),
-    Break(ValueIdx),
+    Break(Option<ValueIdx>),
     Continue(Vec<ValueIdx>),
 
     ArrayLen(ValueIdx),
@@ -122,7 +122,12 @@ impl Display for InstrBody {
                 }
                 write!(f, ":\n{}", utils::indented(4, body))?;
             }
-            InstrBody::Break(v) => write!(f, "break v{v}")?,
+            InstrBody::Break(v) => {
+                write!(f, "break")?;
+                if let Some(v) = v {
+                    write!(f, " v{v}")?;
+                }
+            }
             InstrBody::Continue(vs) => {
                 write!(f, "continue")?;
                 for v in vs {
@@ -146,7 +151,7 @@ impl Display for InstrBody {
 #[derive(Debug, Clone, new)]
 pub struct Instr {
     pub body:    InstrBody,
-    pub loc:     Loc,
+    pub loc:     Option<Loc>,
     #[new(default)]
     pub results: Vec<ValueIdx>,
 }
@@ -171,7 +176,9 @@ impl Display for Instr {
             }
             write!(f, "{line}")?;
             if i == 0 {
-                write!(f, " {}", &self.loc)?;
+                if let Some(loc) = &self.loc {
+                    write!(f, " {}", &loc)?;
+                }
             }
         }
         Ok(())

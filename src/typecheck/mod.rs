@@ -125,7 +125,7 @@ impl<'a> TypeChecker<'a> {
         let mut result = None;
         for instr in body {
             if let b::InstrBody::Break(v) = &instr.body {
-                result = result.or(Some(*v));
+                result = result.or(*v);
                 continue;
             }
             self.add_instr(instr, scopes, func_idx);
@@ -166,7 +166,7 @@ impl<'a> TypeChecker<'a> {
             | b::InstrBody::GetField(source_v, name)
             | b::InstrBody::GetMethod(source_v, name) => {
                 let v = instr.results[0];
-                self.define_property(*source_v, v, name, instr.loc);
+                self.define_property(*source_v, v, name);
             }
             b::InstrBody::CreateBool(_) => {
                 let v = instr.results[0];
@@ -216,7 +216,7 @@ impl<'a> TypeChecker<'a> {
                 let v = instr.results[0];
                 self.add_constraint(v, Constraint::Members(fields.clone()));
                 for (name, fields_v) in fields {
-                    self.define_property(v, *fields_v, name, instr.loc);
+                    self.define_property(v, *fields_v, name);
                 }
             }
             b::InstrBody::Add(a, b)
@@ -824,7 +824,6 @@ impl<'a> TypeChecker<'a> {
         src_v: b::ValueIdx,
         prop_v: b::ValueIdx,
         prop_name: &str,
-        loc: b::Loc,
     ) {
         let same_of = {
             self.ctx.lock_modules()[self.mod_idx].values[src_v]
@@ -834,7 +833,7 @@ impl<'a> TypeChecker<'a> {
 
         if same_of.len() >= 1 {
             for v in &same_of {
-                self.define_property(*v, prop_v, prop_name, loc);
+                self.define_property(*v, prop_v, prop_name);
             }
             return;
         }

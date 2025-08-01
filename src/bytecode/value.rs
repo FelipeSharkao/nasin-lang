@@ -7,7 +7,7 @@ use super::{Loc, Type};
 #[derive(Debug, Clone, new)]
 pub struct Value {
     pub ty: Type,
-    pub loc: Loc,
+    pub loc: Option<Loc>,
     /// Indicates that a value is not in use anymore and could be stripped during
     /// optimizations.
     #[new(value = "false")]
