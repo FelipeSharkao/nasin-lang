@@ -39,6 +39,22 @@ pub struct EmitArgs {
 }
 
 pub fn build(emit: EmitArgs, out: Option<PathBuf>) -> Result<(), CompilerError> {
+    build_maybe_run(emit, out, false)
+}
+
+pub fn build_run(emit: EmitArgs) -> Result<(), CompilerError> {
+    let build_dir = emit.file.parent().unwrap().join("build");
+    fs::create_dir_all(&build_dir).unwrap();
+
+    let out = build_dir.join(emit.file.file_stem().unwrap());
+    build_maybe_run(emit, Some(out), true)
+}
+
+pub fn build_maybe_run(
+    emit: EmitArgs,
+    out: Option<PathBuf>,
+    run: bool,
+) -> Result<(), CompilerError> {
     let mut ctx = context::BuildContext::new(BuildConfig {
         out: out.unwrap_or_else(|| {
             emit.file
@@ -50,6 +66,7 @@ pub fn build(emit: EmitArgs, out: Option<PathBuf>) -> Result<(), CompilerError> 
         dump_ast: emit.dump_ast,
         dump_bytecode: emit.dump_bytecode,
         dump_clif: emit.dump_clif,
+        run,
     });
 
     ctx.parse_library();
@@ -64,16 +81,11 @@ pub fn build(emit: EmitArgs, out: Option<PathBuf>) -> Result<(), CompilerError> 
     }
 
     ctx.compile();
+
+    if ctx.cfg.run {
+        let status = cmd!(ctx.cfg.out).status().unwrap();
+        process::exit(status.code().unwrap_or(1));
+    }
+
     Ok(())
-}
-
-pub fn build_run(emit: EmitArgs) -> Result<(), CompilerError> {
-    let build_dir = emit.file.parent().unwrap().join("build");
-    fs::create_dir_all(&build_dir).unwrap();
-
-    let out = build_dir.join(emit.file.file_stem().unwrap());
-    build(emit, Some(out.clone()))?;
-
-    let status = cmd!(out).status().unwrap();
-    process::exit(status.code().unwrap_or(1));
 }

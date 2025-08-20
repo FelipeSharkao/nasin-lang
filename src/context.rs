@@ -107,7 +107,7 @@ impl BuildContext {
         let codegen = codegen::BinaryCodegen::new(&modules, rt_start, &self.cfg);
         codegen.write();
 
-        if !self.cfg.silent {
+        if !self.cfg.silent && !self.cfg.run {
             println!("Compiled program to {}", self.cfg.out.to_string_lossy());
         }
     }
