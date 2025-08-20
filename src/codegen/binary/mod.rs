@@ -49,15 +49,15 @@ impl<'a> BinaryCodegen<'a> {
         let flags = cl::settings::Flags::new(settings_builder);
         let isa_target = cl::isa::lookup(triple).unwrap().finish(flags).unwrap();
 
-        let obj_module = cl::ObjectModule::new(
+        let cl_module = cl::ObjectModule::new(
             cl::ObjectBuilder::new(isa_target, "main", cl::default_libcall_names())
                 .unwrap(),
         );
 
-        let module_ctx = obj_module.make_context();
+        let module_ctx = cl_module.make_context();
 
         BinaryCodegen {
-            ctx: CodegenContext::new(modules, cfg, obj_module),
+            ctx: CodegenContext::new(modules, cfg, cl_module),
             module_ctx,
             declared_funcs: HashMap::new(),
             entry_func: None,
@@ -115,7 +115,7 @@ impl BinaryCodegen<'_> {
             mod_idx,
             idx,
             self.ctx.modules,
-            &self.ctx.obj_module,
+            &self.ctx.cl_module,
         );
 
         let user_func_name =
@@ -145,7 +145,7 @@ impl BinaryCodegen<'_> {
 
             let func_id = self
                 .ctx
-                .obj_module
+                .cl_module
                 .declare_function(&symbol_name, linkage, &func.signature)
                 .unwrap();
             Some(func_id)
@@ -171,7 +171,7 @@ impl BinaryCodegen<'_> {
     }
 
     fn build_entry(&mut self) {
-        let mut exit_sig = self.ctx.obj_module.make_signature();
+        let mut exit_sig = self.ctx.cl_module.make_signature();
         exit_sig.params.push(cl::AbiParam::new(cl::types::I32));
         let exit_func = cl::Function::with_name_signature(
             cl::UserFuncName::user(FuncNS::SystemFunc.into(), SystemFunc::Exit.into()),
@@ -179,17 +179,17 @@ impl BinaryCodegen<'_> {
         );
         let exit_func_id = self
             .ctx
-            .obj_module
+            .cl_module
             .declare_function("exit", cl::Linkage::Import, &exit_func.signature)
             .unwrap();
 
         let mut func = cl::Function::with_name_signature(
             cl::UserFuncName::user(FuncNS::SystemFunc.into(), SystemFunc::Start.into()),
-            self.ctx.obj_module.make_signature(),
+            self.ctx.cl_module.make_signature(),
         );
         let func_id = self
             .ctx
-            .obj_module
+            .cl_module
             .declare_function("_start", cl::Linkage::Export, &func.signature)
             .unwrap();
 
@@ -318,7 +318,7 @@ impl BinaryCodegen<'_> {
 
             let target_func_ref = self
                 .ctx
-                .obj_module
+                .cl_module
                 .declare_func_in_func(target_func_id, func_builder.func);
             let call_ins = func_builder.ins().call(target_func_ref, &params);
 
@@ -349,12 +349,12 @@ impl BinaryCodegen<'_> {
         }
 
         for (name, func) in funcs {
-            dump::dump_func(name, func, &self.ctx.obj_module);
+            dump::dump_func(name, func, &self.ctx.cl_module);
         }
 
         if self.ctx.data.len() > 0 {
             for (data_id, desc) in self.ctx.data.iter().sorted_by_key(|x| x.0) {
-                dump::dump_data(data_id, desc, &self.ctx.obj_module);
+                dump::dump_data(data_id, desc, &self.ctx.cl_module);
             }
 
             println!();
@@ -398,7 +398,7 @@ impl BinaryCodegen<'_> {
         self.module_ctx.func = func;
         match self
             .ctx
-            .obj_module
+            .cl_module
             .define_function(func_id, &mut self.module_ctx)
         {
             Ok(()) => {}
@@ -406,11 +406,11 @@ impl BinaryCodegen<'_> {
                 panic!("Failed to emit function {name}: {err:?}",);
             }
         }
-        self.ctx.obj_module.clear_context(&mut self.module_ctx)
+        self.ctx.cl_module.clear_context(&mut self.module_ctx)
     }
 
     fn write_to_file(self) {
-        let obj_product = self.ctx.obj_module.finish();
+        let obj_product = self.ctx.cl_module.finish();
 
         let obj_path = format!("{}.o", self.ctx.cfg.out.to_string_lossy());
         let out_file = File::create(&obj_path).expect("Failed to create object file");

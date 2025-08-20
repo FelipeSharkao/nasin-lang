@@ -49,8 +49,8 @@ pub enum ValueSource {
     DynDispatched(DynDispatched),
 }
 impl ValueSource {
-    pub fn uint_ptr(v: u64, obj_module: &impl cl::Module) -> Self {
-        match obj_module.isa().pointer_bytes() {
+    pub fn uint_ptr(v: u64, cl_module: &impl cl::Module) -> Self {
+        match cl_module.isa().pointer_bytes() {
             1 => Self::I8(v as u8),
             2 => Self::I16(v as u16),
             4 => Self::I32(v as u32),
@@ -170,21 +170,21 @@ impl ValueSource {
         &self,
         ty: &b::Type,
         modules: &[b::Module],
-        obj_module: &impl cl::Module,
+        cl_module: &impl cl::Module,
         func: &mut cl::FunctionBuilder,
     ) -> Vec<cl::Value> {
         match &ty.body {
             b::TypeBody::TypeRef(t) if t.is_self => {
-                vec![self.add_by_ref(obj_module, func)]
+                vec![self.add_by_ref(cl_module, func)]
             }
             b::TypeBody::TypeRef(t) => match &modules[t.mod_idx].typedefs[t.idx].body {
-                b::TypeDefBody::Record(_) => vec![self.add_by_ref(obj_module, func)],
+                b::TypeDefBody::Record(_) => vec![self.add_by_ref(cl_module, func)],
                 b::TypeDefBody::Interface(_) => {
-                    self.add_by_value(ty, modules, obj_module, func)
+                    self.add_by_value(ty, modules, cl_module, func)
                 }
             },
-            b::TypeBody::Ptr(_) => vec![self.add_by_ref(obj_module, func)],
-            _ => self.add_by_value(ty, modules, obj_module, func),
+            b::TypeBody::Ptr(_) => vec![self.add_by_ref(cl_module, func)],
+            _ => self.add_by_value(ty, modules, cl_module, func),
         }
     }
 
@@ -193,19 +193,19 @@ impl ValueSource {
     /// returned.
     pub fn add_by_ref(
         &self,
-        obj_module: &impl cl::Module,
+        cl_module: &impl cl::Module,
         func: &mut cl::FunctionBuilder,
     ) -> cl::Value {
         match self {
             ValueSource::Ptr(v) => *v,
             ValueSource::Data(data_id) => {
-                let field_gv = obj_module.declare_data_in_func(*data_id, &mut func.func);
+                let field_gv = cl_module.declare_data_in_func(*data_id, &mut func.func);
                 func.ins()
-                    .global_value(obj_module.isa().pointer_type(), field_gv)
+                    .global_value(cl_module.isa().pointer_type(), field_gv)
             }
             ValueSource::StackSlot(ss) => {
                 func.ins()
-                    .stack_addr(obj_module.isa().pointer_type(), *ss, 0)
+                    .stack_addr(cl_module.isa().pointer_type(), *ss, 0)
             }
             ValueSource::I8(..)
             | ValueSource::I16(..)
@@ -240,7 +240,7 @@ impl ValueSource {
         &self,
         ty: &b::Type,
         modules: &[b::Module],
-        obj_module: &impl cl::Module,
+        cl_module: &impl cl::Module,
         func: &mut cl::FunctionBuilder,
     ) -> Vec<cl::Value> {
         match self {
@@ -255,10 +255,10 @@ impl ValueSource {
             ValueSource::F32(n) => vec![func.ins().f32const(n.to_float())],
             ValueSource::F64(n) => vec![func.ins().f64const(n.to_float())],
             ValueSource::Ptr(_) | ValueSource::Data(_) | ValueSource::StackSlot(_) => {
-                let v = self.add_by_ref(obj_module, func);
+                let v = self.add_by_ref(cl_module, func);
                 let mut values = vec![];
                 let mut offset = 0;
-                for native_ty in get_type_by_value(ty, modules, obj_module) {
+                for native_ty in get_type_by_value(ty, modules, cl_module) {
                     values.push(func.ins().load(
                         native_ty,
                         cl::MemFlags::new(),
@@ -270,9 +270,9 @@ impl ValueSource {
                 values
             }
             ValueSource::Slice(slice) => {
-                let ptr_value = slice.ptr.add_by_ref(obj_module, func);
+                let ptr_value = slice.ptr.add_by_ref(cl_module, func);
 
-                let len_type_body = match obj_module.isa().pointer_bytes() {
+                let len_type_body = match cl_module.isa().pointer_bytes() {
                     1 => b::TypeBody::I8,
                     2 => b::TypeBody::I16,
                     4 => b::TypeBody::I32,
@@ -282,7 +282,7 @@ impl ValueSource {
                 let len_values = slice.len.add_by_value(
                     &b::Type::new(len_type_body, None),
                     modules,
-                    obj_module,
+                    cl_module,
                     func,
                 );
 
@@ -386,14 +386,14 @@ pub fn tuple_from_args(
     values: &[b::ValueIdx],
     cl_values: &[cl::Value],
     modules: &[b::Module],
-    obj_module: &impl cl::Module,
+    cl_module: &impl cl::Module,
 ) -> Vec<RuntimeValue> {
     let mut i = 0;
     values
         .iter()
         .map(|v| {
             let (res, n) =
-                take_value_from_args(mod_idx, *v, &cl_values[i..], modules, obj_module);
+                take_value_from_args(mod_idx, *v, &cl_values[i..], modules, cl_module);
             i += n;
             res
         })
@@ -405,7 +405,7 @@ pub fn take_value_from_args(
     idx: usize,
     cl_values: &[cl::Value],
     modules: &[b::Module],
-    obj_module: &impl cl::Module,
+    cl_module: &impl cl::Module,
 ) -> (RuntimeValue, usize) {
     let ty = &modules[mod_idx].values[idx].ty;
 
@@ -430,7 +430,7 @@ pub fn take_value_from_args(
         ))
         .into(),
         b::TypeBody::Func(func_ty) => {
-            let proto = FuncPrototype::from_closure_type(func_ty, modules, obj_module);
+            let proto = FuncPrototype::from_closure_type(func_ty, modules, cl_module);
             FuncAsValue::new(next(), next(), proto).into()
         }
         _ => ValueSource::Primitive(next()),
@@ -442,23 +442,23 @@ pub fn take_value_from_args(
 pub fn get_type_canonical(
     ty: &b::Type,
     modules: &[b::Module],
-    obj_module: &impl cl::Module,
+    cl_module: &impl cl::Module,
 ) -> Vec<cl::Type> {
     match &ty.body {
-        b::TypeBody::TypeRef(t) if t.is_self => vec![obj_module.isa().pointer_type()],
+        b::TypeBody::TypeRef(t) if t.is_self => vec![cl_module.isa().pointer_type()],
         b::TypeBody::TypeRef(t) => match &modules[t.mod_idx].typedefs[t.idx].body {
-            b::TypeDefBody::Record(_) => vec![obj_module.isa().pointer_type()],
-            b::TypeDefBody::Interface(_) => vec![obj_module.isa().pointer_type(); 2],
+            b::TypeDefBody::Record(_) => vec![cl_module.isa().pointer_type()],
+            b::TypeDefBody::Interface(_) => vec![cl_module.isa().pointer_type(); 2],
         },
-        b::TypeBody::Ptr(_) => vec![obj_module.isa().pointer_type()],
-        _ => get_type_by_value(ty, modules, obj_module),
+        b::TypeBody::Ptr(_) => vec![cl_module.isa().pointer_type()],
+        _ => get_type_by_value(ty, modules, cl_module),
     }
 }
 
 pub fn get_type_by_value(
     ty: &b::Type,
     modules: &[b::Module],
-    obj_module: &impl cl::Module,
+    cl_module: &impl cl::Module,
 ) -> Vec<cl::Type> {
     match &ty.body {
         b::TypeBody::Bool => vec![cl::types::I8],
@@ -473,18 +473,18 @@ pub fn get_type_by_value(
         b::TypeBody::F32 => vec![cl::types::F32],
         b::TypeBody::F64 => vec![cl::types::F64],
         b::TypeBody::USize | b::TypeBody::Array(_) | b::TypeBody::Ptr(_) => {
-            vec![obj_module.isa().pointer_type()]
+            vec![cl_module.isa().pointer_type()]
         }
         b::TypeBody::TypeRef(t) => match &modules[t.mod_idx].typedefs[t.idx].body {
             b::TypeDefBody::Record(rec) => rec
                 .fields
                 .values()
-                .flat_map(|field| get_type_by_value(&field.ty, modules, obj_module))
+                .flat_map(|field| get_type_by_value(&field.ty, modules, cl_module))
                 .collect_vec(),
-            b::TypeDefBody::Interface(_) => vec![obj_module.isa().pointer_type(); 2],
+            b::TypeDefBody::Interface(_) => vec![cl_module.isa().pointer_type(); 2],
         },
         b::TypeBody::Func(_) | b::TypeBody::String(_) | b::TypeBody::Array(_) => {
-            vec![obj_module.isa().pointer_type(); 2]
+            vec![cl_module.isa().pointer_type(); 2]
         }
         b::TypeBody::AnyNumber
         | b::TypeBody::AnySignedNumber
@@ -499,9 +499,9 @@ pub fn get_type_by_value(
 pub fn get_size(
     ty: &b::Type,
     modules: &[b::Module],
-    obj_module: &impl cl::Module,
+    cl_module: &impl cl::Module,
 ) -> u32 {
-    let ptr = obj_module.isa().pointer_bytes() as u32;
+    let ptr = cl_module.isa().pointer_bytes() as u32;
 
     match &ty.body {
         b::TypeBody::Void | b::TypeBody::Never => 0,
@@ -510,7 +510,7 @@ pub fn get_size(
             b::TypeDefBody::Record(rec) => rec
                 .fields
                 .values()
-                .flat_map(|field| get_type_by_value(&field.ty, modules, obj_module))
+                .flat_map(|field| get_type_by_value(&field.ty, modules, cl_module))
                 .map(|ty| ty.bytes())
                 .sum(),
             b::TypeDefBody::Interface(_) => ptr * 2,
@@ -529,7 +529,7 @@ pub fn get_size(
         | b::TypeBody::F64
         | b::TypeBody::String(_)
         | b::TypeBody::Array(_)
-        | b::TypeBody::Ptr(_) => get_type_by_value(ty, modules, obj_module)
+        | b::TypeBody::Ptr(_) => get_type_by_value(ty, modules, cl_module)
             .into_iter()
             .map(|ty| ty.bytes())
             .sum(),
@@ -565,22 +565,22 @@ impl ReturnPolicy {
         mod_idx: usize,
         func_idx: usize,
         modules: &[b::Module],
-        obj_module: &impl cl::Module,
+        cl_module: &impl cl::Module,
     ) -> Self {
         let func = &modules[mod_idx].funcs[func_idx];
         let ret_ty = &modules[mod_idx].values[func.ret].ty;
-        Self::from_ret_type(ret_ty, modules, obj_module)
+        Self::from_ret_type(ret_ty, modules, cl_module)
     }
 
     pub fn from_ret_type(
         ty: &b::Type,
         modules: &[b::Module],
-        obj_module: &impl cl::Module,
+        cl_module: &impl cl::Module,
     ) -> Self {
         if ty.is_never() {
             Self::NoReturn
         } else if ty.is_aggregate(modules) {
-            let size = get_size(ty, modules, obj_module);
+            let size = get_size(ty, modules, cl_module);
             Self::Struct(size as u32)
         } else if matches!(&ty.body, b::TypeBody::Void) {
             Self::Void
@@ -601,23 +601,23 @@ impl FuncPrototype {
         mod_idx: usize,
         func_idx: usize,
         modules: &[b::Module],
-        obj_module: &impl cl::Module,
+        cl_module: &impl cl::Module,
     ) -> Self {
         let func = &modules[mod_idx].funcs[func_idx];
-        let mut sig = obj_module.make_signature();
+        let mut sig = cl_module.make_signature();
 
         let ret_ty = &modules[mod_idx].values[func.ret].ty;
-        let ret_policy = ReturnPolicy::from_ret_type(ret_ty, modules, obj_module);
+        let ret_policy = ReturnPolicy::from_ret_type(ret_ty, modules, cl_module);
         match ret_policy {
             ReturnPolicy::Struct(_) => {
                 let ret_param = cl::AbiParam::special(
-                    obj_module.isa().pointer_type(),
+                    cl_module.isa().pointer_type(),
                     cl::ArgumentPurpose::StructReturn,
                 );
                 sig.params.push(ret_param);
             }
             ReturnPolicy::Normal => {
-                let native_ty = get_type_canonical(ret_ty, modules, obj_module);
+                let native_ty = get_type_canonical(ret_ty, modules, cl_module);
                 assert_eq!(native_ty.len(), 1);
                 sig.returns.push(cl::AbiParam::new(native_ty[0]));
             }
@@ -626,7 +626,7 @@ impl FuncPrototype {
 
         for param in &func.params {
             let ty = &modules[mod_idx].values[*param].ty;
-            for native_ty in get_type_canonical(ty, modules, obj_module) {
+            for native_ty in get_type_canonical(ty, modules, cl_module) {
                 sig.params.push(cl::AbiParam::new(native_ty));
             }
         }
@@ -637,22 +637,22 @@ impl FuncPrototype {
     pub fn from_func_type(
         func_ty: &b::FuncType,
         modules: &[b::Module],
-        obj_module: &impl cl::Module,
+        cl_module: &impl cl::Module,
     ) -> Self {
-        let mut sig = obj_module.make_signature();
+        let mut sig = cl_module.make_signature();
 
         let ret_ty = &func_ty.ret;
-        let ret_policy = ReturnPolicy::from_ret_type(ret_ty, modules, obj_module);
+        let ret_policy = ReturnPolicy::from_ret_type(ret_ty, modules, cl_module);
         match ret_policy {
             ReturnPolicy::Struct(_) => {
                 let ret_param = cl::AbiParam::special(
-                    obj_module.isa().pointer_type(),
+                    cl_module.isa().pointer_type(),
                     cl::ArgumentPurpose::StructReturn,
                 );
                 sig.params.push(ret_param);
             }
             ReturnPolicy::Normal => {
-                let native_ty = get_type_canonical(ret_ty, modules, obj_module);
+                let native_ty = get_type_canonical(ret_ty, modules, cl_module);
                 assert_eq!(native_ty.len(), 1);
                 sig.returns.push(cl::AbiParam::new(native_ty[0]));
             }
@@ -660,7 +660,7 @@ impl FuncPrototype {
         }
 
         for param in &func_ty.params {
-            for native_ty in get_type_canonical(param, modules, obj_module) {
+            for native_ty in get_type_canonical(param, modules, cl_module) {
                 sig.params.push(cl::AbiParam::new(native_ty));
             }
         }
@@ -671,13 +671,13 @@ impl FuncPrototype {
     pub fn from_closure_type(
         func_ty: &b::FuncType,
         modules: &[b::Module],
-        obj_module: &impl cl::Module,
+        cl_module: &impl cl::Module,
     ) -> Self {
-        let mut proto = Self::from_func_type(func_ty, modules, obj_module);
+        let mut proto = Self::from_func_type(func_ty, modules, cl_module);
         proto
             .signature
             .params
-            .splice(0..0, [cl::AbiParam::new(obj_module.isa().pointer_type())]);
+            .splice(0..0, [cl::AbiParam::new(cl_module.isa().pointer_type())]);
         proto
     }
 }
@@ -690,9 +690,9 @@ impl VTableDesc {
     pub fn method_offset(
         &self,
         name: &str,
-        obj_module: &impl cl::Module,
+        cl_module: &impl cl::Module,
     ) -> Option<usize> {
-        let ptr = obj_module.isa().pointer_bytes() as usize;
+        let ptr = cl_module.isa().pointer_bytes() as usize;
         self.methods
             .iter()
             .position(|m| *m == name)

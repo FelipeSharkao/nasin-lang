@@ -44,7 +44,7 @@ impl Into<types::FuncPrototype> for &FuncClosureBinding {
 pub struct CodegenContext<'a> {
     pub modules: &'a [b::Module],
     pub cfg: &'a config::BuildConfig,
-    pub obj_module: cl::ObjectModule,
+    pub cl_module: cl::ObjectModule,
     #[new(default)]
     pub funcs: HashMap<(usize, usize), FuncBinding>,
     #[new(default)]
@@ -134,7 +134,7 @@ impl<'a> CodegenContext<'a> {
         }
 
         let data_id = self
-            .obj_module
+            .cl_module
             .declare_anonymous_data(false, false)
             .unwrap();
         let mut desc = cl::DataDescription::new();
@@ -144,7 +144,7 @@ impl<'a> CodegenContext<'a> {
         bytes.extend([0]);
 
         desc.define(bytes.into());
-        self.obj_module.define_data(data_id, &desc).unwrap();
+        self.cl_module.define_data(data_id, &desc).unwrap();
 
         self.data.insert(data_id, desc);
         self.strings.insert(value.to_string(), data_id);
@@ -160,7 +160,7 @@ impl<'a> CodegenContext<'a> {
         }
 
         let data_id = self
-            .obj_module
+            .cl_module
             .declare_anonymous_data(false, false)
             .unwrap();
         let mut desc = cl::DataDescription::new();
@@ -175,12 +175,12 @@ impl<'a> CodegenContext<'a> {
                     let offset = bytes.len();
                     bytes.extend(repeat_n(
                         0u8,
-                        self.obj_module.isa().pointer_bytes() as usize,
+                        self.cl_module.isa().pointer_bytes() as usize,
                     ));
 
                     let field_gv =
                         included_datas.entry(field_data_id).or_insert_with(|| {
-                            self.obj_module
+                            self.cl_module
                                 .declare_data_in_data(*field_data_id, &mut desc)
                         });
                     desc.write_data_addr(offset as u32, field_gv.clone(), 0);
@@ -189,17 +189,17 @@ impl<'a> CodegenContext<'a> {
                     let offset = bytes.len();
                     bytes.extend(repeat_n(
                         0u8,
-                        self.obj_module.isa().pointer_bytes() as usize,
+                        self.cl_module.isa().pointer_bytes() as usize,
                     ));
 
                     let func = included_funcs.entry(func_id).or_insert_with(|| {
-                        self.obj_module.declare_func_in_data(*func_id, &mut desc)
+                        self.cl_module.declare_func_in_data(*func_id, &mut desc)
                     });
                     desc.write_function_addr(offset as u32, func.clone());
                 }
                 _ => {
                     let res =
-                        item.serialize(&mut bytes, self.obj_module.isa().endianness());
+                        item.serialize(&mut bytes, self.cl_module.isa().endianness());
                     if res.is_err() {
                         return None;
                     }
@@ -208,7 +208,7 @@ impl<'a> CodegenContext<'a> {
         }
 
         desc.define(bytes.into());
-        self.obj_module.define_data(data_id, &desc).unwrap();
+        self.cl_module.define_data(data_id, &desc).unwrap();
 
         self.data.insert(data_id, desc);
         self.tuples.insert(values, data_id);
@@ -217,12 +217,12 @@ impl<'a> CodegenContext<'a> {
 
     pub fn create_writable_for_type(&mut self, ty: &b::Type) -> cl::DataId {
         let data_id = self
-            .obj_module
+            .cl_module
             .declare_anonymous_data(false, false)
             .unwrap();
         let mut desc = cl::DataDescription::new();
-        desc.define_zeroinit(types::get_size(ty, self.modules, &self.obj_module) as usize);
-        self.obj_module.define_data(data_id, &desc).unwrap();
+        desc.define_zeroinit(types::get_size(ty, self.modules, &self.cl_module) as usize);
+        self.cl_module.define_data(data_id, &desc).unwrap();
 
         self.data.insert(data_id, desc);
         data_id
@@ -242,7 +242,7 @@ impl<'a> CodegenContext<'a> {
         let mut sig = func_binding.proto.signature.clone();
         sig.params.splice(
             0..0,
-            [cl::AbiParam::new(self.obj_module.isa().pointer_type())],
+            [cl::AbiParam::new(self.cl_module.isa().pointer_type())],
         );
 
         let func = cl::Function::with_name_signature(
@@ -255,7 +255,7 @@ impl<'a> CodegenContext<'a> {
         let symbol_name = format!("{}$$closure", &func_binding.symbol_name);
 
         let func_id = self
-            .obj_module
+            .cl_module
             .declare_function(&symbol_name, cl::Linkage::Local, &func.signature)
             .unwrap();
 

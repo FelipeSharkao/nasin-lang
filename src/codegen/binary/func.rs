@@ -72,7 +72,7 @@ impl<'a> FuncCodegen<'a, '_> {
                 params,
                 &cl_values,
                 &self.ctx.modules,
-                &self.ctx.obj_module
+                &self.ctx.cl_module
             ),
         ));
 
@@ -289,7 +289,7 @@ impl<'a> FuncCodegen<'a, '_> {
                     for native_ty in types::get_type_canonical(
                         ty,
                         self.ctx.modules,
-                        &self.ctx.obj_module,
+                        &self.ctx.cl_module,
                     ) {
                         builder.append_block_param(next_block, native_ty);
                     }
@@ -360,7 +360,7 @@ impl<'a> FuncCodegen<'a, '_> {
                     for native_ty in types::get_type_canonical(
                         ty,
                         self.ctx.modules,
-                        &self.ctx.obj_module,
+                        &self.ctx.cl_module,
                     ) {
                         builder.append_block_param(continue_block, native_ty);
                     }
@@ -540,16 +540,16 @@ impl<'a> FuncCodegen<'a, '_> {
                     self.ctx.closure_for_func(*func_mod_idx, *func_idx);
                 let closure_func_ref = self
                     .ctx
-                    .obj_module
+                    .cl_module
                     .declare_func_in_func(closure_func_id, builder.func);
                 let closure_ptr = builder.ins().func_addr(
-                    self.ctx.obj_module.isa().pointer_type(),
+                    self.ctx.cl_module.isa().pointer_type(),
                     closure_func_ref,
                 );
 
                 let env = builder
                     .ins()
-                    .iconst(self.ctx.obj_module.isa().pointer_type(), 0);
+                    .iconst(self.ctx.cl_module.isa().pointer_type(), 0);
                 let value = types::FuncAsValue::new(closure_ptr, env, proto);
 
                 self.values.insert(
@@ -583,21 +583,21 @@ impl<'a> FuncCodegen<'a, '_> {
                     for native_ty in types::get_type_canonical(
                         &v.ty,
                         self.ctx.modules,
-                        &self.ctx.obj_module,
+                        &self.ctx.cl_module,
                     ) {
                         offset += native_ty.bytes();
                     }
                 }
 
                 let source_value =
-                    source.src.add_by_ref(&mut self.ctx.obj_module, builder);
+                    source.src.add_by_ref(&mut self.ctx.cl_module, builder);
 
                 let v = instr.results[0];
                 let ty = &self.ctx.modules[mod_idx].values[v].ty;
 
                 let mut values = vec![];
                 for native_ty in
-                    types::get_type_canonical(ty, self.ctx.modules, &self.ctx.obj_module)
+                    types::get_type_canonical(ty, self.ctx.modules, &self.ctx.cl_module)
                 {
                     let value = builder.ins().load(
                         native_ty,
@@ -614,7 +614,7 @@ impl<'a> FuncCodegen<'a, '_> {
                     v,
                     &values,
                     self.ctx.modules,
-                    &self.ctx.obj_module,
+                    &self.ctx.cl_module,
                 );
                 assert!(values.len() == n, "we should have consumed all values");
 
@@ -631,7 +631,7 @@ impl<'a> FuncCodegen<'a, '_> {
 
                 match &self.ctx.modules[ty_ref.mod_idx].typedefs[ty_ref.idx].body {
                     b::TypeDefBody::Record(rec) => {
-                        let value = source.src.add_by_ref(&self.ctx.obj_module, builder);
+                        let value = source.src.add_by_ref(&self.ctx.cl_module, builder);
                         let method = &rec.methods[name];
 
                         self.values.insert(
@@ -650,18 +650,18 @@ impl<'a> FuncCodegen<'a, '_> {
                             }
                             _ => {
                                 let ptr =
-                                    source.src.add_by_ref(&self.ctx.obj_module, builder);
+                                    source.src.add_by_ref(&self.ctx.cl_module, builder);
                                 let src_value = builder.ins().load(
-                                    self.ctx.obj_module.isa().pointer_type(),
+                                    self.ctx.cl_module.isa().pointer_type(),
                                     cl::MemFlags::new(),
                                     ptr,
                                     0,
                                 );
                                 let vtable_value = builder.ins().load(
-                                    self.ctx.obj_module.isa().pointer_type(),
+                                    self.ctx.cl_module.isa().pointer_type(),
                                     cl::MemFlags::new(),
                                     ptr,
-                                    self.ctx.obj_module.isa().pointer_bytes() as i32,
+                                    self.ctx.cl_module.isa().pointer_bytes() as i32,
                                 );
                                 (src_value, vtable_value)
                             }
@@ -674,11 +674,11 @@ impl<'a> FuncCodegen<'a, '_> {
                             .vtables_desc
                             .get(&(ty_ref.mod_idx, ty_ref.idx))
                             .expect("Interface should already be defined")
-                            .method_offset(name, &self.ctx.obj_module)
+                            .method_offset(name, &self.ctx.cl_module)
                             .unwrap();
 
                         let func_ptr = builder.ins().load(
-                            self.ctx.obj_module.isa().pointer_type(),
+                            self.ctx.cl_module.isa().pointer_type(),
                             cl::MemFlags::new(),
                             vtable,
                             offset as i32,
@@ -688,7 +688,7 @@ impl<'a> FuncCodegen<'a, '_> {
                             method.func_ref.0,
                             method.func_ref.1,
                             self.ctx.modules,
-                            &self.ctx.obj_module,
+                            &self.ctx.cl_module,
                         );
 
                         self.values.insert(
@@ -744,11 +744,11 @@ impl<'a> FuncCodegen<'a, '_> {
                 let vtable_data = self.ctx.vtables_impl[&vtable_ref];
                 let vtable_gv = self
                     .ctx
-                    .obj_module
+                    .cl_module
                     .declare_data_in_func(vtable_data, &mut builder.func);
                 let vtable = builder
                     .ins()
-                    .global_value(self.ctx.obj_module.isa().pointer_type(), vtable_gv);
+                    .global_value(self.ctx.cl_module.isa().pointer_type(), vtable_gv);
 
                 let src = self.use_value_by_ref(mod_idx, *v);
 
@@ -795,7 +795,7 @@ impl<'a> FuncCodegen<'a, '_> {
                         let data = this.ctx.data_for_string(s);
                         let len = types::ValueSource::uint_ptr(
                             s.len() as u64,
-                            &this.ctx.obj_module,
+                            &this.ctx.cl_module,
                         );
 
                         Some(types::RuntimeValue::new(
@@ -881,7 +881,7 @@ impl<'a> FuncCodegen<'a, '_> {
                 func_mod_idx,
                 func_idx,
                 self.ctx.modules,
-                &self.ctx.obj_module,
+                &self.ctx.cl_module,
             ),
         )
     }
@@ -923,7 +923,7 @@ impl<'a> FuncCodegen<'a, '_> {
             let stack_addr =
                 builder
                     .ins()
-                    .stack_addr(self.ctx.obj_module.isa().pointer_type(), ss, 0);
+                    .stack_addr(self.ctx.cl_module.isa().pointer_type(), ss, 0);
             args.insert(0, stack_addr);
         }
 
@@ -932,7 +932,7 @@ impl<'a> FuncCodegen<'a, '_> {
                 let func_ref = self.declared_funcs.entry(func_id).or_insert_with(|| {
                     let func_ref = self
                         .ctx
-                        .obj_module
+                        .cl_module
                         .declare_func_in_func(func_id, builder.func);
                     func_ref
                 });
@@ -981,7 +981,7 @@ impl<'a> FuncCodegen<'a, '_> {
             let item_tys = types::get_type_by_value(
                 &array_ty.item,
                 self.ctx.modules,
-                &self.ctx.obj_module,
+                &self.ctx.cl_module,
             );
 
             let size =
@@ -1005,7 +1005,7 @@ impl<'a> FuncCodegen<'a, '_> {
             return None;
         };
 
-        let len = types::ValueSource::uint_ptr(vs.len() as u64, &self.ctx.obj_module);
+        let len = types::ValueSource::uint_ptr(vs.len() as u64, &self.ctx.cl_module);
 
         Some(types::RuntimeValue::new(
             Box::new(types::Slice::new(ptr, len.into())).into(),
@@ -1023,7 +1023,7 @@ impl<'a> FuncCodegen<'a, '_> {
         runtime_value.src.add_canonical(
             ty,
             &self.ctx.modules,
-            &mut self.ctx.obj_module,
+            &mut self.ctx.cl_module,
             expect_builder!(self),
         )
     }
@@ -1035,7 +1035,7 @@ impl<'a> FuncCodegen<'a, '_> {
         );
         runtime_value
             .src
-            .add_by_ref(&mut self.ctx.obj_module, expect_builder!(self))
+            .add_by_ref(&mut self.ctx.cl_module, expect_builder!(self))
     }
 
     fn use_value_by_value(&mut self, mod_idx: usize, v: b::ValueIdx) -> Vec<cl::Value> {
@@ -1047,7 +1047,7 @@ impl<'a> FuncCodegen<'a, '_> {
         runtime_value.src.add_by_value(
             ty,
             &self.ctx.modules,
-            &mut self.ctx.obj_module,
+            &mut self.ctx.cl_module,
             expect_builder!(self),
         )
     }
@@ -1093,7 +1093,7 @@ impl<'a> FuncCodegen<'a, '_> {
             b::TypeBody::U16 => parse_num!(I16),
             b::TypeBody::U32 => parse_num!(I32),
             b::TypeBody::U64 => parse_num!(I64),
-            b::TypeBody::USize => match self.ctx.obj_module.isa().pointer_bytes() {
+            b::TypeBody::USize => match self.ctx.cl_module.isa().pointer_bytes() {
                 1 => parse_num!(I8),
                 2 => parse_num!(I16),
                 4 => parse_num!(I32),
@@ -1125,7 +1125,7 @@ impl<'a> FuncCodegen<'a, '_> {
             for v in v.src.add_canonical(
                 v_ty,
                 &self.ctx.modules,
-                &mut self.ctx.obj_module,
+                &mut self.ctx.cl_module,
                 func,
             ) {
                 stored_values.push((size, v));

@@ -1,7 +1,7 @@
 use cranelift_shim as cl;
 use itertools::Itertools;
 
-pub fn dump_func(name: &str, func: &cl::Function, obj_module: &impl cl::Module) {
+pub fn dump_func(name: &str, func: &cl::Function, cl_module: &impl cl::Module) {
     // Dump the table of symbols so we can understand which global value is which
     let user_refs = func
         .global_values
@@ -26,7 +26,7 @@ pub fn dump_func(name: &str, func: &cl::Function, obj_module: &impl cl::Module) 
         let target = cl::ModuleRelocTarget::user(namespace, index);
         if cl::ModuleDeclarations::is_function(&target) {
             let func_id = cl::FuncId::from_name(&target);
-            let func_name = obj_module
+            let func_name = cl_module
                 .declarations()
                 .get_function_decl(func_id)
                 .linkage_name(func_id);
@@ -48,7 +48,7 @@ pub fn dump_signature(name: &str, sig: &cl::Signature) {
 pub fn dump_data(
     data_id: &cranelift_shim::DataId,
     desc: &cranelift_shim::DataDescription,
-    obj_module: &impl cl::Module,
+    cl_module: &impl cl::Module,
 ) {
     let data_init = &desc.init;
     println!("{} [{}] =", get_data_name(*data_id), data_init.size());
@@ -94,7 +94,7 @@ pub fn dump_data(
 
         i = pos as usize;
         if let Some(name) = reloc {
-            let len = obj_module.isa().pointer_bytes() as usize;
+            let len = cl_module.isa().pointer_bytes() as usize;
             i += len;
             println!("   {}  ; <{}>", " 00".repeat(len), name);
         }
