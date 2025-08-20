@@ -15,98 +15,6 @@ pub struct RuntimeValue {
     pub mod_idx: usize,
     pub value_idx: b::ValueIdx,
 }
-impl RuntimeValue {
-    pub fn ty<'m>(&self, modules: &'m [b::Module]) -> &'m b::Type {
-        &modules[self.mod_idx].values[self.value_idx].ty
-    }
-
-    pub fn bytes(&self, modules: &[b::Module], obj_module: &impl cl::Module) -> u32 {
-        get_size(self.ty(modules), modules, obj_module)
-    }
-
-    pub fn native_type(
-        &self,
-        modules: &[b::Module],
-        obj_module: &impl cl::Module,
-    ) -> Vec<cl::Type> {
-        get_type(self.ty(modules), modules, obj_module)
-    }
-
-    /// Add value to function as a single Cranelift value. Values that are only logically
-    /// grouped will be added to a stack slot and a pointer to it will be returned.
-    pub fn add_value_to_func(
-        &self,
-        obj_module: &impl cl::Module,
-        func: &mut cl::FunctionBuilder,
-    ) -> cl::Value {
-        match &self.src {
-            ValueSource::Value(v) => *v,
-            ValueSource::I8(n) => func.ins().iconst(cl::types::I8, *n as i64),
-            ValueSource::I16(n) => func.ins().iconst(cl::types::I16, *n as i64),
-            ValueSource::I32(n) => func.ins().iconst(cl::types::I32, *n as i64),
-            ValueSource::I64(n) => {
-                let n = unsafe { mem::transmute_copy::<u64, i64>(&n) };
-                func.ins().iconst(cl::types::I64, n)
-            }
-            ValueSource::F32(n) => func.ins().f32const(n.to_float()),
-            ValueSource::F64(n) => func.ins().f64const(n.to_float()),
-            ValueSource::Data(data_id) => {
-                let field_gv = obj_module.declare_data_in_func(*data_id, &mut func.func);
-                func.ins()
-                    .global_value(obj_module.isa().pointer_type(), field_gv)
-            }
-            ValueSource::StackSlot(ss) => {
-                func.ins()
-                    .stack_addr(obj_module.isa().pointer_type(), *ss, 0)
-            }
-            ValueSource::FuncAsValue(..) => {
-                todo!("func as value")
-            }
-            ValueSource::DynDispatched(..) => {
-                todo!("dyn dispatched")
-            }
-            ValueSource::Func(..)
-            | ValueSource::AppliedMethod(..)
-            | ValueSource::AppliedMethodInderect(..) => {
-                todo!("function references")
-            }
-        }
-    }
-
-    /// Add values to function as multiple Cranelift value. Values that are only logically
-    /// grouped will continue to do so. Does not guarantee that the returned value was
-    /// cloned and is inline.
-    pub fn add_values_to_func(
-        &self,
-        obj_module: &impl cl::Module,
-        func: &mut cl::FunctionBuilder,
-    ) -> Vec<cl::Value> {
-        match &self.src {
-            ValueSource::Value(_)
-            | ValueSource::I8(_)
-            | ValueSource::I16(_)
-            | ValueSource::I32(_)
-            | ValueSource::I64(_)
-            | ValueSource::F32(_)
-            | ValueSource::F64(_)
-            | ValueSource::Data(_)
-            | ValueSource::StackSlot(_) => {
-                vec![self.add_value_to_func(obj_module, func)]
-            }
-            ValueSource::FuncAsValue(func_as_value) => {
-                vec![func_as_value.ptr, func_as_value.env]
-            }
-            ValueSource::DynDispatched(dispatched) => {
-                vec![dispatched.src, dispatched.vtable]
-            }
-            ValueSource::Func(..)
-            | ValueSource::AppliedMethod(..)
-            | ValueSource::AppliedMethodInderect(..) => {
-                todo!("function references")
-            }
-        }
-    }
-}
 
 #[derive(Debug, Display, Clone, PartialEq, Eq, Hash, From)]
 pub enum ValueSource {
@@ -122,9 +30,15 @@ pub enum ValueSource {
     F32(F32Bits),
     #[display("f64 {}", _0.to_float())]
     F64(F64Bits),
-    Value(cl::Value),
+    #[from(skip)]
+    Primitive(cl::Value),
+    #[from(skip)]
+    #[display("ptr {}", _0)]
+    Ptr(cl::Value),
     Data(cl::DataId),
     StackSlot(cl::StackSlot),
+    #[display("{}", &*_0)]
+    Slice(Box<Slice>),
     Func(cl::FuncId),
     FuncAsValue(FuncAsValue),
     #[display("method {}-{} <- {_0}", _1.0, _1.1)]
@@ -135,6 +49,16 @@ pub enum ValueSource {
     DynDispatched(DynDispatched),
 }
 impl ValueSource {
+    pub fn uint_ptr(v: u64, obj_module: &impl cl::Module) -> Self {
+        match obj_module.isa().pointer_bytes() {
+            1 => Self::I8(v as u8),
+            2 => Self::I16(v as u16),
+            4 => Self::I32(v as u32),
+            8 => Self::I64(v as u64),
+            _ => panic!("how many bytes?"),
+        }
+    }
+
     pub fn serialize(
         &self,
         bytes: &mut Vec<u8>,
@@ -156,7 +80,12 @@ impl ValueSource {
             ValueSource::I64(n) => serialize_number!(n),
             ValueSource::F32(n) => serialize_number!(n.to_float()),
             ValueSource::F64(n) => serialize_number!(n.to_float()),
-            ValueSource::Value(..)
+            ValueSource::Slice(slice) => {
+                slice.ptr.serialize(bytes, endianess)?;
+                slice.len.serialize(bytes, endianess)?;
+            }
+            ValueSource::Primitive(..)
+            | ValueSource::Ptr(..)
             | ValueSource::Data(..)
             | ValueSource::StackSlot(..)
             | ValueSource::Func(..)
@@ -169,13 +98,14 @@ impl ValueSource {
         Ok(())
     }
 
-    /// Creates a new ValueSource that replaces the inner value source with the provided
-    /// values. The number of items and order required are defined by the kind of value
-    /// specified, and should remain the same. Assumes that the place of the value is the
-    /// same, i.g., referenced values stay referenced and inline values stays inline.
-    pub fn with_values(&self, values: &[cl::Value]) -> Self {
+    /// Returns the number of values it would be needed to replace the inner value source.
+    /// The number of items and order required are defined by the kind of value specified,
+    /// and should remain the same. Assumes that the place of the value is the same, i.g.,
+    /// referenced values stay referenced and inline values stays inline.
+    pub fn count_values(&self) -> usize {
         match self {
-            ValueSource::Value(_)
+            ValueSource::Primitive(_)
+            | ValueSource::Ptr(_)
             | ValueSource::I8(_)
             | ValueSource::I16(_)
             | ValueSource::I32(_)
@@ -183,17 +113,186 @@ impl ValueSource {
             | ValueSource::F32(_)
             | ValueSource::F64(_)
             | ValueSource::Data(_)
-            | ValueSource::StackSlot(_) => {
-                assert_eq!(values.len(), 1);
-                values[0].into()
+            | ValueSource::StackSlot(_) => 1,
+            ValueSource::FuncAsValue(..) | ValueSource::DynDispatched(..) => 2,
+            ValueSource::Slice(slice) => {
+                slice.ptr.count_values() + slice.len.count_values()
+            }
+            ValueSource::Func(..)
+            | ValueSource::AppliedMethod(..)
+            | ValueSource::AppliedMethodInderect(..) => {
+                todo!("function references")
+            }
+        }
+    }
+
+    /// Creates a new ValueSource that replaces the inner value source with the provided
+    /// values. The number of items and order required are defined by the kind of value
+    /// specified, and should remain the same. If this number is unknown, it should be
+    /// queried with the `count_values` method. Assumes that the place of the value is the
+    /// same, i.g., referenced values stay referenced and inline values stays inline.
+    pub fn with_values(&self, values: &[cl::Value]) -> Self {
+        assert_eq!(values.len(), self.count_values());
+        match self {
+            ValueSource::Primitive(_)
+            | ValueSource::I8(_)
+            | ValueSource::I16(_)
+            | ValueSource::I32(_)
+            | ValueSource::I64(_)
+            | ValueSource::F32(_)
+            | ValueSource::F64(_) => ValueSource::Primitive(values[0]),
+            ValueSource::Ptr(_) | ValueSource::Data(_) | ValueSource::StackSlot(_) => {
+                ValueSource::Ptr(values[0])
+            }
+            ValueSource::Slice(slice) => {
+                let ptr_count = slice.ptr.count_values();
+                let ptr = slice.ptr.with_values(&values[..ptr_count]);
+                let len = slice.len.with_values(&values[ptr_count..]);
+                Box::new(Slice::new(ptr, len)).into()
             }
             ValueSource::FuncAsValue(func_as_value) => {
-                assert_eq!(values.len(), 2);
                 FuncAsValue::new(values[0], values[1], func_as_value.proto.clone()).into()
             }
             ValueSource::DynDispatched(..) => {
-                assert_eq!(values.len(), 2);
                 DynDispatched::new(values[0], values[1]).into()
+            }
+            ValueSource::Func(..)
+            | ValueSource::AppliedMethod(..)
+            | ValueSource::AppliedMethodInderect(..) => {
+                todo!("function references")
+            }
+        }
+    }
+
+    /// Add value to function as multiple Cranelift value, by value or by reference,
+    /// depending on the ABI for the type.
+    pub fn add_canonical(
+        &self,
+        ty: &b::Type,
+        modules: &[b::Module],
+        obj_module: &impl cl::Module,
+        func: &mut cl::FunctionBuilder,
+    ) -> Vec<cl::Value> {
+        match &ty.body {
+            b::TypeBody::TypeRef(t) if t.is_self => {
+                vec![self.add_by_ref(obj_module, func)]
+            }
+            b::TypeBody::TypeRef(t) => match &modules[t.mod_idx].typedefs[t.idx].body {
+                b::TypeDefBody::Record(_) => vec![self.add_by_ref(obj_module, func)],
+                b::TypeDefBody::Interface(_) => {
+                    self.add_by_value(ty, modules, obj_module, func)
+                }
+            },
+            b::TypeBody::Ptr(_) => vec![self.add_by_ref(obj_module, func)],
+            _ => self.add_by_value(ty, modules, obj_module, func),
+        }
+    }
+
+    /// Add value to function as a single Cranelift value, by reference. Values that are
+    /// only logically grouped will be added to a stack slot and a pointer to it will be
+    /// returned.
+    pub fn add_by_ref(
+        &self,
+        obj_module: &impl cl::Module,
+        func: &mut cl::FunctionBuilder,
+    ) -> cl::Value {
+        match self {
+            ValueSource::Ptr(v) => *v,
+            ValueSource::Data(data_id) => {
+                let field_gv = obj_module.declare_data_in_func(*data_id, &mut func.func);
+                func.ins()
+                    .global_value(obj_module.isa().pointer_type(), field_gv)
+            }
+            ValueSource::StackSlot(ss) => {
+                func.ins()
+                    .stack_addr(obj_module.isa().pointer_type(), *ss, 0)
+            }
+            ValueSource::I8(..)
+            | ValueSource::I16(..)
+            | ValueSource::I32(..)
+            | ValueSource::I64(..)
+            | ValueSource::F32(..)
+            | ValueSource::F64(..)
+            | ValueSource::Primitive(..) => {
+                todo!("add_by_ref: primitives")
+            }
+            ValueSource::Slice(..) => {
+                todo!("add_by_ref: slice")
+            }
+            ValueSource::FuncAsValue(..) => {
+                todo!("add_by_ref: func as value")
+            }
+            ValueSource::DynDispatched(..) => {
+                todo!("add_by_ref: dyn dispatched")
+            }
+            ValueSource::Func(..)
+            | ValueSource::AppliedMethod(..)
+            | ValueSource::AppliedMethodInderect(..) => {
+                todo!("add_by_ref: function references")
+            }
+        }
+    }
+
+    /// Add value to function as multiple Cranelift value, by value. Values that are only
+    /// logically grouped will continue to do so. Values that are passed by reference will
+    /// be copied and unpacked.
+    pub fn add_by_value(
+        &self,
+        ty: &b::Type,
+        modules: &[b::Module],
+        obj_module: &impl cl::Module,
+        func: &mut cl::FunctionBuilder,
+    ) -> Vec<cl::Value> {
+        match self {
+            ValueSource::Primitive(v) => vec![*v],
+            ValueSource::I8(n) => vec![func.ins().iconst(cl::types::I8, *n as i64)],
+            ValueSource::I16(n) => vec![func.ins().iconst(cl::types::I16, *n as i64)],
+            ValueSource::I32(n) => vec![func.ins().iconst(cl::types::I32, *n as i64)],
+            ValueSource::I64(n) => {
+                let n = unsafe { mem::transmute_copy::<u64, i64>(&n) };
+                vec![func.ins().iconst(cl::types::I64, n)]
+            }
+            ValueSource::F32(n) => vec![func.ins().f32const(n.to_float())],
+            ValueSource::F64(n) => vec![func.ins().f64const(n.to_float())],
+            ValueSource::Ptr(_) | ValueSource::Data(_) | ValueSource::StackSlot(_) => {
+                let v = self.add_by_ref(obj_module, func);
+                let mut values = vec![];
+                let mut offset = 0;
+                for native_ty in get_type_by_value(ty, modules, obj_module) {
+                    values.push(func.ins().load(
+                        native_ty,
+                        cl::MemFlags::new(),
+                        v,
+                        offset,
+                    ));
+                    offset += native_ty.bytes() as i32;
+                }
+                values
+            }
+            ValueSource::Slice(slice) => {
+                let ptr_value = slice.ptr.add_by_ref(obj_module, func);
+
+                let len_type_body = match obj_module.isa().pointer_bytes() {
+                    1 => b::TypeBody::I8,
+                    2 => b::TypeBody::I16,
+                    4 => b::TypeBody::I32,
+                    8 => b::TypeBody::I64,
+                    _ => panic!("how many bytes?"),
+                };
+                let len_values = slice.len.add_by_value(
+                    &b::Type::new(len_type_body, None),
+                    modules,
+                    obj_module,
+                    func,
+                );
+
+                [vec![ptr_value], len_values].concat()
+            }
+            ValueSource::FuncAsValue(func_as_value) => {
+                vec![func_as_value.ptr, func_as_value.env]
+            }
+            ValueSource::DynDispatched(dispatched) => {
+                vec![dispatched.src, dispatched.vtable]
             }
             ValueSource::Func(..)
             | ValueSource::AppliedMethod(..)
@@ -210,10 +309,14 @@ impl F32Bits {
     pub fn to_float(&self) -> f32 {
         f32::from_bits(self.0)
     }
+
+    pub fn from_float(value: f32) -> Self {
+        Self(value.to_bits())
+    }
 }
 impl From<f32> for F32Bits {
     fn from(value: f32) -> Self {
-        Self(value.to_bits())
+        Self::from_float(value)
     }
 }
 
@@ -223,11 +326,22 @@ impl F64Bits {
     pub fn to_float(&self) -> f64 {
         f64::from_bits(self.0)
     }
+
+    pub fn from_float(value: f64) -> Self {
+        Self(value.to_bits())
+    }
 }
 impl From<f64> for F64Bits {
     fn from(value: f64) -> Self {
-        Self(value.to_bits())
+        Self::from_float(value)
     }
+}
+
+#[derive(Debug, Display, Clone, PartialEq, Eq, Hash, new)]
+#[display("[{ptr}; {len}]")]
+pub struct Slice {
+    pub ptr: ValueSource,
+    pub len: ValueSource,
 }
 
 #[derive(Debug, Display, Clone, PartialEq, Eq, Hash, new)]
@@ -274,41 +388,74 @@ pub fn tuple_from_args(
     modules: &[b::Module],
     obj_module: &impl cl::Module,
 ) -> Vec<RuntimeValue> {
-    let mut cl_values = cl_values.iter();
-    macro_rules! next_value {
-        () => {
-            *cl_values.next().unwrap()
-        };
-    }
-
+    let mut i = 0;
     values
         .iter()
         .map(|v| {
-            let ty = &modules[mod_idx].values[*v].ty;
-
-            let src = match &ty.body {
-                b::TypeBody::TypeRef(ty_ref) => {
-                    let typebody = &modules[ty_ref.mod_idx].typedefs[ty_ref.idx].body;
-                    match typebody {
-                        b::TypeDefBody::Interface(_) => {
-                            DynDispatched::new(next_value!(), next_value!()).into()
-                        }
-                        b::TypeDefBody::Record(_) => next_value!().into(),
-                    }
-                }
-                b::TypeBody::Func(func_ty) => {
-                    let proto =
-                        FuncPrototype::from_closure_type(func_ty, modules, obj_module);
-                    FuncAsValue::new(next_value!(), next_value!(), proto).into()
-                }
-                _ => next_value!().into(),
-            };
-            RuntimeValue::new(src, mod_idx, *v)
+            let (res, n) =
+                take_value_from_args(mod_idx, *v, &cl_values[i..], modules, obj_module);
+            i += n;
+            res
         })
         .collect_vec()
 }
 
-pub fn get_type(
+pub fn take_value_from_args(
+    mod_idx: usize,
+    idx: usize,
+    cl_values: &[cl::Value],
+    modules: &[b::Module],
+    obj_module: &impl cl::Module,
+) -> (RuntimeValue, usize) {
+    let ty = &modules[mod_idx].values[idx].ty;
+
+    let mut n = 0;
+    let mut next = || {
+        let value = cl_values[n];
+        n += 1;
+        value
+    };
+
+    let src = match &ty.body {
+        b::TypeBody::TypeRef(ty_ref) => {
+            let typebody = &modules[ty_ref.mod_idx].typedefs[ty_ref.idx].body;
+            match typebody {
+                b::TypeDefBody::Interface(_) => DynDispatched::new(next(), next()).into(),
+                b::TypeDefBody::Record(_) => ValueSource::Ptr(next()),
+            }
+        }
+        b::TypeBody::String(_) | b::TypeBody::Array(_) => Box::new(Slice::new(
+            ValueSource::Ptr(next()),
+            ValueSource::Primitive(next()),
+        ))
+        .into(),
+        b::TypeBody::Func(func_ty) => {
+            let proto = FuncPrototype::from_closure_type(func_ty, modules, obj_module);
+            FuncAsValue::new(next(), next(), proto).into()
+        }
+        _ => ValueSource::Primitive(next()),
+    };
+
+    (RuntimeValue::new(src, mod_idx, idx), n)
+}
+
+pub fn get_type_canonical(
+    ty: &b::Type,
+    modules: &[b::Module],
+    obj_module: &impl cl::Module,
+) -> Vec<cl::Type> {
+    match &ty.body {
+        b::TypeBody::TypeRef(t) if t.is_self => vec![obj_module.isa().pointer_type()],
+        b::TypeBody::TypeRef(t) => match &modules[t.mod_idx].typedefs[t.idx].body {
+            b::TypeDefBody::Record(_) => vec![obj_module.isa().pointer_type()],
+            b::TypeDefBody::Interface(_) => vec![obj_module.isa().pointer_type(); 2],
+        },
+        b::TypeBody::Ptr(_) => vec![obj_module.isa().pointer_type()],
+        _ => get_type_by_value(ty, modules, obj_module),
+    }
+}
+
+pub fn get_type_by_value(
     ty: &b::Type,
     modules: &[b::Module],
     obj_module: &impl cl::Module,
@@ -325,16 +472,20 @@ pub fn get_type(
         b::TypeBody::U64 => vec![cl::types::I64],
         b::TypeBody::F32 => vec![cl::types::F32],
         b::TypeBody::F64 => vec![cl::types::F64],
-        b::TypeBody::USize
-        | b::TypeBody::String(_)
-        | b::TypeBody::Array(_)
-        | b::TypeBody::Ptr(_) => vec![obj_module.isa().pointer_type()],
-        b::TypeBody::TypeRef(t) if t.is_self => vec![obj_module.isa().pointer_type()],
+        b::TypeBody::USize | b::TypeBody::Array(_) | b::TypeBody::Ptr(_) => {
+            vec![obj_module.isa().pointer_type()]
+        }
         b::TypeBody::TypeRef(t) => match &modules[t.mod_idx].typedefs[t.idx].body {
-            b::TypeDefBody::Record(_) => vec![obj_module.isa().pointer_type()],
+            b::TypeDefBody::Record(rec) => rec
+                .fields
+                .values()
+                .flat_map(|field| get_type_by_value(&field.ty, modules, obj_module))
+                .collect_vec(),
             b::TypeDefBody::Interface(_) => vec![obj_module.isa().pointer_type(); 2],
         },
-        b::TypeBody::Func(_) => vec![obj_module.isa().pointer_type(); 2],
+        b::TypeBody::Func(_) | b::TypeBody::String(_) | b::TypeBody::Array(_) => {
+            vec![obj_module.isa().pointer_type(); 2]
+        }
         b::TypeBody::AnyNumber
         | b::TypeBody::AnySignedNumber
         | b::TypeBody::AnyFloat
@@ -354,20 +505,12 @@ pub fn get_size(
 
     match &ty.body {
         b::TypeBody::Void | b::TypeBody::Never => 0,
-        b::TypeBody::String(s) => s.len.map_or(ptr, |len| ptr + len + 1),
-        b::TypeBody::Array(a) => a.len.map_or(ptr, |len| {
-            ptr + len
-                * get_type(&a.item, modules, obj_module)
-                    .into_iter()
-                    .map(|ty| ty.bytes())
-                    .sum::<u32>()
-        }),
         b::TypeBody::TypeRef(t) if t.is_self => ptr,
         b::TypeBody::TypeRef(t) => match &modules[t.mod_idx].typedefs[t.idx].body {
             b::TypeDefBody::Record(rec) => rec
                 .fields
                 .values()
-                .flat_map(|field| get_type(&field.ty, modules, obj_module))
+                .flat_map(|field| get_type_by_value(&field.ty, modules, obj_module))
                 .map(|ty| ty.bytes())
                 .sum(),
             b::TypeDefBody::Interface(_) => ptr * 2,
@@ -384,7 +527,9 @@ pub fn get_size(
         | b::TypeBody::USize
         | b::TypeBody::F32
         | b::TypeBody::F64
-        | b::TypeBody::Ptr(_) => get_type(ty, modules, obj_module)
+        | b::TypeBody::String(_)
+        | b::TypeBody::Array(_)
+        | b::TypeBody::Ptr(_) => get_type_by_value(ty, modules, obj_module)
             .into_iter()
             .map(|ty| ty.bytes())
             .sum(),
@@ -403,22 +548,13 @@ pub enum ResultPolicy {
     Global,
     Return(ReturnPolicy),
 }
-impl ResultPolicy {
-    pub fn from_ret_type(
-        ty: &b::Type,
-        modules: &[b::Module],
-        obj_module: &impl cl::Module,
-    ) -> Self {
-        Self::Return(ReturnPolicy::from_ret_type(ty, modules, obj_module))
-    }
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Display)]
 pub enum ReturnPolicy {
     #[display("normal")]
     Normal,
-    #[display("struct_return({_0})")]
-    StructReturn(u32),
+    #[display("struct({_0})")]
+    Struct(u32),
     #[display("no_return")]
     NoReturn,
     #[display("void")]
@@ -445,7 +581,7 @@ impl ReturnPolicy {
             Self::NoReturn
         } else if ty.is_aggregate(modules) {
             let size = get_size(ty, modules, obj_module);
-            Self::StructReturn(size as u32)
+            Self::Struct(size as u32)
         } else if matches!(&ty.body, b::TypeBody::Void) {
             Self::Void
         } else {
@@ -473,7 +609,7 @@ impl FuncPrototype {
         let ret_ty = &modules[mod_idx].values[func.ret].ty;
         let ret_policy = ReturnPolicy::from_ret_type(ret_ty, modules, obj_module);
         match ret_policy {
-            ReturnPolicy::StructReturn(_) => {
+            ReturnPolicy::Struct(_) => {
                 let ret_param = cl::AbiParam::special(
                     obj_module.isa().pointer_type(),
                     cl::ArgumentPurpose::StructReturn,
@@ -481,7 +617,7 @@ impl FuncPrototype {
                 sig.params.push(ret_param);
             }
             ReturnPolicy::Normal => {
-                let native_ty = get_type(ret_ty, modules, obj_module);
+                let native_ty = get_type_canonical(ret_ty, modules, obj_module);
                 assert_eq!(native_ty.len(), 1);
                 sig.returns.push(cl::AbiParam::new(native_ty[0]));
             }
@@ -490,7 +626,7 @@ impl FuncPrototype {
 
         for param in &func.params {
             let ty = &modules[mod_idx].values[*param].ty;
-            for native_ty in get_type(ty, modules, obj_module) {
+            for native_ty in get_type_canonical(ty, modules, obj_module) {
                 sig.params.push(cl::AbiParam::new(native_ty));
             }
         }
@@ -508,7 +644,7 @@ impl FuncPrototype {
         let ret_ty = &func_ty.ret;
         let ret_policy = ReturnPolicy::from_ret_type(ret_ty, modules, obj_module);
         match ret_policy {
-            ReturnPolicy::StructReturn(_) => {
+            ReturnPolicy::Struct(_) => {
                 let ret_param = cl::AbiParam::special(
                     obj_module.isa().pointer_type(),
                     cl::ArgumentPurpose::StructReturn,
@@ -516,7 +652,7 @@ impl FuncPrototype {
                 sig.params.push(ret_param);
             }
             ReturnPolicy::Normal => {
-                let native_ty = get_type(ret_ty, modules, obj_module);
+                let native_ty = get_type_canonical(ret_ty, modules, obj_module);
                 assert_eq!(native_ty.len(), 1);
                 sig.returns.push(cl::AbiParam::new(native_ty[0]));
             }
@@ -524,7 +660,7 @@ impl FuncPrototype {
         }
 
         for param in &func_ty.params {
-            for native_ty in get_type(param, modules, obj_module) {
+            for native_ty in get_type_canonical(param, modules, obj_module) {
                 sig.params.push(cl::AbiParam::new(native_ty));
             }
         }

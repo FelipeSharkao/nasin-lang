@@ -69,7 +69,7 @@ impl<'a, 't> TypeParser<'a, 't> {
                     "Ptr" => {
                         // TODO: Better error handling
                         assert!(args.len() == 1, "Ptr accepts only one parameter");
-                        b::TypeBody::Ptr(args.into_item(0).unwrap().into())
+                        b::TypeBody::Ptr(Some(args.into_item(0).unwrap().into()))
                     }
                     _ => panic!("unhandled generic type: `{name}`"),
                 }

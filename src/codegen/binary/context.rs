@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::HashMap;
 
 use cranelift_shim::{self as cl, Module};
@@ -19,9 +20,10 @@ pub struct FuncBinding {
 }
 
 #[derive(Debug, Clone)]
-pub struct GlobalBinding {
+pub struct GlobalBinding<'a> {
     pub symbol_name: String,
     pub value: types::RuntimeValue,
+    pub ty: Cow<'a, b::Type>,
     pub is_const: bool,
 }
 
@@ -48,7 +50,7 @@ pub struct CodegenContext<'a> {
     #[new(default)]
     pub data: HashMap<cl::DataId, cl::DataDescription>,
     #[new(default)]
-    pub globals: HashMap<(usize, usize), GlobalBinding>,
+    pub globals: HashMap<(usize, usize), GlobalBinding<'a>>,
     #[new(default)]
     pub vtables_desc: HashMap<(usize, usize), types::VTableDesc>,
     #[new(default)]
@@ -81,9 +83,10 @@ impl<'a> CodegenContext<'a> {
             for instr in &global.body {
                 if let b::InstrBody::Break(v) = &instr.body {
                     if let Some(v) = v {
-                        codegen
-                            .values
-                            .insert(global.value, codegen.values[v].clone());
+                        codegen.values.insert(
+                            (mod_idx, global.value),
+                            codegen.values[&(mod_idx, *v)].clone(),
+                        );
                     }
                     break;
                 }
@@ -96,7 +99,10 @@ impl<'a> CodegenContext<'a> {
                 }
             }
 
-            (codegen.ctx, (codegen.values[&global.value].clone(), true))
+            (
+                codegen.ctx,
+                (codegen.values[&(mod_idx, global.value)].clone(), true),
+            )
         });
 
         self.globals.insert(
@@ -104,6 +110,7 @@ impl<'a> CodegenContext<'a> {
             GlobalBinding {
                 symbol_name,
                 value,
+                ty: Cow::Borrowed(&global_value.ty),
                 is_const,
             },
         );
@@ -132,19 +139,7 @@ impl<'a> CodegenContext<'a> {
             .unwrap();
         let mut desc = cl::DataDescription::new();
 
-        let mut bytes = vec![];
-
-        match self.obj_module.isa().pointer_bytes() {
-            1 => types::ValueSource::I8(value.len() as u8),
-            2 => types::ValueSource::I16(value.len() as u16),
-            4 => types::ValueSource::I32(value.len() as u32),
-            8 => types::ValueSource::I64(value.len() as u64),
-            _ => panic!("how many bytes?"),
-        }
-        .serialize(&mut bytes, self.obj_module.isa().endianness())
-        .unwrap();
-
-        bytes.extend(value.as_bytes());
+        let mut bytes = value.as_bytes().to_vec();
         // Append a null terminator to avoid problems if used as a C string
         bytes.extend([0]);
 
@@ -154,21 +149,6 @@ impl<'a> CodegenContext<'a> {
         self.data.insert(data_id, desc);
         self.strings.insert(value.to_string(), data_id);
         data_id
-    }
-
-    pub fn data_for_array(
-        &mut self,
-        mut values: Vec<types::ValueSource>,
-    ) -> Option<cl::DataId> {
-        let len = match self.obj_module.isa().pointer_bytes() {
-            1 => types::ValueSource::I8(values.len() as u8),
-            2 => types::ValueSource::I16(values.len() as u16),
-            4 => types::ValueSource::I32(values.len() as u32),
-            8 => types::ValueSource::I64(values.len() as u64),
-            _ => panic!("how many bytes?"),
-        };
-        values.insert(0, len);
-        self.data_for_tuple(values)
     }
 
     pub fn data_for_tuple(

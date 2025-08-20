@@ -2,7 +2,7 @@ STDIN_FILENO:  i32 = 0
 STDOUT_FILENO: i32 = 1
 STDERR_FILENO: i32 = 2
 
-EX_OK:          i32 = 0 
+EX_OK:          i32 = 0
 EX__BASE:       i32 = 64
 EX_USAGE:       i32 = 64
 EX_DATAERR:     i32 = 65
@@ -26,13 +26,13 @@ _exit(code: i32): never @extern("exit")
 NL = "\n"
 
 print(message: str): bool =
-    let _ = _write(STDOUT_FILENO, @str_ptr(message, 0), @str_len(message))
-    let _ = _write(STDOUT_FILENO, @str_ptr(NL, 0), @str_len(NL))
+    let _ = _write(STDOUT_FILENO, @str_ptr(message), @str_len(message))
+    let _ = _write(STDOUT_FILENO, @str_ptr(NL), @str_len(NL))
     true
 
 eprint(message: str): bool =
-    let _ = _write(STDERR_FILENO, @str_ptr(message, 0), @str_len(message))
-    let _ = _write(STDERR_FILENO, @str_ptr(NL, 0), @str_len(NL))
+    let _ = _write(STDERR_FILENO, @str_ptr(message), @str_len(message))
+    let _ = _write(STDERR_FILENO, @str_ptr(NL), @str_len(NL))
     true
 
 assert(cond: bool, desc: str): bool =

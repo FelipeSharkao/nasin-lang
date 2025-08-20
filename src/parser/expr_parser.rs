@@ -449,45 +449,30 @@ impl<'a, 't> ExprParser<'a, 't> {
 
     fn add_macro(&mut self, name: &str, args: &[ts::Node<'t>], loc: b::Loc) -> ValueRef {
         match name {
-            "str_len" | "array_len" => {
+            "str_len" => {
                 // TODO: better error handling
-                assert!(args.len() == 1, "@{name}() expects a single argument");
+                assert!(args.len() == 1, "@str_len() expects a single argument");
 
                 let source = self.add_expr_node(args[0], false);
                 let source_v = self.use_value_ref(&source);
 
-                let instr_body = match name {
-                    "str_len" => b::InstrBody::StrLen(source_v),
-                    "array_len" => b::InstrBody::ArrayLen(source_v),
-                    _ => unreachable!(),
-                };
-
-                let v = self.add_instr_with_result(b::Instr::new(instr_body, Some(loc)));
+                let v = self.add_instr_with_result(b::Instr::new(
+                    b::InstrBody::StrLen(source_v),
+                    Some(loc),
+                ));
                 ValueRef::new(ValueRefBody::Value(v), Some(loc))
             }
-            "str_ptr" | "array_ptr" => {
+            "str_ptr" => {
                 // TODO: better error handling
-                assert!(args.len() == 2, "@{name}() expects 2 arguments");
+                assert!(args.len() == 1, "@str_ptr() expects a single argument");
 
                 let source = self.add_expr_node(args[0], false);
-
-                let ValueRefBody::Number(idx) = self.add_expr_node(args[1], false).body
-                else {
-                    // TODO: better error handling
-                    panic!("index can only be a number");
-                };
-                // TODO: better error handling
-                let idx: u64 = idx.parse().expect("index is not a valid number");
-
                 let source_v = self.use_value_ref(&source);
 
-                let instr_body = match name {
-                    "str_ptr" => b::InstrBody::StrPtr(source_v, idx),
-                    "array_ptr" => b::InstrBody::ArrayPtr(source_v, idx),
-                    _ => unreachable!(),
-                };
-
-                let v = self.add_instr_with_result(b::Instr::new(instr_body, Some(loc)));
+                let v = self.add_instr_with_result(b::Instr::new(
+                    b::InstrBody::StrPtr(source_v),
+                    Some(loc),
+                ));
                 ValueRef::new(ValueRefBody::Value(v), Some(loc))
             }
             _ => {

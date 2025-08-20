@@ -1,4 +1,5 @@
 mod context;
+mod dump;
 mod func;
 mod types;
 
@@ -209,8 +210,12 @@ impl BinaryCodegen<'_> {
                     continue;
                 };
 
-                let gv = self.ctx.modules[i].globals[j].value;
-                let ty = &self.ctx.modules[i].values[gv].ty;
+                let types::ValueSource::Data(data_id) = &global.value.src else {
+                    panic!("non const global should be a writable data");
+                };
+
+                let gv = codegen.ctx.modules[i].globals[j].value;
+                let ty = &codegen.ctx.modules[i].values[gv].ty;
 
                 let start_block = codegen.scopes.last().block;
 
@@ -222,19 +227,26 @@ impl BinaryCodegen<'_> {
                     ty: Some(Cow::Borrowed(ty)),
                 });
 
+                codegen
+                    .values
+                    .insert((i, gv), types::RuntimeValue::new((*data_id).into(), i, gv));
+
                 codegen.add_body(
-                    &self.ctx.modules[i].globals[j].body,
+                    &codegen.ctx.modules[i].globals[j].body,
                     i,
                     ResultPolicy::Global,
                 );
 
                 codegen.scopes.end();
-
-                let v = &self.ctx.modules[i].globals[j].value;
-                let res = codegen.values[v].clone();
-                codegen.store_global(res, &global);
-
                 codegen.values.clear();
+
+                let builder = codegen.builder.as_mut().unwrap();
+
+                let next_block = builder.create_block();
+                builder.ins().jump(next_block, &[]);
+                builder.switch_to_block(next_block);
+
+                codegen.scopes.last_mut().block = next_block;
             }
 
             if let Some((mod_idx, func_idx)) = this.rt_start {
@@ -318,77 +330,38 @@ impl BinaryCodegen<'_> {
     fn dump_clif(&mut self) {
         println!();
 
-        if self.ctx.data.len() > 0 {
-            for (data_id, desc) in self.ctx.data.iter().sorted_by_key(|x| x.0) {
-                self.dump_data(data_id, desc);
-            }
-
-            println!();
-        }
-
-        if let Some((_, func)) = &self.entry_func {
-            println!("<_start> {func}");
-        }
+        let mut funcs = vec![];
 
         for (key, binding) in self.ctx.funcs.iter().sorted_by_key(|x| x.0) {
-            let func = self.declared_funcs.get(key);
-
-            match &func {
-                Some(func) => println!("<{}> {func}", &binding.symbol_name),
-                None => {
-                    println!("<{}> {}", &binding.symbol_name, &binding.proto.signature)
-                }
+            if let Some(func) = self.declared_funcs.get(key) {
+                funcs.push((binding.symbol_name.as_str(), func));
+            } else {
+                dump::dump_signature(&binding.symbol_name, &binding.proto.signature);
             }
         }
 
         for (_, binding) in self.ctx.funcs_closures.iter().sorted_by_key(|x| x.0) {
-            println!("<{}> {}", binding.symbol_name, binding.func);
+            funcs.push((&binding.symbol_name, &binding.func));
         }
-    }
 
-    fn dump_data(
-        &self,
-        data_id: &cranelift_shim::DataId,
-        desc: &cranelift_shim::DataDescription,
-    ) {
-        let data_init = &desc.init;
-        println!(
-            "data {} [{}] =",
-            &data_id.to_string()[6..],
-            data_init.size()
-        );
+        if let Some((_, func)) = &self.entry_func {
+            funcs.push(("_start", func));
+        }
 
-        let contents = match data_init {
-            cl::Init::Bytes { contents } if contents.len() > 0 => contents,
-            _ => return,
-        };
+        for (name, func) in funcs {
+            dump::dump_func(name, func, &self.ctx.obj_module);
+        }
 
-        for chunk in contents.chunks(8) {
-            print!("   ");
-            for byte in chunk {
-                print!(" {byte:02X}");
-            }
-            for _ in 0..(8 - chunk.len()) {
-                print!("   ");
+        if self.ctx.data.len() > 0 {
+            for (data_id, desc) in self.ctx.data.iter().sorted_by_key(|x| x.0) {
+                dump::dump_data(data_id, desc, &self.ctx.obj_module);
             }
 
-            print!("  ; ");
-            for byte in chunk {
-                if byte.is_ascii_graphic() {
-                    print!("{}", *byte as char);
-                } else {
-                    print!(".");
-                }
-            }
             println!();
         }
     }
 
     fn emit_functions(&mut self) {
-        if let Some((func_id, func)) = mem::replace(&mut self.entry_func, None) {
-            self.emit_function("_start", func_id, func);
-        }
-
         let funcs = mem::replace(&mut self.ctx.funcs, HashMap::new());
         for ((mod_idx, func_idx), binding) in funcs {
             if binding.is_extrn || binding.is_virt {
@@ -414,6 +387,10 @@ impl BinaryCodegen<'_> {
                 binding.func_id,
                 binding.func,
             );
+        }
+
+        if let Some((func_id, func)) = mem::replace(&mut self.entry_func, None) {
+            self.emit_function("_start", func_id, func);
         }
     }
 

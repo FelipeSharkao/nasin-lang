@@ -367,29 +367,6 @@ impl<'a> TypeChecker<'a> {
                     self.merge_types([v, loop_v]);
                 }
             }
-            b::InstrBody::ArrayLen(input) => {
-                let v = instr.results[0];
-                let item_ty = b::Type::unknown(None);
-                let arr_ty = b::Type::new(
-                    b::TypeBody::Array(b::ArrayType::new(item_ty.into(), None)),
-                    None,
-                );
-                self.add_constraint(*input, Constraint::Is(arr_ty));
-                let ty = b::Type::new(b::TypeBody::USize, None);
-                self.add_constraint(v, Constraint::Is(ty));
-            }
-            b::InstrBody::ArrayPtr(input, _) => {
-                let v = instr.results[0];
-                let arr_ty = b::Type::new(
-                    b::TypeBody::Array(b::ArrayType::new(
-                        b::Type::unknown(None).into(),
-                        None,
-                    )),
-                    None,
-                );
-                self.add_constraint(*input, Constraint::Is(arr_ty));
-                self.add_constraint(v, Constraint::ArrayElemPtr(*input));
-            }
             b::InstrBody::StrLen(input) => {
                 let v = instr.results[0];
                 let str_ty =
@@ -398,13 +375,13 @@ impl<'a> TypeChecker<'a> {
                 let ty = b::Type::new(b::TypeBody::USize, None);
                 self.add_constraint(v, Constraint::Is(ty));
             }
-            b::InstrBody::StrPtr(input, _) => {
+            b::InstrBody::StrPtr(input) => {
                 let v = instr.results[0];
                 let str_ty =
                     b::Type::new(b::TypeBody::String(b::StringType::new(None)), None);
                 self.add_constraint(*input, Constraint::Is(str_ty));
                 let ty = b::Type::new(
-                    b::TypeBody::Ptr(b::Type::new(b::TypeBody::U8, None).into()),
+                    b::TypeBody::Ptr(Some(b::Type::new(b::TypeBody::U8, None).into())),
                     None,
                 );
                 self.add_constraint(v, Constraint::Is(ty));
@@ -632,7 +609,7 @@ impl<'a> TypeChecker<'a> {
                     let ty = self.ctx.lock_modules()[self.mod_idx].values[target]
                         .ty
                         .clone();
-                    b::Type::new(b::TypeBody::Ptr(ty.into()), None)
+                    b::Type::new(b::TypeBody::Ptr(Some(ty.into())), None)
                 }
                 Constraint::ArrayElemPtr(target) => {
                     tracing::trace!(target, "will validate ArrayElemPtr");
@@ -640,9 +617,9 @@ impl<'a> TypeChecker<'a> {
                     let item_ty = if let b::TypeBody::Array(arr_ty) =
                         &self.ctx.lock_modules()[self.mod_idx].values[target].ty.body
                     {
-                        arr_ty.item.clone()
+                        Some(arr_ty.item.clone())
                     } else {
-                        b::Type::unknown(None).into()
+                        None
                     };
                     b::Type::new(b::TypeBody::Ptr(item_ty), None)
                 }

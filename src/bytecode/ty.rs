@@ -37,7 +37,7 @@ pub enum TypeBody {
     String(StringType),
     Array(ArrayType),
     #[from(skip)]
-    Ptr(Box<Type>),
+    Ptr(Option<Box<Type>>),
     Func(Box<FuncType>),
     TypeRef(TypeRef),
 }
@@ -84,7 +84,12 @@ impl Display for TypeBody {
                     write!(f, " {}", len)?;
                 }
             }
-            TypeBody::Ptr(ty) => write!(f, "ptr {ty}")?,
+            TypeBody::Ptr(ty) => {
+                write!(f, "ptr")?;
+                if let Some(ty) = ty {
+                    write!(f, " {ty}")?;
+                }
+            }
             TypeBody::Func(func) => {
                 write!(f, "func {}: {}", func.params.iter().join(", "), &func.ret)?
             }
@@ -132,7 +137,7 @@ impl TypeBody {
             return arr.item.body.is_not_final();
         }
 
-        if let TypeBody::Ptr(ty) = self {
+        if let TypeBody::Ptr(Some(ty)) = self {
             return ty.body.is_not_final();
         }
 
@@ -176,7 +181,7 @@ impl Type {
 
     pub fn is_aggregate(&self, modules: &[Module]) -> bool {
         match &self.body {
-            //TypeBody::String(_) | TypeBody::Array(_) => true,
+            TypeBody::String(_) | TypeBody::Array(_) => true,
             TypeBody::TypeRef(t) => match &modules[t.mod_idx].typedefs[t.idx].body {
                 TypeDefBody::Record(_) | TypeDefBody::Interface(_) => true,
             },
@@ -349,7 +354,12 @@ impl Type {
                 })
             }
             (body!(TypeBody::Ptr(a)), body!(TypeBody::Ptr(b))) => {
-                TypeBody::Ptr(a.intersection(&b, modules)?.into())
+                let ty = match (a, b) {
+                    (Some(a), Some(b)) => Some(a.intersection(b, modules)?.into()),
+                    (None, None) => None,
+                    unordered!(Some(a), None) => Some(a.clone()),
+                };
+                TypeBody::Ptr(ty)
             }
             (body!(TypeBody::Func(a)), body!(TypeBody::Func(b))) => {
                 TypeBody::Func(a.intersection(b, modules)?.into())
@@ -475,7 +485,11 @@ impl Type {
                 })
             }
             (body!(TypeBody::Ptr(a)), body!(TypeBody::Ptr(b))) => {
-                TypeBody::Ptr(a.union(&b, modules)?.into())
+                let ty = match (a, b) {
+                    (Some(a), Some(b)) => Some(a.union(b, modules)?.into()),
+                    _ => None,
+                };
+                TypeBody::Ptr(ty)
             }
             (body!(TypeBody::Func(a)), body!(TypeBody::Func(b))) => {
                 TypeBody::Func(a.union(b, modules)?.into())

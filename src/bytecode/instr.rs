@@ -46,10 +46,8 @@ pub enum InstrBody {
     Break(Option<ValueIdx>),
     Continue(Vec<ValueIdx>),
 
-    ArrayLen(ValueIdx),
-    ArrayPtr(ValueIdx, u64),
     StrLen(ValueIdx),
-    StrPtr(ValueIdx, u64),
+    StrPtr(ValueIdx),
 
     Type(ValueIdx, Type),
     Dispatch(ValueIdx, usize, usize),
@@ -134,10 +132,8 @@ impl Display for InstrBody {
                     write!(f, " v{v}")?;
                 }
             }
-            InstrBody::ArrayLen(v) => write!(f, "array_len v{v}")?,
-            InstrBody::ArrayPtr(v, idx) => write!(f, "array_ptr v{v} {idx}")?,
             InstrBody::StrLen(v) => write!(f, "str_len v{v}")?,
-            InstrBody::StrPtr(v, idx) => write!(f, "str_ptr v{v} {idx}")?,
+            InstrBody::StrPtr(v) => write!(f, "str_ptr v{v}")?,
             InstrBody::Type(v, ty) => write!(f, "type v{v} {ty}")?,
             InstrBody::Dispatch(v, mod_idx, ty_idx) => {
                 write!(f, "dispatch v{v} {mod_idx}-{ty_idx}")?
