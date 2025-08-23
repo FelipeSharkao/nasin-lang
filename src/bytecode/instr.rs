@@ -48,6 +48,8 @@ pub enum InstrBody {
 
     StrLen(ValueIdx),
     StrPtr(ValueIdx),
+    ArrayLen(ValueIdx),
+    ArrayIndex(ValueIdx, ValueIdx),
 
     Type(ValueIdx, Type),
     Dispatch(ValueIdx, usize, usize),
@@ -107,18 +109,21 @@ impl Display for InstrBody {
                     write!(f, " v{arg}")?;
                 }
             }
-            InstrBody::If(v, then, else_) => write!(
-                f,
-                "if v{v}\n  then:\n{}\n  else:\n{}",
-                utils::indented(4, then),
-                utils::indented(4, else_)
-            )?,
+            InstrBody::If(v, then_, else_) => {
+                write!(f, "if v{v}")?;
+                if then_.len() > 0 {
+                    write!(f, " then\n{}", utils::indented(4, then_))?;
+                }
+                if else_.len() > 0 {
+                    write!(f, "\nelse\n{}", utils::indented(4, else_))?;
+                }
+            }
             InstrBody::Loop(inputs, body) => {
                 write!(f, "loop")?;
                 for (v, initial_v) in inputs {
                     write!(f, " v{v}=v{initial_v}")?;
                 }
-                write!(f, ":\n{}", utils::indented(4, body))?;
+                write!(f, " where\n{}", utils::indented(4, body))?;
             }
             InstrBody::Break(v) => {
                 write!(f, "break")?;
@@ -134,6 +139,8 @@ impl Display for InstrBody {
             }
             InstrBody::StrLen(v) => write!(f, "str_len v{v}")?,
             InstrBody::StrPtr(v) => write!(f, "str_ptr v{v}")?,
+            InstrBody::ArrayLen(v) => write!(f, "array_len v{v}")?,
+            InstrBody::ArrayIndex(v, idx) => write!(f, "array_index v{v} v{idx}")?,
             InstrBody::Type(v, ty) => write!(f, "type v{v} {ty}")?,
             InstrBody::Dispatch(v, mod_idx, ty_idx) => {
                 write!(f, "dispatch v{v} {mod_idx}-{ty_idx}")?
@@ -152,6 +159,85 @@ pub struct Instr {
     pub results: Vec<ValueIdx>,
 }
 impl Instr {
+    pub fn get_global(
+        mod_idx: usize,
+        global_idx: usize,
+        res: ValueIdx,
+        loc: Option<Loc>,
+    ) -> Self {
+        Self::new(InstrBody::GetGlobal(mod_idx, global_idx), loc).with_results([res])
+    }
+
+    pub fn create_number(v: String, res: ValueIdx, loc: Option<Loc>) -> Self {
+        Self::new(InstrBody::CreateNumber(v), loc).with_results([res])
+    }
+
+    pub fn add(a: ValueIdx, b: ValueIdx, res: ValueIdx, loc: Option<Loc>) -> Self {
+        Self::new(InstrBody::Add(a, b), loc).with_results([res])
+    }
+
+    pub fn gte(a: ValueIdx, b: ValueIdx, res: ValueIdx, loc: Option<Loc>) -> Self {
+        Self::new(InstrBody::Gte(a, b), loc).with_results([res])
+    }
+
+    pub fn lt(a: ValueIdx, b: ValueIdx, res: ValueIdx, loc: Option<Loc>) -> Self {
+        Self::new(InstrBody::Lt(a, b), loc).with_results([res])
+    }
+
+    pub fn call(
+        mod_idx: usize,
+        func_idx: usize,
+        args: impl IntoIterator<Item = ValueIdx>,
+        res: ValueIdx,
+        loc: Option<Loc>,
+    ) -> Self {
+        Self::new(
+            InstrBody::Call(mod_idx, func_idx, args.into_iter().collect()),
+            loc,
+        )
+        .with_results([res])
+    }
+
+    pub fn if_(
+        cond: ValueIdx,
+        then_body: Vec<Instr>,
+        else_body: Vec<Instr>,
+        res: Option<ValueIdx>,
+        loc: Option<Loc>,
+    ) -> Self {
+        Self::new(InstrBody::If(cond, then_body, else_body), loc).with_results(res)
+    }
+
+    pub fn loop_(
+        inputs: Vec<(ValueIdx, ValueIdx)>,
+        body: Vec<Instr>,
+        res: Option<ValueIdx>,
+        loc: Option<Loc>,
+    ) -> Self {
+        Self::new(InstrBody::Loop(inputs, body), loc).with_results(res)
+    }
+
+    pub fn break_(v: Option<ValueIdx>, loc: Option<Loc>) -> Self {
+        Self::new(InstrBody::Break(v), loc)
+    }
+
+    pub fn continue_(vs: Vec<ValueIdx>, loc: Option<Loc>) -> Self {
+        Self::new(InstrBody::Continue(vs), loc)
+    }
+
+    pub fn array_len(v: ValueIdx, res: ValueIdx, loc: Option<Loc>) -> Self {
+        Self::new(InstrBody::ArrayLen(v), loc).with_results([res])
+    }
+
+    pub fn array_index(
+        v: ValueIdx,
+        idx: ValueIdx,
+        res: ValueIdx,
+        loc: Option<Loc>,
+    ) -> Self {
+        Self::new(InstrBody::ArrayIndex(v, idx), loc).with_results([res])
+    }
+
     pub fn with_results(mut self, results: impl IntoIterator<Item = ValueIdx>) -> Self {
         self.results = results.into_iter().collect();
         self

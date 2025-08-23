@@ -51,11 +51,17 @@ pub fn dump_data(
     cl_module: &impl cl::Module,
 ) {
     let data_init = &desc.init;
-    println!("{} [{}] =", get_data_name(*data_id), data_init.size());
+    let start = format!("{} [{}]", get_data_name(*data_id), data_init.size());
 
     let contents = match data_init {
-        cl::Init::Bytes { contents } if contents.len() > 0 => contents,
-        _ => return,
+        cl::Init::Bytes { contents } if contents.len() > 0 => {
+            println!("{start} =");
+            contents
+        }
+        _ => {
+            print!("{start}");
+            return;
+        }
     };
 
     let relocs = desc

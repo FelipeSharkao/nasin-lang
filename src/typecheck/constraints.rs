@@ -13,8 +13,8 @@ pub enum Constraint {
     Is(b::Type),
     TypeOf(b::ValueIdx),
     Array(b::ValueIdx),
+    ArrayElem(b::ValueIdx),
     Ptr(b::ValueIdx),
-    ArrayElemPtr(b::ValueIdx),
     ReturnOf(b::ValueIdx),
     ParameterOf(b::ValueIdx, usize),
     IsProperty(b::ValueIdx, String),
@@ -29,8 +29,8 @@ impl Constraint {
             Self::Is(..) => ConstraintPriority::DefinedType,
             Self::TypeOf(..)
             | Self::Array(..)
+            | Self::ArrayElem(..)
             | Self::Ptr(..)
-            | Self::ArrayElemPtr(..)
             | Self::ReturnOf(..)
             | Self::ParameterOf(..)
             | Self::GetFunc(..)

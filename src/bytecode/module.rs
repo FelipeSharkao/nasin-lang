@@ -25,6 +25,13 @@ pub struct Module {
     pub funcs:    Vec<Func>,
     pub sources:  HashSet<Source>,
 }
+
+impl Module {
+    pub fn get_func(&self, name: &str) -> Option<(usize, &Func)> {
+        self.funcs.iter().enumerate().find(|(_, f)| f.name == name)
+    }
+}
+
 impl Display for Module {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "module {}:", self.idx)?;

@@ -472,7 +472,7 @@ pub fn get_type_by_value(
         b::TypeBody::U64 => vec![cl::types::I64],
         b::TypeBody::F32 => vec![cl::types::F32],
         b::TypeBody::F64 => vec![cl::types::F64],
-        b::TypeBody::USize | b::TypeBody::Array(_) | b::TypeBody::Ptr(_) => {
+        b::TypeBody::USize | b::TypeBody::Ptr(_) => {
             vec![cl_module.isa().pointer_type()]
         }
         b::TypeBody::TypeRef(t) => match &modules[t.mod_idx].typedefs[t.idx].body {
@@ -486,21 +486,17 @@ pub fn get_type_by_value(
         b::TypeBody::Func(_) | b::TypeBody::String(_) | b::TypeBody::Array(_) => {
             vec![cl_module.isa().pointer_type(); 2]
         }
+        b::TypeBody::Void => vec![],
         b::TypeBody::AnyNumber
         | b::TypeBody::AnySignedNumber
         | b::TypeBody::AnyFloat
         | b::TypeBody::Inferred(_) => panic!("Type must be resolved before codegen"),
-        b::TypeBody::Void => panic!("void type cannot be used directly"),
         b::TypeBody::Never => panic!("never type cannot be used directly"),
         b::TypeBody::AnyOpaque => panic!("anyopaque type cannot be used directly"),
     }
 }
 
-pub fn get_size(
-    ty: &b::Type,
-    modules: &[b::Module],
-    cl_module: &impl cl::Module,
-) -> u32 {
+pub fn get_size(ty: &b::Type, modules: &[b::Module], cl_module: &impl cl::Module) -> u32 {
     let ptr = cl_module.isa().pointer_bytes() as u32;
 
     match &ty.body {

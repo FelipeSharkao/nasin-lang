@@ -386,6 +386,26 @@ impl<'a> TypeChecker<'a> {
                 );
                 self.add_constraint(v, Constraint::Is(ty));
             }
+            b::InstrBody::ArrayLen(input) => {
+                let v = instr.results[0];
+                let arr_ty = b::Type::new(
+                    b::TypeBody::Array(b::ArrayType::new(
+                        Box::new(b::Type::unknown(None)),
+                        None,
+                    )),
+                    None,
+                );
+                self.add_constraint(*input, Constraint::Is(arr_ty));
+                let ty = b::Type::new(b::TypeBody::USize, None);
+                self.add_constraint(v, Constraint::Is(ty));
+            }
+            b::InstrBody::ArrayIndex(input, idx) => {
+                let v = instr.results[0];
+                self.add_constraint(*input, Constraint::Array(v));
+                let idx_ty = b::Type::new(b::TypeBody::USize, None);
+                self.add_constraint(*idx, Constraint::Is(idx_ty));
+                self.add_constraint(v, Constraint::ArrayElem(*input));
+            }
             b::InstrBody::Type(v, ty) => {
                 self.add_constraint(*v, Constraint::Is(ty.clone()));
             }
@@ -423,7 +443,7 @@ impl<'a> TypeChecker<'a> {
             match (c, &constraint) {
                 (Constraint::Array(a), Constraint::Array(b))
                 | (Constraint::Ptr(a), Constraint::Ptr(b))
-                | (Constraint::ArrayElemPtr(a), Constraint::ArrayElemPtr(b)) => {
+                | (Constraint::ArrayElem(a), Constraint::ArrayElem(b)) => {
                     self.merge_types([a, b]);
                 }
                 (
@@ -603,6 +623,17 @@ impl<'a> TypeChecker<'a> {
                         None,
                     )
                 }
+                Constraint::ArrayElem(target) => {
+                    tracing::trace!(target, "will validate ArrayElem");
+                    success = self.validate_value(target, visited) && success;
+                    if let b::TypeBody::Array(arr_ty) =
+                        &self.ctx.lock_modules()[self.mod_idx].values[target].ty.body
+                    {
+                        (&*arr_ty.item).clone()
+                    } else {
+                        b::Type::unknown(None)
+                    }
+                }
                 Constraint::Ptr(target) => {
                     tracing::trace!(target, "will validate Ptr");
                     success = self.validate_value(target, visited) && success;
@@ -610,18 +641,6 @@ impl<'a> TypeChecker<'a> {
                         .ty
                         .clone();
                     b::Type::new(b::TypeBody::Ptr(Some(ty.into())), None)
-                }
-                Constraint::ArrayElemPtr(target) => {
-                    tracing::trace!(target, "will validate ArrayElemPtr");
-                    success = self.validate_value(target, visited) && success;
-                    let item_ty = if let b::TypeBody::Array(arr_ty) =
-                        &self.ctx.lock_modules()[self.mod_idx].values[target].ty.body
-                    {
-                        Some(arr_ty.item.clone())
-                    } else {
-                        None
-                    };
-                    b::Type::new(b::TypeBody::Ptr(item_ty), None)
                 }
                 Constraint::ReturnOf(target) => {
                     tracing::trace!(target, "will validate ReturnOf");

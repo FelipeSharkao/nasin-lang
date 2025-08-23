@@ -133,10 +133,7 @@ impl<'a> CodegenContext<'a> {
             return *id;
         }
 
-        let data_id = self
-            .cl_module
-            .declare_anonymous_data(false, false)
-            .unwrap();
+        let data_id = self.cl_module.declare_anonymous_data(false, false).unwrap();
         let mut desc = cl::DataDescription::new();
 
         let mut bytes = value.as_bytes().to_vec();
@@ -159,10 +156,7 @@ impl<'a> CodegenContext<'a> {
             return Some(*id);
         }
 
-        let data_id = self
-            .cl_module
-            .declare_anonymous_data(false, false)
-            .unwrap();
+        let data_id = self.cl_module.declare_anonymous_data(false, false).unwrap();
         let mut desc = cl::DataDescription::new();
 
         let mut bytes = vec![];
@@ -216,10 +210,7 @@ impl<'a> CodegenContext<'a> {
     }
 
     pub fn create_writable_for_type(&mut self, ty: &b::Type) -> cl::DataId {
-        let data_id = self
-            .cl_module
-            .declare_anonymous_data(false, false)
-            .unwrap();
+        let data_id = self.cl_module.declare_anonymous_data(false, false).unwrap();
         let mut desc = cl::DataDescription::new();
         desc.define_zeroinit(types::get_size(ty, self.modules, &self.cl_module) as usize);
         self.cl_module.define_data(data_id, &desc).unwrap();

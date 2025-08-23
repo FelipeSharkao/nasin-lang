@@ -9,6 +9,7 @@ use std::fs::File;
 use std::io::BufWriter;
 use std::mem;
 
+use cranelift_shim::settings::Configurable;
 use cranelift_shim::{self as cl, InstBuilder, Module};
 use itertools::Itertools;
 use target_lexicon::Triple;
@@ -45,8 +46,16 @@ impl<'a> BinaryCodegen<'a> {
     ) -> Self {
         let triple = Triple::host();
 
-        let settings_builder = cl::settings::builder();
+        let mut settings_builder = cl::settings::builder();
+        settings_builder.set("opt_level", "speed").unwrap();
+        if !cfg!(debug_assertions) {
+            settings_builder.set("enable_verifier", "false").unwrap();
+        }
         let flags = cl::settings::Flags::new(settings_builder);
+        if cfg.dump_clif {
+            println!("{flags}");
+        }
+
         let isa_target = cl::isa::lookup(triple).unwrap().finish(flags).unwrap();
 
         let cl_module = cl::ObjectModule::new(

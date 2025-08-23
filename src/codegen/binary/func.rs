@@ -262,30 +262,46 @@ impl<'a> FuncCodegen<'a, '_> {
                 );
             }
             b::InstrBody::If(cond, then_, else_) => {
+                if then_.len() == 0 && else_.len() == 0 {
+                    return;
+                }
+
                 let cond = self.use_value_by_value(mod_idx, *cond);
                 assert!(cond.len() == 1);
                 let cond = cond[0];
 
                 let builder = expect_builder!(self);
 
-                let then_block = builder.create_block();
-                let else_block = builder.create_block();
-
-                builder.ins().brif(cond, then_block, &[], else_block, &[]);
-
-                let mut scope = ScopePayload {
-                    start_block: then_block,
-                    block: then_block,
-                    next_branches: vec![else_block],
-                    result: None,
-                    ty: None,
+                let then_block = if then_.len() > 0 {
+                    Some(builder.create_block())
+                } else {
+                    None
+                };
+                let else_block = if else_.len() > 0 {
+                    Some(builder.create_block())
+                } else {
+                    None
                 };
 
+                let next_block = builder.create_block();
+
+                builder.ins().brif(
+                    cond,
+                    then_block.unwrap_or(next_block),
+                    &[],
+                    else_block.unwrap_or(next_block),
+                    &[],
+                );
+
+                let mut scope =
+                    ScopePayload::new(then_block.unwrap_or(self.scopes.last().block));
+                scope.next_branches.push(else_block.unwrap_or(next_block));
+
+                self.scopes.last_mut().block = next_block;
                 if instr.results.len() > 0 {
                     let module = &self.ctx.modules[mod_idx];
                     let ty = &module.values[instr.results[0]].ty;
 
-                    let next_block = builder.create_block();
                     for native_ty in types::get_type_canonical(
                         ty,
                         self.ctx.modules,
@@ -296,27 +312,26 @@ impl<'a> FuncCodegen<'a, '_> {
 
                     scope.result = Some(instr.results[0]);
                     scope.ty = Some(Cow::Borrowed(ty));
-                    self.scopes.last_mut().block = next_block;
                 }
 
                 self.scopes.begin(scope);
 
-                builder.switch_to_block(then_block);
-                self.add_body(then_, mod_idx, ResultPolicy::Normal);
-
-                let builder = expect_builder!(self);
+                if let Some(then_block) = then_block {
+                    expect_builder!(self).switch_to_block(then_block);
+                    self.add_body(then_, mod_idx, ResultPolicy::Normal);
+                }
 
                 self.scopes.branch();
 
-                builder.switch_to_block(else_block);
-                self.add_body(else_, mod_idx, ResultPolicy::Normal);
+                if let Some(else_block) = else_block {
+                    expect_builder!(self).switch_to_block(else_block);
+                    self.add_body(else_, mod_idx, ResultPolicy::Normal);
+                }
 
                 let (scope, _) = self.scopes.end();
-
-                let builder = expect_builder!(self);
                 if !scope.is_never() {
                     let next_block = self.scopes.last().block;
-                    builder.switch_to_block(next_block);
+                    expect_builder!(self).switch_to_block(next_block);
                 }
             }
             b::InstrBody::Loop(inputs, body) => {
@@ -466,10 +481,21 @@ impl<'a> FuncCodegen<'a, '_> {
                         }
                     }
                 } else {
-                    if let ResultPolicy::Return(ReturnPolicy::Void) = result_policy {
-                        expect_builder!(self).ins().return_(&[]);
-                    } else {
-                        unreachable!()
+                    match result_policy {
+                        ResultPolicy::Normal => {
+                            let prev_scope =
+                                self.scopes.get(self.scopes.len() - 2).unwrap();
+                            expect_builder!(self).ins().jump(prev_scope.block, &[]);
+
+                            if let Some(result) = self.scopes.last().result {
+                                let ty = &self.ctx.modules[mod_idx].values[result].ty;
+                                assert!(matches!(ty.body, b::TypeBody::Void));
+                            }
+                        }
+                        ResultPolicy::Return(ReturnPolicy::Void) => {
+                            expect_builder!(self).ins().return_(&[]);
+                        }
+                        _ => unreachable!(),
                     }
                 }
             }
@@ -542,10 +568,9 @@ impl<'a> FuncCodegen<'a, '_> {
                     .ctx
                     .cl_module
                     .declare_func_in_func(closure_func_id, builder.func);
-                let closure_ptr = builder.ins().func_addr(
-                    self.ctx.cl_module.isa().pointer_type(),
-                    closure_func_ref,
-                );
+                let closure_ptr = builder
+                    .ins()
+                    .func_addr(self.ctx.cl_module.isa().pointer_type(), closure_func_ref);
 
                 let env = builder
                     .ins()
@@ -704,12 +729,16 @@ impl<'a> FuncCodegen<'a, '_> {
                     }
                 };
             }
-            b::InstrBody::StrLen(source_v) => {
-                let source = self.values[&(mod_idx, *source_v)].clone();
-
-                let value = match &source.src {
+            b::InstrBody::StrLen(source_v) | b::InstrBody::ArrayLen(source_v) => {
+                let value = match &self.values[&(mod_idx, *source_v)].src {
                     types::ValueSource::Slice(slice) => slice.len.clone(),
-                    src => todo!("str_ptr: {src:?}"),
+                    _ => {
+                        let values = self.use_value_by_value(mod_idx, *source_v);
+                        if values.len() != 2 {
+                            todo!("str_len: {} values", values.len());
+                        }
+                        types::ValueSource::Primitive(values[1])
+                    }
                 };
 
                 self.values.insert(
@@ -718,12 +747,45 @@ impl<'a> FuncCodegen<'a, '_> {
                 );
             }
             b::InstrBody::StrPtr(source_v) => {
-                let source = self.values[&(mod_idx, *source_v)].clone();
-
-                let value = match &source.src {
+                let value = match &self.values[&(mod_idx, *source_v)].src {
                     types::ValueSource::Slice(slice) => slice.ptr.clone(),
-                    src => todo!("str_ptr: {src:?}"),
+                    _ => {
+                        let values = self.use_value_by_value(mod_idx, *source_v);
+                        if values.len() != 2 {
+                            todo!("str_ptr: {} values", values.len());
+                        }
+                        types::ValueSource::Ptr(values[0])
+                    }
                 };
+
+                self.values.insert(
+                    (mod_idx, instr.results[0]),
+                    types::RuntimeValue::new(value.into(), mod_idx, instr.results[0]),
+                );
+            }
+            b::InstrBody::ArrayIndex(source_v, idx_v) => {
+                let ty = &self.ctx.modules[mod_idx].values[instr.results[0]].ty;
+
+                let values = self.use_value_by_value(mod_idx, *source_v);
+                if values.len() != 2 {
+                    todo!("array_index: {} values", values.len());
+                }
+                let ptr = values[0];
+
+                let idx = self.use_value_by_value(mod_idx, *idx_v);
+                assert!(idx.len() == 1);
+                let idx = idx[0];
+
+                let builder = expect_builder!(self);
+
+                let size = builder.ins().iconst(
+                    self.ctx.cl_module.isa().pointer_type(),
+                    types::get_size(ty, self.ctx.modules, &self.ctx.cl_module) as i64,
+                );
+                let offset = builder.ins().imul(size, idx);
+                let ptr = builder.ins().iadd(ptr, offset);
+
+                let value = types::ValueSource::Ptr(ptr);
 
                 self.values.insert(
                     (mod_idx, instr.results[0]),
@@ -1142,18 +1204,22 @@ impl<'a> FuncCodegen<'a, '_> {
         ss
     }
 
-    fn add_assert(&mut self, cond: cl::Value, code: cl::TrapCode) {
-        let builder = expect_builder!(self);
-        builder.ins().trapz(cond, code);
-    }
+    // fn add_assert(&mut self, cond: cl::Value, code: cl::TrapCode) {
+    //     let builder = expect_builder!(self);
+    //     builder.ins().trapz(cond, code);
+    // }
 }
 
-#[derive(Debug)]
+#[derive(Debug, new)]
 pub struct ScopePayload<'a> {
     pub start_block: cl::Block,
+    #[new(value = "start_block")]
     pub block: cl::Block,
+    #[new(default)]
     pub next_branches: Vec<cl::Block>,
+    #[new(default)]
     pub result: Option<b::ValueIdx>,
+    #[new(default)]
     pub ty: Option<Cow<'a, b::Type>>,
 }
 impl utils::SimpleScopePayload for ScopePayload<'_> {
