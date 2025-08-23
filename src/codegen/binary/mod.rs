@@ -205,7 +205,7 @@ impl BinaryCodegen<'_> {
         utils::replace_with(self, |mut this| {
             let mut func_ctx = cl::FunctionBuilderContext::new();
             let func_builder = cl::FunctionBuilder::new(&mut func, &mut func_ctx);
-            let mut codegen = FuncCodegen::new(this.ctx, Some(func_builder));
+            let mut codegen = FuncCodegen::new(this.ctx, Some(func_builder), true);
             codegen.create_initial_block(&[], None, ResultPolicy::Normal, 0);
 
             for ((i, j), global) in codegen
@@ -294,7 +294,7 @@ impl BinaryCodegen<'_> {
             let mut func_ctx = cl::FunctionBuilderContext::new();
             let func = this.declared_funcs.get_mut(&(mod_idx, idx)).unwrap();
             let func_builder = cl::FunctionBuilder::new(func, &mut func_ctx);
-            let mut codegen = FuncCodegen::new(this.ctx, Some(func_builder));
+            let mut codegen = FuncCodegen::new(this.ctx, Some(func_builder), false);
             codegen.create_initial_block(
                 &decl.params,
                 Some(decl.ret),

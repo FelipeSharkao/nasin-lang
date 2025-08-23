@@ -21,6 +21,7 @@ pub enum Callee {
 pub struct FuncCodegen<'a, 'b> {
     pub ctx: CodegenContext<'a>,
     pub builder: Option<cl::FunctionBuilder<'b>>,
+    pub is_global: bool,
     #[new(value = "utils::ScopeStack::empty()")]
     pub scopes: utils::ScopeStack<ScopePayload<'a>>,
     #[new(default)]
@@ -893,7 +894,7 @@ impl<'a> FuncCodegen<'a, '_> {
                             if let Some(data) = data {
                                 data.into()
                             } else if this.builder.is_some() {
-                                this.create_stack_slot(&values).into()
+                                this.store_tuple(&values).into()
                             } else {
                                 break 'match_b None;
                             }
@@ -1049,20 +1050,22 @@ impl<'a> FuncCodegen<'a, '_> {
             let size =
                 item_tys.iter().map(|ty| ty.bytes()).sum::<u32>() * vs.len() as u32;
 
-            let ss_data = cl::StackSlotData::new(cl::StackSlotKind::ExplicitSlot, size);
-            let ss = expect_builder!(self).create_sized_stack_slot(ss_data);
+            let src = self.crate_buf_sized(size);
+            let ptr = src.add_by_ref(&mut self.ctx.cl_module, expect_builder!(self));
 
             let mut offset = 0;
             for v in vs {
                 let native_values = self.use_value_by_value(mod_idx, *v);
                 for (ty, value) in izip!(&item_tys, native_values) {
                     let builder = expect_builder!(self);
-                    builder.ins().stack_store(value, ss, offset as i32);
+                    builder
+                        .ins()
+                        .store(cl::MemFlags::new(), value, ptr, offset as i32);
                     offset += ty.bytes();
                 }
             }
 
-            ss.into()
+            types::ValueSource::Ptr(ptr)
         } else {
             return None;
         };
@@ -1172,36 +1175,53 @@ impl<'a> FuncCodegen<'a, '_> {
         }
     }
 
-    fn create_stack_slot<'v>(
+    /// Allocate bytes statically. If comping a global, this bytes are a writable data,
+    /// otherwise, it's a stack slot.
+    fn crate_buf_sized<'v>(&mut self, size: u32) -> types::ValueSource {
+        if self.is_global {
+            let data_id = self.ctx.create_writable_sized(size);
+            data_id.into()
+        } else {
+            let builder = expect_builder!(self);
+            let ss_data = cl::StackSlotData::new(cl::StackSlotKind::ExplicitSlot, size);
+            builder.create_sized_stack_slot(ss_data).into()
+        }
+    }
+
+    fn store_tuple<'v>(
         &mut self,
-        values: impl IntoIterator<Item = &'v types::RuntimeValue> + 'v,
-    ) -> cl::StackSlot {
-        let Some(func) = &mut self.builder else {
-            panic!("cannot add stack slot without a function");
-        };
+        tuple: impl IntoIterator<Item = &'v types::RuntimeValue> + 'v,
+    ) -> types::ValueSource {
+        let builder = expect_builder!(self);
 
         let mut size = 0;
         let mut stored_values = Vec::new();
-        for v in values {
+        for v in tuple {
             let v_ty = &self.ctx.modules[v.mod_idx].values[v.value_idx].ty;
             for v in v.src.add_canonical(
                 v_ty,
                 &self.ctx.modules,
                 &mut self.ctx.cl_module,
-                func,
+                builder,
             ) {
                 stored_values.push((size, v));
-                size += func.func.dfg.value_type(v).bytes();
+                size += builder.func.dfg.value_type(v).bytes();
             }
         }
 
-        let ss_data = cl::StackSlotData::new(cl::StackSlotKind::ExplicitSlot, size);
-        let ss = func.create_sized_stack_slot(ss_data);
+        let ptr = self
+            .crate_buf_sized(size)
+            .add_by_ref(&mut self.ctx.cl_module, expect_builder!(self));
         for (offset, value) in stored_values {
-            func.ins().stack_store(value, ss, offset as i32);
+            expect_builder!(self).ins().store(
+                cl::MemFlags::new(),
+                value,
+                ptr,
+                offset as i32,
+            );
         }
 
-        ss
+        types::ValueSource::Ptr(ptr)
     }
 
     // fn add_assert(&mut self, cond: cl::Value, code: cl::TrapCode) {

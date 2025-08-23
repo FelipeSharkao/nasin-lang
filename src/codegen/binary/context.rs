@@ -78,7 +78,7 @@ impl<'a> CodegenContext<'a> {
         let symbol_name = global.name.clone();
 
         let (value, is_const) = utils::replace_with(self, |s| {
-            let mut codegen = FuncCodegen::new(s, None);
+            let mut codegen = FuncCodegen::new(s, None, true);
 
             for instr in &global.body {
                 if let b::InstrBody::Break(v) = &instr.body {
@@ -210,9 +210,13 @@ impl<'a> CodegenContext<'a> {
     }
 
     pub fn create_writable_for_type(&mut self, ty: &b::Type) -> cl::DataId {
+        self.create_writable_sized(types::get_size(ty, self.modules, &self.cl_module))
+    }
+
+    pub fn create_writable_sized(&mut self, size: u32) -> cl::DataId {
         let data_id = self.cl_module.declare_anonymous_data(false, false).unwrap();
         let mut desc = cl::DataDescription::new();
-        desc.define_zeroinit(types::get_size(ty, self.modules, &self.cl_module) as usize);
+        desc.define_zeroinit(size as usize);
         self.cl_module.define_data(data_id, &desc).unwrap();
 
         self.data.insert(data_id, desc);

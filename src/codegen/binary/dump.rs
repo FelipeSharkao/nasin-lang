@@ -59,7 +59,7 @@ pub fn dump_data(
             contents
         }
         _ => {
-            print!("{start}");
+            println!("{start}");
             return;
         }
     };
