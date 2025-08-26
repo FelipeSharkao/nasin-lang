@@ -1,4 +1,5 @@
 mod context;
+mod debug;
 mod dump;
 mod func;
 mod types;
@@ -11,6 +12,7 @@ use std::mem;
 
 use cranelift_shim::settings::Configurable;
 use cranelift_shim::{self as cl, InstBuilder, Module};
+use gimli::write::Writer;
 use itertools::Itertools;
 use target_lexicon::Triple;
 
@@ -419,7 +421,24 @@ impl BinaryCodegen<'_> {
     }
 
     fn write_to_file(self) {
-        let obj_product = self.ctx.cl_module.finish();
+        let mut obj_product = self.ctx.cl_module.finish();
+
+        debug::struct_sections()
+            .for_each(|section_id, data| -> Result<(), ()> {
+                if data.len() == 0 {
+                    return Ok(());
+                }
+                let sec = obj_product.object.add_section(
+                    vec![],
+                    section_id.name().into(),
+                    cl::object::object::SectionKind::Debug,
+                );
+                obj_product
+                    .object
+                    .append_section_data(sec, data.slice(), 16);
+                Ok(())
+            })
+            .expect("should be able to write debug info");
 
         let obj_path = format!("{}.o", self.ctx.cfg.out.to_string_lossy());
         let out_file = File::create(&obj_path).expect("Failed to create object file");

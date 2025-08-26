@@ -1,5 +1,6 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::mem;
 
 use cl::InstBuilder;
 use cranelift_shim::{self as cl, Module};
@@ -30,6 +31,8 @@ pub struct FuncCodegen<'a, 'b> {
     imported_signatures: HashMap<cl::Signature, cl::SigRef>,
     #[new(default)]
     declared_funcs: HashMap<cl::FuncId, cl::FuncRef>,
+    #[new(default)]
+    declared_globals: HashMap<cl::DataId, cl::GlobalValue>,
 }
 macro_rules! expect_builder {
     ($self:expr) => {{
@@ -588,8 +591,6 @@ impl<'a> FuncCodegen<'a, '_> {
                 );
             }
             b::InstrBody::GetField(source_v, name) => {
-                let builder = expect_builder!(self);
-
                 let source_ty = &self.ctx.modules[mod_idx].values[*source_v].ty;
                 let source = &self.values[&(mod_idx, *source_v)];
                 let b::TypeBody::TypeRef(ty_ref) = &source_ty.body else {
@@ -615,8 +616,7 @@ impl<'a> FuncCodegen<'a, '_> {
                     }
                 }
 
-                let source_value =
-                    source.src.add_by_ref(&mut self.ctx.cl_module, builder);
+                let source_value = self.add_by_ref(&source.src.clone());
 
                 let v = instr.results[0];
                 let ty = &self.ctx.modules[mod_idx].values[v].ty;
@@ -625,7 +625,7 @@ impl<'a> FuncCodegen<'a, '_> {
                 for native_ty in
                     types::get_type_canonical(ty, self.ctx.modules, &self.ctx.cl_module)
                 {
-                    let value = builder.ins().load(
+                    let value = expect_builder!(self).ins().load(
                         native_ty,
                         cl::MemFlags::new(),
                         source_value,
@@ -647,17 +647,15 @@ impl<'a> FuncCodegen<'a, '_> {
                 self.values.insert((mod_idx, instr.results[0]), value);
             }
             b::InstrBody::GetMethod(source_v, name) => {
-                let builder = expect_builder!(self);
-
-                let source_ty = &self.ctx.modules[mod_idx].values[*source_v].ty;
                 let source = &self.values[&(mod_idx, *source_v)];
+                let source_ty = &self.ctx.modules[mod_idx].values[*source_v].ty;
                 let b::TypeBody::TypeRef(ty_ref) = &source_ty.body else {
                     panic!("type should be a typeref");
                 };
 
                 match &self.ctx.modules[ty_ref.mod_idx].typedefs[ty_ref.idx].body {
                     b::TypeDefBody::Record(rec) => {
-                        let value = source.src.add_by_ref(&self.ctx.cl_module, builder);
+                        let value = self.add_by_ref(&source.src.clone());
                         let method = &rec.methods[name];
 
                         self.values.insert(
@@ -675,8 +673,9 @@ impl<'a> FuncCodegen<'a, '_> {
                                 (dispatched.src, dispatched.vtable)
                             }
                             _ => {
-                                let ptr =
-                                    source.src.add_by_ref(&self.ctx.cl_module, builder);
+                                let ptr = self.add_by_ref(&source.src.clone());
+
+                                let builder = expect_builder!(self);
                                 let src_value = builder.ins().load(
                                     self.ctx.cl_module.isa().pointer_type(),
                                     cl::MemFlags::new(),
@@ -702,6 +701,8 @@ impl<'a> FuncCodegen<'a, '_> {
                             .expect("Interface should already be defined")
                             .method_offset(name, &self.ctx.cl_module)
                             .unwrap();
+
+                        let builder = expect_builder!(self);
 
                         let func_ptr = builder.ins().load(
                             self.ctx.cl_module.isa().pointer_type(),
@@ -794,8 +795,6 @@ impl<'a> FuncCodegen<'a, '_> {
                 );
             }
             b::InstrBody::Dispatch(v, iface_mod_idx, iface_ty_idx) => {
-                let builder = expect_builder!(self);
-
                 let ty = &self.ctx.modules[mod_idx].values[*v].ty;
                 let b::TypeBody::TypeRef(ty_ref) = &ty.body else {
                     panic!("type should be a typeref");
@@ -805,11 +804,8 @@ impl<'a> FuncCodegen<'a, '_> {
                     (ty_ref.mod_idx, ty_ref.idx),
                 );
                 let vtable_data = self.ctx.vtables_impl[&vtable_ref];
-                let vtable_gv = self
-                    .ctx
-                    .cl_module
-                    .declare_data_in_func(vtable_data, &mut builder.func);
-                let vtable = builder
+                let vtable_gv = self.get_global_value(vtable_data);
+                let vtable = expect_builder!(self)
                     .ins()
                     .global_value(self.ctx.cl_module.isa().pointer_type(), vtable_gv);
 
@@ -894,7 +890,8 @@ impl<'a> FuncCodegen<'a, '_> {
                             if let Some(data) = data {
                                 data.into()
                             } else if this.builder.is_some() {
-                                this.store_tuple(&values).into()
+                                // TODO: escape analysis
+                                this.store_tuple(&values, true).into()
                             } else {
                                 break 'match_b None;
                             }
@@ -992,19 +989,13 @@ impl<'a> FuncCodegen<'a, '_> {
 
         let instr = match callee {
             Callee::Direct(func_id) => {
-                let func_ref = self.declared_funcs.entry(func_id).or_insert_with(|| {
-                    let func_ref = self
-                        .ctx
-                        .cl_module
-                        .declare_func_in_func(func_id, builder.func);
-                    func_ref
-                });
-
-                builder.ins().call(*func_ref, &args)
+                let func_ref = self.get_func_ref(func_id);
+                expect_builder!(self).ins().call(func_ref, &args)
             }
             Callee::Indirect(sig, ptr) => builder.ins().call_indirect(sig, ptr, &args),
         };
 
+        let builder = expect_builder!(self);
         let results = builder.inst_results(instr);
         assert!(results.len() <= 1);
 
@@ -1050,8 +1041,9 @@ impl<'a> FuncCodegen<'a, '_> {
             let size =
                 item_tys.iter().map(|ty| ty.bytes()).sum::<u32>() * vs.len() as u32;
 
-            let src = self.crate_buf_sized(size);
-            let ptr = src.add_by_ref(&mut self.ctx.cl_module, expect_builder!(self));
+            // TODO: escape analysis
+            let buf = self.crate_buf_sized(size, true);
+            let ptr = self.add_by_ref(&buf);
 
             let mut offset = 0;
             for v in vs {
@@ -1085,36 +1077,172 @@ impl<'a> FuncCodegen<'a, '_> {
             "value should be present in scope: {v}"
         );
         let ty = &self.ctx.modules[mod_idx].values[v].ty;
-        runtime_value.src.add_canonical(
-            ty,
-            &self.ctx.modules,
-            &mut self.ctx.cl_module,
-            expect_builder!(self),
-        )
+        self.add_canonical(&runtime_value.src.clone(), ty)
+    }
+
+    /// Add value to function as multiple Cranelift value, by value or by reference,
+    /// depending on the ABI for the type.
+    pub fn add_canonical(
+        &mut self,
+        src: &types::ValueSource,
+        ty: &b::Type,
+    ) -> Vec<cl::Value> {
+        match &ty.body {
+            b::TypeBody::TypeRef(t) if t.is_self => {
+                vec![self.add_by_ref(src)]
+            }
+            b::TypeBody::TypeRef(t) => {
+                match &self.ctx.modules[t.mod_idx].typedefs[t.idx].body {
+                    b::TypeDefBody::Record(_) => vec![self.add_by_ref(src)],
+                    b::TypeDefBody::Interface(_) => self.add_by_value(src, ty),
+                }
+            }
+            b::TypeBody::Ptr(_) => vec![self.add_by_ref(src)],
+            _ => self.add_by_value(src, ty),
+        }
+    }
+
+    /// Add value to function as a single Cranelift value, by reference. Values that are
+    /// only logically grouped will be added to a stack slot and a pointer to it will be
+    /// returned.
+    pub fn add_by_ref(&mut self, src: &types::ValueSource) -> cl::Value {
+        let builder = expect_builder!(self);
+        match src {
+            types::ValueSource::Ptr(v) => *v,
+            types::ValueSource::Data(data_id) => {
+                let field_gv = if true {
+                    self.get_global_value(*data_id)
+                } else {
+                    self.ctx
+                        .cl_module
+                        .declare_data_in_func(*data_id, builder.func)
+                };
+                expect_builder!(self)
+                    .ins()
+                    .global_value(self.ctx.cl_module.isa().pointer_type(), field_gv)
+            }
+            types::ValueSource::StackSlot(ss) => {
+                builder
+                    .ins()
+                    .stack_addr(self.ctx.cl_module.isa().pointer_type(), *ss, 0)
+            }
+            types::ValueSource::I8(..)
+            | types::ValueSource::I16(..)
+            | types::ValueSource::I32(..)
+            | types::ValueSource::I64(..)
+            | types::ValueSource::F32(..)
+            | types::ValueSource::F64(..)
+            | types::ValueSource::Primitive(..) => {
+                todo!("add_by_ref: primitives")
+            }
+            types::ValueSource::Slice(..) => {
+                todo!("add_by_ref: slice")
+            }
+            types::ValueSource::FuncAsValue(..) => {
+                todo!("add_by_ref: func as value")
+            }
+            types::ValueSource::DynDispatched(..) => {
+                todo!("add_by_ref: dyn dispatched")
+            }
+            types::ValueSource::Func(..)
+            | types::ValueSource::AppliedMethod(..)
+            | types::ValueSource::AppliedMethodInderect(..) => {
+                todo!("add_by_ref: function references")
+            }
+        }
+    }
+
+    /// Add value to function as multiple Cranelift value, by value. Values that are only
+    /// logically grouped will continue to do so. Values that are passed by reference will
+    /// be copied and unpacked.
+    pub fn add_by_value(
+        &mut self,
+        src: &types::ValueSource,
+        ty: &b::Type,
+    ) -> Vec<cl::Value> {
+        let builder = expect_builder!(self);
+        match src {
+            types::ValueSource::Primitive(v) => vec![*v],
+            types::ValueSource::I8(n) => {
+                vec![builder.ins().iconst(cl::types::I8, *n as i64)]
+            }
+            types::ValueSource::I16(n) => {
+                vec![builder.ins().iconst(cl::types::I16, *n as i64)]
+            }
+            types::ValueSource::I32(n) => {
+                vec![builder.ins().iconst(cl::types::I32, *n as i64)]
+            }
+            types::ValueSource::I64(n) => {
+                let n = unsafe { mem::transmute_copy::<u64, i64>(&n) };
+                vec![builder.ins().iconst(cl::types::I64, n)]
+            }
+            types::ValueSource::F32(n) => vec![builder.ins().f32const(n.to_float())],
+            types::ValueSource::F64(n) => vec![builder.ins().f64const(n.to_float())],
+            types::ValueSource::Ptr(_)
+            | types::ValueSource::Data(_)
+            | types::ValueSource::StackSlot(_) => {
+                let v = self.add_by_ref(src);
+                let mut values = vec![];
+                let mut offset = 0;
+                for native_ty in
+                    types::get_type_by_value(ty, self.ctx.modules, &self.ctx.cl_module)
+                {
+                    values.push(expect_builder!(self).ins().load(
+                        native_ty,
+                        cl::MemFlags::new(),
+                        v,
+                        offset,
+                    ));
+                    offset += native_ty.bytes() as i32;
+                }
+                values
+            }
+            types::ValueSource::Slice(slice) => {
+                let ptr_value = self.add_by_ref(&slice.ptr);
+
+                let len_type_body = match self.ctx.cl_module.isa().pointer_bytes() {
+                    1 => b::TypeBody::I8,
+                    2 => b::TypeBody::I16,
+                    4 => b::TypeBody::I32,
+                    8 => b::TypeBody::I64,
+                    _ => panic!("how many bytes?"),
+                };
+                let len_values =
+                    self.add_by_value(&slice.len, &b::Type::new(len_type_body, None));
+
+                [vec![ptr_value], len_values].concat()
+            }
+            types::ValueSource::FuncAsValue(func_as_value) => {
+                vec![func_as_value.ptr, func_as_value.env]
+            }
+            types::ValueSource::DynDispatched(dispatched) => {
+                vec![dispatched.src, dispatched.vtable]
+            }
+            types::ValueSource::Func(..)
+            | types::ValueSource::AppliedMethod(..)
+            | types::ValueSource::AppliedMethodInderect(..) => {
+                todo!("function references")
+            }
+        }
     }
 
     fn use_value_by_ref(&mut self, mod_idx: usize, v: b::ValueIdx) -> cl::Value {
         let runtime_value = unwrap!(
             self.values.get(&(mod_idx, v)),
             "value should be present in scope: {v}"
-        );
-        runtime_value
-            .src
-            .add_by_ref(&mut self.ctx.cl_module, expect_builder!(self))
+        )
+        .clone();
+        self.add_by_ref(&runtime_value.src)
     }
 
     fn use_value_by_value(&mut self, mod_idx: usize, v: b::ValueIdx) -> Vec<cl::Value> {
         let runtime_value = unwrap!(
             self.values.get(&(mod_idx, v)),
             "value should be present in scope: {v}"
-        );
-        let ty = &self.ctx.modules[mod_idx].values[v].ty;
-        runtime_value.src.add_by_value(
-            ty,
-            &self.ctx.modules,
-            &mut self.ctx.cl_module,
-            expect_builder!(self),
         )
+        .clone();
+        let ty = &self.ctx.modules[mod_idx].values[v].ty;
+        self.add_by_value(&runtime_value.src, ty)
     }
 
     fn save_value(&mut self, mod_idx: usize, v: b::ValueIdx, value: cl::Value) {
@@ -1177,41 +1305,56 @@ impl<'a> FuncCodegen<'a, '_> {
 
     /// Allocate bytes statically. If comping a global, this bytes are a writable data,
     /// otherwise, it's a stack slot.
-    fn crate_buf_sized<'v>(&mut self, size: u32) -> types::ValueSource {
+    fn crate_buf_sized<'v>(&mut self, size: u32, escape: bool) -> types::ValueSource {
         if self.is_global {
             let data_id = self.ctx.create_writable_sized(size);
             data_id.into()
         } else {
             let builder = expect_builder!(self);
-            let ss_data = cl::StackSlotData::new(cl::StackSlotKind::ExplicitSlot, size);
-            builder.create_sized_stack_slot(ss_data).into()
+            if escape {
+                // FIXME: get from module
+                let Some(cl::FuncOrDataId::Func(heap_alloc_func_id)) =
+                    self.ctx.cl_module.get_name("heap_alloc")
+                else {
+                    panic!("heap_alloc should be declared");
+                };
+                let size_value = builder
+                    .ins()
+                    .iconst(self.ctx.cl_module.isa().pointer_type(), size as i64);
+
+                let ptr = self
+                    .call(
+                        Callee::Direct(heap_alloc_func_id),
+                        &[size_value],
+                        ReturnPolicy::Normal,
+                    )
+                    .unwrap();
+                types::ValueSource::Ptr(ptr)
+            } else {
+                let ss_data =
+                    cl::StackSlotData::new(cl::StackSlotKind::ExplicitSlot, size);
+                builder.create_sized_stack_slot(ss_data).into()
+            }
         }
     }
 
     fn store_tuple<'v>(
         &mut self,
         tuple: impl IntoIterator<Item = &'v types::RuntimeValue> + 'v,
+        escape: bool,
     ) -> types::ValueSource {
-        let builder = expect_builder!(self);
-
         let mut size = 0;
         let mut stored_values = Vec::new();
         for v in tuple {
             let v_ty = &self.ctx.modules[v.mod_idx].values[v.value_idx].ty;
-            for v in v.src.add_canonical(
-                v_ty,
-                &self.ctx.modules,
-                &mut self.ctx.cl_module,
-                builder,
-            ) {
+            for v in self.add_canonical(&v.src, v_ty) {
                 stored_values.push((size, v));
-                size += builder.func.dfg.value_type(v).bytes();
+                size += expect_builder!(self).func.dfg.value_type(v).bytes();
             }
         }
 
-        let ptr = self
-            .crate_buf_sized(size)
-            .add_by_ref(&mut self.ctx.cl_module, expect_builder!(self));
+        let buf = self.crate_buf_sized(size, escape);
+        let ptr = self.add_by_ref(&buf);
         for (offset, value) in stored_values {
             expect_builder!(self).ins().store(
                 cl::MemFlags::new(),
@@ -1222,6 +1365,24 @@ impl<'a> FuncCodegen<'a, '_> {
         }
 
         types::ValueSource::Ptr(ptr)
+    }
+
+    fn get_func_ref(&mut self, func_id: cl::FuncId) -> cl::FuncRef {
+        let builder = expect_builder!(self);
+        *self.declared_funcs.entry(func_id).or_insert_with(|| {
+            self.ctx
+                .cl_module
+                .declare_func_in_func(func_id, builder.func)
+        })
+    }
+
+    fn get_global_value(&mut self, data_id: cl::DataId) -> cl::GlobalValue {
+        *self.declared_globals.entry(data_id).or_insert_with(|| {
+            let builder = expect_builder!(self);
+            self.ctx
+                .cl_module
+                .declare_data_in_func(data_id, builder.func)
+        })
     }
 
     // fn add_assert(&mut self, cond: cl::Value, code: cl::TrapCode) {
