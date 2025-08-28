@@ -3,7 +3,7 @@ use std::collections::HashSet;
 use derive_new::new;
 
 use super::BuildContext;
-use crate::bytecode as b;
+use crate::{bytecode as b, errors};
 
 #[derive(new)]
 pub struct RuntimeBuilder<'a> {
@@ -45,9 +45,8 @@ impl<'a> RuntimeBuilder<'a> {
 
         let modules = self.ctx.lock_modules();
 
-        let main_ty = &modules[main_global.0].values
-            [modules[main_global.0].globals[main_global.1].value]
-            .ty;
+        let main_global_def = &modules[main_global.0].globals[main_global.1];
+        let main_ty = &modules[main_global.0].values[main_global_def.value].ty;
 
         let main_v = self.add_value(main_ty.body.clone());
         let entry_v = self.add_value(b::TypeBody::Void);
@@ -59,16 +58,9 @@ impl<'a> RuntimeBuilder<'a> {
             None,
         )];
 
-        match &main_ty.body {
-            b::TypeBody::String(..) => {
-                self.add_print_str(&mut body, main_v, &*modules);
-            }
-            b::TypeBody::Array(array_ty)
-                if matches!(&array_ty.item.body, b::TypeBody::String(..)) =>
-            {
-                self.add_print_array(&mut body, main_v, &*modules);
-            }
-            _ => todo!("better error message for main return type"),
+        if let Err(e) = self.add_print(&mut body, main_v) {
+            self.ctx.push_error(e);
+            return self;
         }
 
         body.push(b::Instr::break_(None, None));
@@ -88,6 +80,54 @@ impl<'a> RuntimeBuilder<'a> {
 
         self.entry_func_idx = Some(entry_idx);
         self
+    }
+
+    fn add_print(
+        &mut self,
+        body: &mut Vec<b::Instr>,
+        main_v: b::ValueIdx,
+    ) -> Result<(), errors::Error> {
+        let Some(main_global) = *self.ctx.main.read().unwrap() else {
+            return Ok(());
+        };
+
+        let modules = self.ctx.lock_modules();
+
+        let main_global_def = &modules[main_global.0].globals[main_global.1];
+        let main_ty = &modules[main_global.0].values[main_global_def.value].ty;
+
+        let str_ty = b::Type::new(b::StringType::new(None).into(), None);
+        if main_ty.intersection(&str_ty, &*modules).is_some() {
+            self.add_print_str(body, main_v, &*modules);
+            return Ok(());
+        }
+
+        let array_ty = b::Type::new(
+            b::ArrayType::new(Box::new(str_ty.clone()), None).into(),
+            None,
+        );
+        if main_ty.intersection(&array_ty, &*modules).is_some() {
+            self.add_print_array(body, main_v, &*modules);
+            return Ok(());
+        }
+
+        let array_2d_ty = b::Type::new(
+            b::ArrayType::new(Box::new(array_ty.clone()), None).into(),
+            None,
+        );
+        if main_ty.intersection(&array_2d_ty, &*modules).is_some() {
+            self.add_print_array_2d(body, main_v, &*modules);
+            return Ok(());
+        }
+
+        Err(errors::Error::new(
+            errors::UnexpectedType::new(
+                vec![str_ty.clone(), array_ty.clone(), array_2d_ty.clone()],
+                main_ty.clone(),
+            )
+            .into(),
+            Some(main_global_def.loc),
+        ))
     }
 
     fn add_print_str(
@@ -138,6 +178,53 @@ impl<'a> RuntimeBuilder<'a> {
         then_body.push(b::Instr::array_index(v, idx_v, str_v, None));
 
         self.add_print_str(&mut then_body, str_v, &*modules);
+
+        let new_idx_v = self.add_value(b::TypeBody::USize);
+        then_body.push(b::Instr::add(idx_v, one_v, new_idx_v, None));
+        then_body.push(b::Instr::continue_(vec![new_idx_v], None));
+
+        body.push(b::Instr::loop_(
+            vec![(idx_v, zero_v)],
+            vec![
+                b::Instr::lt(idx_v, len_v, cond_v, None),
+                b::Instr::if_(cond_v, then_body, vec![], None, None),
+                b::Instr::break_(None, None),
+            ],
+            None,
+            None,
+        ));
+    }
+
+    fn add_print_array_2d<'s>(
+        &mut self,
+        body: &mut Vec<b::Instr>,
+        v: usize,
+        modules: &[b::Module],
+    ) {
+        let len_v = self.add_value(b::TypeBody::USize);
+        body.push(b::Instr::array_len(v, len_v, None));
+
+        let zero_v = self.add_value(b::TypeBody::USize);
+        body.push(b::Instr::create_number("0".to_string(), zero_v, None));
+
+        let one_v = self.add_value(b::TypeBody::USize);
+        body.push(b::Instr::create_number("1".to_string(), one_v, None));
+
+        let idx_v = self.add_value(b::TypeBody::USize);
+        let cond_v = self.add_value(b::TypeBody::Bool);
+
+        let mut then_body = vec![];
+
+        let str_array_v = self.add_value(b::TypeBody::Array(b::ArrayType::new(
+            Box::new(b::Type::new(
+                b::TypeBody::String(b::StringType::new(None)),
+                None,
+            )),
+            None,
+        )));
+        then_body.push(b::Instr::array_index(v, idx_v, str_array_v, None));
+
+        self.add_print_array(&mut then_body, str_array_v, &*modules);
 
         let new_idx_v = self.add_value(b::TypeBody::USize);
         then_body.push(b::Instr::add(idx_v, one_v, new_idx_v, None));

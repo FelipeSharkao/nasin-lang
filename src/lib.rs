@@ -82,6 +82,12 @@ pub fn build_maybe_run(
 
     ctx.compile();
 
+    if { ctx.errors.lock().unwrap() }.len() > 0 {
+        let source_manager = Arc::new(ctx.source_manager);
+        let errors = ctx.errors.into_inner().unwrap();
+        return Err(CompilerError::new(source_manager, errors));
+    }
+
     if ctx.cfg.run {
         let status = cmd!(ctx.cfg.out).status().unwrap();
         process::exit(status.code().unwrap_or(1));

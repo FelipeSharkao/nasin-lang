@@ -192,8 +192,7 @@ impl<'a> CodegenContext<'a> {
                     desc.write_function_addr(offset as u32, func.clone());
                 }
                 _ => {
-                    let res =
-                        item.serialize(&mut bytes, self.cl_module.isa().endianness());
+                    let res = item.serialize(&mut bytes, &self.cl_module);
                     if res.is_err() {
                         return None;
                     }

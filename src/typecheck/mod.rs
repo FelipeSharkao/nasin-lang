@@ -828,7 +828,7 @@ impl<'a> TypeChecker<'a> {
                 } else {
                     self.ctx.push_error(errors::Error::new(
                         errors::UnexpectedType::new(
-                            modules[self.mod_idx].values[idx].ty.to_owned(),
+                            vec![modules[self.mod_idx].values[idx].ty.to_owned()],
                             merge_with.clone(),
                         )
                         .into(),

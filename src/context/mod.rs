@@ -98,6 +98,10 @@ impl BuildContext {
 
     pub fn compile(&self) {
         let rt_entry = RuntimeBuilder::new(self).add_entry().build();
+        // RuntimeBuilder can push errors
+        if self.errors.lock().unwrap().len() > 0 {
+            return;
+        }
 
         let modules = self.lock_modules();
 

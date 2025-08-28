@@ -35,6 +35,8 @@ pub enum ValueSource {
     #[from(skip)]
     #[display("ptr {}", _0)]
     Ptr(cl::Value),
+    #[display("ptr ()")]
+    UnitPtr,
     Data(cl::DataId),
     StackSlot(cl::StackSlot),
     #[display("{}", &*_0)]
@@ -62,8 +64,10 @@ impl ValueSource {
     pub fn serialize(
         &self,
         bytes: &mut Vec<u8>,
-        endianess: cl::Endianness,
+        cl_module: &impl cl::Module,
     ) -> Result<(), ()> {
+        let endianess = cl_module.isa().endianness();
+
         macro_rules! serialize_number {
             ($n:expr) => {
                 match endianess {
@@ -81,9 +85,16 @@ impl ValueSource {
             ValueSource::F32(n) => serialize_number!(n.to_float()),
             ValueSource::F64(n) => serialize_number!(n.to_float()),
             ValueSource::Slice(slice) => {
-                slice.ptr.serialize(bytes, endianess)?;
-                slice.len.serialize(bytes, endianess)?;
+                slice.ptr.serialize(bytes, cl_module)?;
+                slice.len.serialize(bytes, cl_module)?;
             }
+            ValueSource::UnitPtr => match cl_module.isa().pointer_bytes() {
+                1 => bytes.push(1),
+                2 => serialize_number!(1u16),
+                4 => serialize_number!(1u32),
+                8 => serialize_number!(1u64),
+                _ => panic!("how many bytes?"),
+            },
             ValueSource::Primitive(..)
             | ValueSource::Ptr(..)
             | ValueSource::Data(..)
@@ -106,6 +117,7 @@ impl ValueSource {
         match self {
             ValueSource::Primitive(_)
             | ValueSource::Ptr(_)
+            | ValueSource::UnitPtr
             | ValueSource::I8(_)
             | ValueSource::I16(_)
             | ValueSource::I32(_)
@@ -141,9 +153,10 @@ impl ValueSource {
             | ValueSource::I64(_)
             | ValueSource::F32(_)
             | ValueSource::F64(_) => ValueSource::Primitive(values[0]),
-            ValueSource::Ptr(_) | ValueSource::Data(_) | ValueSource::StackSlot(_) => {
-                ValueSource::Ptr(values[0])
-            }
+            ValueSource::Ptr(_)
+            | ValueSource::UnitPtr
+            | ValueSource::Data(_)
+            | ValueSource::StackSlot(_) => ValueSource::Ptr(values[0]),
             ValueSource::Slice(slice) => {
                 let ptr_count = slice.ptr.count_values();
                 let ptr = slice.ptr.with_values(&values[..ptr_count]);

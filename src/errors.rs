@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use derive_more::{Display, From};
 use derive_new::new;
+use itertools::Itertools;
 use thiserror::Error;
 
 use crate::{bytecode as b, sources, utils};
@@ -82,9 +83,13 @@ pub struct TypeNotFound {
 }
 
 #[derive(Debug, Clone, Display, new)]
-#[display("Expected type {}, found {}", &expected.body, &actual.body)]
+#[display(
+    "Unexpected type {}. Expected one of:\n{}",
+    &actual.body,
+    utils::indented(2, expected.iter().map(|t| format!("- {}", &t.body))),
+)]
 pub struct UnexpectedType {
-    pub expected: b::Type,
+    pub expected: Vec<b::Type>,
     pub actual:   b::Type,
 }
 

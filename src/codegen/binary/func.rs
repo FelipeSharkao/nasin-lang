@@ -896,7 +896,7 @@ impl<'a> FuncCodegen<'a, '_> {
                                 break 'match_b None;
                             }
                         } else {
-                            types::ValueSource::I64(1)
+                            types::ValueSource::UnitPtr
                         };
                         Some(types::RuntimeValue::new(src, mod_idx, instr.results[0]))
                     }
@@ -1109,6 +1109,9 @@ impl<'a> FuncCodegen<'a, '_> {
         let builder = expect_builder!(self);
         match src {
             types::ValueSource::Ptr(v) => *v,
+            types::ValueSource::UnitPtr => builder
+                .ins()
+                .iconst(self.ctx.cl_module.isa().pointer_type(), 1),
             types::ValueSource::Data(data_id) => {
                 let field_gv = if true {
                     self.get_global_value(*data_id)
@@ -1218,6 +1221,7 @@ impl<'a> FuncCodegen<'a, '_> {
             types::ValueSource::DynDispatched(dispatched) => {
                 vec![dispatched.src, dispatched.vtable]
             }
+            types::ValueSource::UnitPtr => vec![],
             types::ValueSource::Func(..)
             | types::ValueSource::AppliedMethod(..)
             | types::ValueSource::AppliedMethodInderect(..) => {
