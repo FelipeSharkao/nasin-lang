@@ -1,7 +1,6 @@
 use std::collections::HashMap;
-use std::mem;
 
-use cranelift_shim::{self as cl, InstBuilder};
+use cranelift_shim as cl;
 use derive_more::{Display, From};
 use derive_new::new;
 use itertools::Itertools;

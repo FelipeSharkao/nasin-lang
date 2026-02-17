@@ -172,7 +172,10 @@ impl<'a, 't> ExprParser<'a, 't> {
                 let op = node.required_field("op");
                 let left = self.add_expr_node(node.required_field("left"), false);
                 let right = self.add_expr_node(node.required_field("right"), false);
-                self.add_bin_op(op, left, right)
+                match op.kind() {
+                    "double_plus" => self.add_str_concat_op(op, left, right),
+                    _ => self.add_bin_op(op, left, right),
+                }
             }
             "type_bind" => {
                 let mut value =
@@ -378,6 +381,55 @@ impl<'a, 't> ExprParser<'a, 't> {
             loc = loc.merge(right_loc);
         }
         let v = self.add_instr_with_result(b::Instr::new(body, Some(loc)));
+        ValueRef::new(ValueRefBody::Value(v), Some(loc))
+    }
+
+    fn add_str_concat_op(
+        &mut self,
+        op: ts::Node,
+        left: ValueRef,
+        right: ValueRef,
+    ) -> ValueRef {
+        // TODO: operator overloading
+
+        let left_v = self.use_value_ref(&left);
+        let right_v = self.use_value_ref(&right);
+
+        let mut loc = b::Loc::from_node(self.module.src_idx, &op);
+        if let Some(left_loc) = &left.loc {
+            loc = loc.merge(left_loc);
+        }
+        if let Some(right_loc) = &right.loc {
+            loc = loc.merge(right_loc);
+        }
+
+        let left_len_v = self
+            .add_instr_with_result(b::Instr::new(b::InstrBody::StrLen(left_v), left.loc));
+        let right_len_v = self.add_instr_with_result(b::Instr::new(
+            b::InstrBody::StrLen(right_v),
+            right.loc,
+        ));
+
+        let len_v = self.add_instr_with_result(b::Instr::new(
+            b::InstrBody::Add(left_len_v, right_len_v),
+            Some(loc),
+        ));
+
+        let v = self.add_instr_with_result(b::Instr::new(
+            b::InstrBody::CreateUninitializedString(len_v),
+            Some(loc),
+        ));
+
+        self.add_instr(b::Instr::new(
+            b::InstrBody::CopyStr(left_v, v, None),
+            Some(loc),
+        ));
+
+        self.add_instr(b::Instr::new(
+            b::InstrBody::CopyStr(right_v, v, Some(left_len_v)),
+            Some(loc),
+        ));
+
         ValueRef::new(ValueRefBody::Value(v), Some(loc))
     }
 

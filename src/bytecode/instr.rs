@@ -17,6 +17,7 @@ pub enum InstrBody {
     CreateBool(bool),
     CreateNumber(String),
     CreateString(String),
+    CreateUninitializedString(ValueIdx),
     CreateArray(Vec<ValueIdx>),
     CreateRecord(utils::SortedMap<String, ValueIdx>),
 
@@ -51,6 +52,8 @@ pub enum InstrBody {
     ArrayLen(ValueIdx),
     ArrayIndex(ValueIdx, ValueIdx),
 
+    CopyStr(ValueIdx, ValueIdx, Option<ValueIdx>),
+
     Type(ValueIdx, Type),
     Dispatch(ValueIdx, usize, usize),
 
@@ -72,6 +75,9 @@ impl Display for InstrBody {
             InstrBody::CreateNumber(v) => write!(f, "create_number {v}")?,
             InstrBody::CreateString(v) => {
                 write!(f, "create_string {}", utils::encode_string_lit(v))?
+            }
+            InstrBody::CreateUninitializedString(len) => {
+                write!(f, "create_uninitialized_string {len}")?
             }
             InstrBody::CreateArray(vs) => {
                 write!(f, "create_array")?;
@@ -141,6 +147,12 @@ impl Display for InstrBody {
             InstrBody::StrPtr(v) => write!(f, "str_ptr v{v}")?,
             InstrBody::ArrayLen(v) => write!(f, "array_len v{v}")?,
             InstrBody::ArrayIndex(v, idx) => write!(f, "array_index v{v} v{idx}")?,
+            InstrBody::CopyStr(src, dst, offset) => {
+                write!(f, "copy_str v{src} v{dst}")?;
+                if let Some(offset) = offset {
+                    write!(f, "+v{offset}")?;
+                }
+            }
             InstrBody::Type(v, ty) => write!(f, "type v{v} {ty}")?,
             InstrBody::Dispatch(v, mod_idx, ty_idx) => {
                 write!(f, "dispatch v{v} {mod_idx}-{ty_idx}")?
