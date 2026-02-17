@@ -1,6 +1,5 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::mem;
 
 use cl::InstBuilder;
 use cranelift_shim::{self as cl, Module};
@@ -51,10 +50,10 @@ impl<'a> FuncCodegen<'a, '_> {
         mod_idx: usize,
     ) {
         let (block, mut cl_values) = {
-            let func = expect_builder!(self);
-            let block = func.create_block();
-            func.append_block_params_for_function_params(block);
-            (block, func.block_params(block).to_vec())
+            let builder = expect_builder!(self);
+            let block = builder.create_block();
+            builder.append_block_params_for_function_params(block);
+            (block, builder.block_params(block).to_vec())
         };
 
         if let (ResultPolicy::Return(types::ReturnPolicy::Struct(_)), Some(result)) =
@@ -89,6 +88,7 @@ impl<'a> FuncCodegen<'a, '_> {
                 .clone()
                 .map(|v| Cow::Borrowed(&self.ctx.modules[mod_idx].values[v].ty)),
             result,
+            declared_consts: HashMap::new(),
         });
     }
     pub fn finish(self) -> CodegenContext<'a> {
@@ -251,9 +251,9 @@ impl<'a> FuncCodegen<'a, '_> {
                 assert!(cond.len() == 1);
                 let cond = cond[0];
 
-                let builder = expect_builder!(self);
+                let v_false = self.add_const(types::Const::I8(0));
 
-                let v_false = builder.ins().iconst(cl::types::I8, 0);
+                let builder = expect_builder!(self);
                 let cl_value = builder.ins().icmp(cl::IntCC::Equal, cond, v_false);
 
                 self.values.insert(
@@ -297,8 +297,10 @@ impl<'a> FuncCodegen<'a, '_> {
                     &[],
                 );
 
-                let mut scope =
-                    ScopePayload::new(then_block.unwrap_or(self.scopes.last().block));
+                let mut scope = ScopePayload::new(
+                    then_block.unwrap_or(self.scopes.last().block),
+                    self.scopes.last().declared_consts.clone(),
+                );
                 scope.next_branches.push(else_block.unwrap_or(next_block));
 
                 self.scopes.last_mut().block = next_block;
@@ -396,6 +398,7 @@ impl<'a> FuncCodegen<'a, '_> {
                     next_branches: vec![],
                     result,
                     ty,
+                    declared_consts: self.scopes.last().declared_consts.clone(),
                 });
                 scope.is_loop = true;
 
@@ -576,9 +579,7 @@ impl<'a> FuncCodegen<'a, '_> {
                     .ins()
                     .func_addr(self.ctx.cl_module.isa().pointer_type(), closure_func_ref);
 
-                let env = builder
-                    .ins()
-                    .iconst(self.ctx.cl_module.isa().pointer_type(), 0);
+                let env = self.add_const(types::Const::uint_ptr(0, &self.ctx.cl_module));
                 let value = types::FuncAsValue::new(closure_ptr, env, proto);
 
                 self.values.insert(
@@ -778,12 +779,12 @@ impl<'a> FuncCodegen<'a, '_> {
                 assert!(idx.len() == 1);
                 let idx = idx[0];
 
-                let builder = expect_builder!(self);
+                let size = self.add_const(types::Const::uint_ptr(
+                    types::get_size(ty, self.ctx.modules, &self.ctx.cl_module) as u64,
+                    &self.ctx.cl_module,
+                ));
 
-                let size = builder.ins().iconst(
-                    self.ctx.cl_module.isa().pointer_type(),
-                    types::get_size(ty, self.ctx.modules, &self.ctx.cl_module) as i64,
-                );
+                let builder = expect_builder!(self);
                 let offset = builder.ins().imul(size, idx);
                 let ptr = builder.ins().iadd(ptr, offset);
 
@@ -868,11 +869,10 @@ impl<'a> FuncCodegen<'a, '_> {
                 assert!(len.len() == 1);
                 let len = len[0];
 
-                let ptr_ty = self.ctx.cl_module.isa().pointer_type();
+                let zero = self.add_const(types::Const::I8(0));
+                let one = self.add_const(types::Const::uint_ptr(1, &self.ctx.cl_module));
 
                 let builder = expect_builder!(self);
-                let zero = builder.ins().iconst(cl::types::I8, 0);
-                let one = builder.ins().iconst(ptr_ty, 1);
                 let size = builder.ins().iadd(len, one);
 
                 let data = self.heap_alloc(size);
@@ -1182,9 +1182,9 @@ impl<'a> FuncCodegen<'a, '_> {
         let builder = expect_builder!(self);
         match src {
             types::ValueSource::Ptr(v) => *v,
-            types::ValueSource::UnitPtr => builder
-                .ins()
-                .iconst(self.ctx.cl_module.isa().pointer_type(), 1),
+            types::ValueSource::UnitPtr => {
+                self.add_const(types::Const::uint_ptr(1, &self.ctx.cl_module))
+            }
             types::ValueSource::Data(data_id) => {
                 let field_gv = if true {
                     self.get_global_value(*data_id)
@@ -1236,24 +1236,16 @@ impl<'a> FuncCodegen<'a, '_> {
         src: &types::ValueSource,
         ty: &b::Type,
     ) -> Vec<cl::Value> {
-        let builder = expect_builder!(self);
         match src {
             types::ValueSource::Primitive(v) => vec![*v],
-            types::ValueSource::I8(n) => {
-                vec![builder.ins().iconst(cl::types::I8, *n as i64)]
+            types::ValueSource::I8(_)
+            | types::ValueSource::I16(_)
+            | types::ValueSource::I32(_)
+            | types::ValueSource::I64(_)
+            | types::ValueSource::F32(_)
+            | types::ValueSource::F64(_) => {
+                vec![self.add_const(src.try_into().unwrap())]
             }
-            types::ValueSource::I16(n) => {
-                vec![builder.ins().iconst(cl::types::I16, *n as i64)]
-            }
-            types::ValueSource::I32(n) => {
-                vec![builder.ins().iconst(cl::types::I32, *n as i64)]
-            }
-            types::ValueSource::I64(n) => {
-                let n = unsafe { mem::transmute_copy::<u64, i64>(&n) };
-                vec![builder.ins().iconst(cl::types::I64, n)]
-            }
-            types::ValueSource::F32(n) => vec![builder.ins().f32const(n.to_float())],
-            types::ValueSource::F64(n) => vec![builder.ins().f64const(n.to_float())],
             types::ValueSource::Ptr(_)
             | types::ValueSource::Data(_)
             | types::ValueSource::StackSlot(_) => {
@@ -1301,6 +1293,34 @@ impl<'a> FuncCodegen<'a, '_> {
                 todo!("function references")
             }
         }
+    }
+
+    fn add_const(&mut self, n: types::Const) -> cl::Value {
+        self.scopes
+            .last_mut()
+            .declared_consts
+            .entry(n)
+            .or_insert_with(|| {
+                let builder = expect_builder!(self);
+
+                macro_rules! iconst {
+                    ($ty:ident, $n:expr) => {
+                        builder
+                            .ins()
+                            .iconst(cl::types::$ty, ($n as u64).cast_signed())
+                    };
+                }
+
+                match n {
+                    types::Const::I8(n) => iconst!(I8, n),
+                    types::Const::I16(n) => iconst!(I16, n),
+                    types::Const::I32(n) => iconst!(I32, n),
+                    types::Const::I64(n) => iconst!(I64, n),
+                    types::Const::F32(n) => builder.ins().f32const(n.to_float()),
+                    types::Const::F64(n) => builder.ins().f64const(n.to_float()),
+                }
+            })
+            .clone()
     }
 
     fn use_value_by_ref(&mut self, mod_idx: usize, v: b::ValueIdx) -> cl::Value {
@@ -1389,10 +1409,8 @@ impl<'a> FuncCodegen<'a, '_> {
         } else {
             let builder = expect_builder!(self);
             if escape {
-                let size_value = builder
-                    .ins()
-                    .iconst(self.ctx.cl_module.isa().pointer_type(), size as i64);
-
+                let size_value = self
+                    .add_const(types::Const::uint_ptr(size as u64, &self.ctx.cl_module));
                 self.heap_alloc(size_value)
             } else {
                 let ss_data =
@@ -1453,8 +1471,6 @@ impl<'a> FuncCodegen<'a, '_> {
 
     /// Copy `size` bytes from `src` to `dst`.
     fn copy_bytes(&mut self, src: cl::Value, dst: cl::Value, size: cl::Value) {
-        let builder = expect_builder!(self);
-
         //   end = src + size
         //   br loop(src, dst)
         // loop(src, dst):
@@ -1470,9 +1486,11 @@ impl<'a> FuncCodegen<'a, '_> {
 
         let ptr_ty = self.ctx.cl_module.isa().pointer_type();
 
+        let builder = expect_builder!(self);
         let loop_end = builder.ins().iadd(src, size);
-        let one = builder.ins().iconst(ptr_ty, 1);
+        let one = self.add_const(types::Const::uint_ptr(1, &self.ctx.cl_module));
 
+        let builder = expect_builder!(self);
         let loop_block = builder.create_block();
         let loop_src = builder.append_block_param(loop_block, ptr_ty);
         let loop_dst = builder.append_block_param(loop_block, ptr_ty);
@@ -1562,6 +1580,7 @@ pub struct ScopePayload<'a> {
     pub result: Option<b::ValueIdx>,
     #[new(default)]
     pub ty: Option<Cow<'a, b::Type>>,
+    pub declared_consts: HashMap<types::Const, cl::Value>,
 }
 impl utils::SimpleScopePayload for ScopePayload<'_> {
     fn branch(&mut self, _: Option<&Self>) {

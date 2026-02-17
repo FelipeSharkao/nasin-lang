@@ -236,6 +236,7 @@ impl BinaryCodegen<'_> {
                     next_branches: vec![],
                     result: Some(gv),
                     ty: Some(Cow::Borrowed(ty)),
+                    declared_consts: HashMap::new(),
                 });
 
                 codegen

@@ -33,6 +33,14 @@ impl<T: ScopePayload> ScopeStack<T> {
         self.scopes.get_mut(idx)
     }
 
+    pub fn first(&self) -> &Scope<T> {
+        self.scopes.first().unwrap()
+    }
+
+    pub fn first_mut(&mut self) -> &mut Scope<T> {
+        self.scopes.first_mut().unwrap()
+    }
+
     pub fn last(&self) -> &Scope<T> {
         self.scopes.last().unwrap()
     }
