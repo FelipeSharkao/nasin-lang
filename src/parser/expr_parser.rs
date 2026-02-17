@@ -449,7 +449,7 @@ impl<'a, 't> ExprParser<'a, 't> {
 
     fn add_macro(&mut self, name: &str, args: &[ts::Node<'t>], loc: b::Loc) -> ValueRef {
         match name {
-            "str_len" => {
+            "internal_str_len" => {
                 // TODO: better error handling
                 assert!(args.len() == 1, "@str_len() expects a single argument");
 
@@ -462,7 +462,7 @@ impl<'a, 't> ExprParser<'a, 't> {
                 ));
                 ValueRef::new(ValueRefBody::Value(v), Some(loc))
             }
-            "str_ptr" => {
+            "internal_str_ptr" => {
                 // TODO: better error handling
                 assert!(args.len() == 1, "@str_ptr() expects a single argument");
 

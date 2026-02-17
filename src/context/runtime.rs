@@ -139,8 +139,8 @@ impl<'a> RuntimeBuilder<'a> {
         let core_mod_idx = self.ctx.core_mod_idx.expect("core should be defined");
 
         let (print_func_idx, print_func) = modules[core_mod_idx]
-            .get_func("print")
-            .expect("core.print should be defined");
+            .get_func("internal_print")
+            .expect("core.internal_print should be defined");
 
         let print_ty = &modules[core_mod_idx].values[print_func.ret].ty;
         let print_v = self.add_value(print_ty.body.clone());

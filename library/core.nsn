@@ -20,28 +20,34 @@ EX_PROTOCOL:    i32 = 76
 EX_NOPERM:      i32 = 77
 EX_CONFIG:      i32 = 78
 
-_write(f: i32, buf: Ptr(u8), len: usize): i32 @extern("write")
-_exit(code: i32): never @extern("exit")
-_malloc(size: usize): usize @extern("malloc")
+libc_write(f: i32, buf: Ptr(u8), len: usize): i32 @extern("write")
+libc_exit(code: i32): never @extern("exit")
+libc_malloc(size: usize): usize @extern("malloc")
 
 NL = "\n"
+NL_PTR = @internal_str_ptr(NL)
+NL_LEN = @internal_str_len(NL)
 
-print(message: str): bool =
-    let _ = _write(STDOUT_FILENO, @str_ptr(message), @str_len(message))
-    let _ = _write(STDOUT_FILENO, @str_ptr(NL), @str_len(NL))
+internal_print(message: str): bool =
+    let msg_ptr = @internal_str_ptr(message)
+    let msg_len = @internal_str_len(message)
+    let _ = libc_write(STDOUT_FILENO, msg_ptr, msg_len)
+    let _ = libc_write(STDOUT_FILENO, NL_PTR,  NL_LEN)
     true
 
-eprint(message: str): bool =
-    let _ = _write(STDERR_FILENO, @str_ptr(message), @str_len(message))
-    let _ = _write(STDERR_FILENO, @str_ptr(NL), @str_len(NL))
+internal_eprint(message: str): bool =
+    let msg_ptr = @internal_str_ptr(message)
+    let msg_len = @internal_str_len(message)
+    let _ = libc_write(STDERR_FILENO, msg_ptr, msg_len)
+    let _ = libc_write(STDERR_FILENO, NL_PTR,  NL_LEN)
     true
 
 assert(cond: bool, desc: str): bool =
     if not cond then
-        let _ = eprint(desc)
-        _exit(EX_SOFTWARE)
+        let _ = internal_eprint(desc)
+        libc_exit(EX_SOFTWARE)
     else
         true
 
-heap_alloc(size: usize): usize =
-    _malloc(size)
+internal_heap_alloc(size: usize): usize =
+    libc_malloc(size)
