@@ -1077,6 +1077,7 @@ impl<'a> FuncCodegen<'a, '_> {
             ReturnPolicy::Struct(..) => Some(args[0]),
             ReturnPolicy::NoReturn => {
                 builder.ins().trap(cl::TrapCode::UnreachableCodeReached);
+                builder.set_cold_block(self.scopes.last().block);
                 self.scopes.last_mut().mark_as_never();
                 None
             }
@@ -1492,8 +1493,8 @@ impl<'a> FuncCodegen<'a, '_> {
 
         let builder = expect_builder!(self);
         let loop_block = builder.create_block();
-        let loop_src = builder.append_block_param(loop_block, ptr_ty);
-        let loop_dst = builder.append_block_param(loop_block, ptr_ty);
+        let src_cursor = builder.append_block_param(loop_block, ptr_ty);
+        let dst_cursor = builder.append_block_param(loop_block, ptr_ty);
 
         let body_block = builder.create_block();
         let cont_block = builder.create_block();
@@ -1503,17 +1504,21 @@ impl<'a> FuncCodegen<'a, '_> {
 
         let cond = builder
             .ins()
-            .icmp(cl::IntCC::UnsignedLessThan, loop_src, loop_end);
+            .icmp(cl::IntCC::UnsignedLessThan, src_cursor, loop_end);
         builder.ins().brif(cond, body_block, &[], cont_block, &[]);
 
         builder.switch_to_block(body_block);
         let byte = builder
             .ins()
-            .load(cl::types::I8, cl::MemFlags::new(), loop_src, 0);
-        builder.ins().store(cl::MemFlags::new(), byte, loop_dst, 0);
-        let loop_src = builder.ins().iadd(src, one);
-        let loop_dst = builder.ins().iadd(dst, one);
-        builder.ins().jump(loop_block, &[loop_src, loop_dst]);
+            .load(cl::types::I8, cl::MemFlags::new(), src_cursor, 0);
+        builder
+            .ins()
+            .store(cl::MemFlags::new(), byte, dst_cursor, 0);
+        let next_src_cursor = builder.ins().iadd(src_cursor, one);
+        let next_dst_cursor = builder.ins().iadd(dst_cursor, one);
+        builder
+            .ins()
+            .jump(loop_block, &[next_src_cursor, next_dst_cursor]);
 
         builder.switch_to_block(cont_block);
         self.scopes.last_mut().block = cont_block;
