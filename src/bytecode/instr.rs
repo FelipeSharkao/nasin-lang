@@ -49,10 +49,12 @@ pub enum InstrBody {
 
     StrLen(ValueIdx),
     StrPtr(ValueIdx),
+    StrCopy(ValueIdx, ValueIdx, Option<ValueIdx>),
+
     ArrayLen(ValueIdx),
     ArrayIndex(ValueIdx, ValueIdx),
 
-    CopyStr(ValueIdx, ValueIdx, Option<ValueIdx>),
+    PtrSet(ValueIdx, ValueIdx),
 
     Type(ValueIdx, Type),
     Dispatch(ValueIdx, usize, usize),
@@ -145,14 +147,15 @@ impl Display for InstrBody {
             }
             InstrBody::StrLen(v) => write!(f, "str_len v{v}")?,
             InstrBody::StrPtr(v) => write!(f, "str_ptr v{v}")?,
-            InstrBody::ArrayLen(v) => write!(f, "array_len v{v}")?,
-            InstrBody::ArrayIndex(v, idx) => write!(f, "array_index v{v} v{idx}")?,
-            InstrBody::CopyStr(src, dst, offset) => {
-                write!(f, "copy_str v{src} v{dst}")?;
+            InstrBody::StrCopy(src, dst, offset) => {
+                write!(f, "str_copy v{src} v{dst}")?;
                 if let Some(offset) = offset {
                     write!(f, "+v{offset}")?;
                 }
             }
+            InstrBody::ArrayLen(v) => write!(f, "array_len v{v}")?,
+            InstrBody::ArrayIndex(v, idx) => write!(f, "array_index v{v} v{idx}")?,
+            InstrBody::PtrSet(ptr, value) => write!(f, "ptr_set v{ptr} v{value}")?,
             InstrBody::Type(v, ty) => write!(f, "type v{v} {ty}")?,
             InstrBody::Dispatch(v, mod_idx, ty_idx) => {
                 write!(f, "dispatch v{v} {mod_idx}-{ty_idx}")?

@@ -8,5 +8,6 @@ get_msg(cond) =
         false_msg
 
 main =
-    let _ = print(get_msg(true))
-    print(get_msg(false))
+    let line1 = get_msg(true)
+    let line2 = get_msg(false)
+    [line1, line2]

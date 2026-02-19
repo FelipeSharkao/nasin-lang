@@ -51,3 +51,20 @@ assert(cond: bool, desc: str): bool =
 
 internal_heap_alloc(size: usize): usize =
     libc_malloc(size)
+
+experimental_u8_to_str(x: u8): str =
+    ; concatenation causes the string to be allocated instead of being static
+    ; we need that because we're going to mutate it
+    let buf = "\0\0\0" ++ ""
+    _u8_to_str(x, buf, 0)
+
+_u8_to_str(x: u8, buf: str, i: usize): str =
+    if i >= @internal_str_len(buf) then buf else
+    ; Yes it's mutable, and yes I don't like either
+    ; but it's better than creating a new string every iteration
+    ; FIXME: after mutation optimization is implemented, write this in a FP way
+    let digit = x % 10
+    let _ = @internal_ptr_set(@internal_str_ptr(buf) + i, digit + 48)
+    let x = x / 10
+    if x == 0 then buf
+    else _u8_to_str(x, buf, i + 1)

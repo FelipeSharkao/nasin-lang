@@ -4,5 +4,4 @@ type Foo {
 
 msg: Foo = {data="Hello from record"}
 
-main =
-    print(msg.data)
+main = msg.data

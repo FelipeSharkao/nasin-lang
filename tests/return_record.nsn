@@ -8,4 +8,4 @@ create(id, data): Foo = {id=id, data=data}
 main =
     let msg = create(1, "Hello from record")
     let _   = create(2, "Trash stack")
-    print(msg.data)
+    msg.data

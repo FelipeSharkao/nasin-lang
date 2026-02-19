@@ -1,13 +1,11 @@
 type Foo {
     data: str
 
-    print(text, self: Self) =
-        let _ = print(self.data)
-        let _ = print(text)
-        true
+    lines(text, self: Self) =
+        [self.data, text]
 }
 
 msg: Foo = {data="Hello from record"}
 
 main =
-    msg.print("Hi method")
+    msg.lines("Hi method")

@@ -1,4 +1,3 @@
 msg = "Hello from global"
 
-main =
-    print(msg)
+main = msg

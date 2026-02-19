@@ -420,6 +420,17 @@ impl<'a> TypeChecker<'a> {
                 );
                 self.add_constraint(v, Constraint::Is(ty));
             }
+            b::InstrBody::StrCopy(src_v, dst_v, offset_v) => {
+                let str_ty =
+                    b::Type::new(b::TypeBody::String(b::StringType::new(None)), None);
+                self.add_constraint(*src_v, Constraint::Is(str_ty.clone()));
+                self.add_constraint(*dst_v, Constraint::Is(str_ty));
+
+                if let Some(offset_v) = offset_v {
+                    let offset_ty = b::Type::new(b::TypeBody::USize, None);
+                    self.add_constraint(*offset_v, Constraint::Is(offset_ty));
+                }
+            }
             b::InstrBody::ArrayLen(input) => {
                 let v = instr.results[0];
                 let arr_ty = b::Type::new(
@@ -440,16 +451,8 @@ impl<'a> TypeChecker<'a> {
                 self.add_constraint(*idx, Constraint::Is(idx_ty));
                 self.add_constraint(v, Constraint::ArrayElem(*input));
             }
-            b::InstrBody::CopyStr(src_v, dst_v, offset_v) => {
-                let str_ty =
-                    b::Type::new(b::TypeBody::String(b::StringType::new(None)), None);
-                self.add_constraint(*src_v, Constraint::Is(str_ty.clone()));
-                self.add_constraint(*dst_v, Constraint::Is(str_ty));
-
-                if let Some(offset_v) = offset_v {
-                    let offset_ty = b::Type::new(b::TypeBody::USize, None);
-                    self.add_constraint(*offset_v, Constraint::Is(offset_ty));
-                }
+            b::InstrBody::PtrSet(ptr, value) => {
+                self.add_constraint(*ptr, Constraint::Ptr(*value));
             }
             b::InstrBody::Type(v, ty) => {
                 self.add_constraint(*v, Constraint::Is(ty.clone()));

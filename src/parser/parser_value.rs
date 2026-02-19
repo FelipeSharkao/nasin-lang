@@ -9,6 +9,7 @@ pub enum ValueRefBody {
     Value(b::ValueIdx),
     Bool(bool),
     Number(String),
+    Void,
     Never,
     CompileError,
 }

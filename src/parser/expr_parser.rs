@@ -345,7 +345,7 @@ impl<'a, 't> ExprParser<'a, 't> {
                 b::InstrBody::CreateNumber(v.clone()),
                 value_ref.loc,
             )),
-            ValueRefBody::Never | ValueRefBody::CompileError => self
+            ValueRefBody::Void | ValueRefBody::Never | ValueRefBody::CompileError => self
                 .add_instr_with_result(b::Instr::new(
                     b::InstrBody::CompileError,
                     value_ref.loc,
@@ -459,12 +459,12 @@ impl<'a, 't> ExprParser<'a, 't> {
         ));
 
         self.add_instr(b::Instr::new(
-            b::InstrBody::CopyStr(left_v, v, None),
+            b::InstrBody::StrCopy(left_v, v, None),
             Some(loc),
         ));
 
         self.add_instr(b::Instr::new(
-            b::InstrBody::CopyStr(right_v, v, Some(left_len_v)),
+            b::InstrBody::StrCopy(right_v, v, Some(left_len_v)),
             Some(loc),
         ));
 
@@ -564,6 +564,22 @@ impl<'a, 't> ExprParser<'a, 't> {
                     Some(loc),
                 ));
                 ValueRef::new(ValueRefBody::Value(v), Some(loc))
+            }
+            "internal_ptr_set" => {
+                // TODO: better error handling
+                assert!(args.len() == 2, "@ptr_set() expects 2 arguments");
+
+                let value = self.add_expr_node(args[1], false);
+                let value_v = self.use_value_ref(&value);
+
+                let ptr = self.add_expr_node(args[0], false);
+                let ptr_v = self.use_value_ref(&ptr);
+
+                self.add_instr(b::Instr::new(
+                    b::InstrBody::PtrSet(ptr_v, value_v),
+                    Some(loc),
+                ));
+                ValueRef::new(ValueRefBody::Void, Some(loc))
             }
             _ => {
                 panic!("unhandled macro: `{name}`")

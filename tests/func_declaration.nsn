@@ -2,4 +2,4 @@ main =
     foo("Hello")
 
 foo(msg) =
-    print(msg)
+    msg ++ " from foo"
