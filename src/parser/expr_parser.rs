@@ -99,15 +99,29 @@ impl<'a, 't> ExprParser<'a, 't> {
             "false" => ValueRef::new(ValueRefBody::Bool(false), Some(loc)),
             "number" => {
                 let number = node.get_text(
-                    &self.module.ctx.source(self.module.src_idx).content().text,
+                    &self
+                        .module
+                        .ctx
+                        .source_manager
+                        .source(self.module.src_idx)
+                        .content()
+                        .text,
                 );
                 ValueRef::new(ValueRefBody::Number(number.to_string()), Some(loc))
             }
             "string_lit" => {
                 let string = match node.field("content") {
-                    Some(content) => utils::decode_string_lit(content.get_text(
-                        &self.module.ctx.source(self.module.src_idx).content().text,
-                    )),
+                    Some(content) => utils::decode_string_lit(
+                        content.get_text(
+                            &self
+                                .module
+                                .ctx
+                                .source_manager
+                                .source(self.module.src_idx)
+                                .content()
+                                .text,
+                        ),
+                    ),
                     None => "".to_string(),
                 };
                 let v = self.add_instr_with_result(b::Instr::new(
@@ -135,7 +149,13 @@ impl<'a, 't> ExprParser<'a, 't> {
                     .iter_field("fields")
                     .map(|field_node| {
                         let name = field_node.required_field("name").get_text(
-                            &self.module.ctx.source(self.module.src_idx).content().text,
+                            &self
+                                .module
+                                .ctx
+                                .source_manager
+                                .source(self.module.src_idx)
+                                .content()
+                                .text,
                         );
                         let value_ref =
                             self.add_expr_node(field_node.required_field("value"), false);
@@ -151,7 +171,13 @@ impl<'a, 't> ExprParser<'a, 't> {
             }
             "ident" => {
                 let ident = node.get_text(
-                    &self.module.ctx.source(self.module.src_idx).content().text,
+                    &self
+                        .module
+                        .ctx
+                        .source_manager
+                        .source(self.module.src_idx)
+                        .content()
+                        .text,
                 );
                 if let Some(value) = self.scopes.last().idents.get(ident) {
                     value.with_loc(loc)
@@ -191,7 +217,13 @@ impl<'a, 't> ExprParser<'a, 't> {
                 let parent = self.add_expr_node(node.required_field("parent"), false);
                 let prop_name_node = node.required_field("prop_name");
                 let prop_name = prop_name_node.get_text(
-                    &self.module.ctx.source(self.module.src_idx).content().text,
+                    &self
+                        .module
+                        .ctx
+                        .source_manager
+                        .source(self.module.src_idx)
+                        .content()
+                        .text,
                 );
                 self.add_get_prop(
                     parent,
@@ -275,7 +307,13 @@ impl<'a, 't> ExprParser<'a, 't> {
             }
             "macro" => {
                 let name = node.required_field("name").of_kind("ident").get_text(
-                    &self.module.ctx.source(self.module.src_idx).content().text,
+                    &self
+                        .module
+                        .ctx
+                        .source_manager
+                        .source(self.module.src_idx)
+                        .content()
+                        .text,
                 );
                 let args = node.iter_field("args").collect_vec();
                 self.add_macro(name, &args, b::Loc::from_node(self.module.src_idx, &node))
@@ -544,7 +582,13 @@ impl<'a, 't> ExprParser<'a, 't> {
                 match pat_node.kind() {
                     "ident" => {
                         let ident = pat_node.get_text(
-                            &self.module.ctx.source(self.module.src_idx).content().text,
+                            &self
+                                .module
+                                .ctx
+                                .source_manager
+                                .source(self.module.src_idx)
+                                .content()
+                                .text,
                         );
                         self.scopes.last_mut().idents.insert(
                             ident.to_string(),

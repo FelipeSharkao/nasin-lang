@@ -89,7 +89,7 @@ impl<'a, 't> ModuleParser<'a, 't> {
         for sym_node in node.iter_children() {
             let ident_node = sym_node.required_field("name").of_kind("ident");
             let name = ident_node
-                .get_text(&self.ctx.source(self.src_idx).content().text)
+                .get_text(&self.ctx.source_manager.source(self.src_idx).content().text)
                 .to_string();
 
             match sym_node.kind() {
@@ -109,8 +109,14 @@ impl<'a, 't> ModuleParser<'a, 't> {
                         .map(|method_node| {
                             let method_ident_node =
                                 method_node.required_field("name").of_kind("ident");
-                            let method_name = method_ident_node
-                                .get_text(&self.ctx.source(self.src_idx).content().text);
+                            let method_name = method_ident_node.get_text(
+                                &self
+                                    .ctx
+                                    .source_manager
+                                    .source(self.src_idx)
+                                    .content()
+                                    .text,
+                            );
                             let func_name = format!("{name}.{method_name}");
 
                             let func_idx = self.add_func(
@@ -200,8 +206,9 @@ impl<'a, 't> ModuleParser<'a, 't> {
             .iter_field("params")
             .map(|param_node| {
                 let param_name_node = param_node.required_field("pat").of_kind("ident");
-                let param_name = param_name_node
-                    .get_text(&self.ctx.source(self.src_idx).content().text);
+                let param_name = param_name_node.get_text(
+                    &self.ctx.source_manager.source(self.src_idx).content().text,
+                );
 
                 let param_ty = match param_node.field("type") {
                     Some(ty_node) => self.types.parse_type_expr(ty_node),
@@ -227,7 +234,7 @@ impl<'a, 't> ModuleParser<'a, 't> {
             let args_nodes: Vec<_> = directive_node.iter_field("args").collect();
             match directive_node
                 .required_field("name")
-                .get_text(&self.ctx.source(self.src_idx).content().text)
+                .get_text(&self.ctx.source_manager.source(self.src_idx).content().text)
             {
                 "extern" => {
                     // TODO: error handling
@@ -235,9 +242,9 @@ impl<'a, 't> ModuleParser<'a, 't> {
                     assert!(args_nodes.len() == 1);
                     assert!(args_nodes[0].kind() == "string_lit");
                     let symbol_name = utils::decode_string_lit(
-                        args_nodes[0]
-                            .required_field("content")
-                            .get_text(&self.ctx.source(self.src_idx).content().text),
+                        args_nodes[0].required_field("content").get_text(
+                            &self.ctx.source_manager.source(self.src_idx).content().text,
+                        ),
                     );
                     extrn = Some(b::Extern { name: symbol_name });
                 }

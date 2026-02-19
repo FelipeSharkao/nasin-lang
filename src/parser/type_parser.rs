@@ -30,7 +30,9 @@ impl<'a, 't> TypeParser<'a, 't> {
 
         let body = match node.kind() {
             "ident" => {
-                let ident = node.get_text(&self.ctx.source(self.src_idx).content().text);
+                let ident = node.get_text(
+                    &self.ctx.source_manager.source(self.src_idx).content().text,
+                );
                 match self.idents.get(ident) {
                     Some(body) => body.clone(),
                     None => {
@@ -45,9 +47,11 @@ impl<'a, 't> TypeParser<'a, 't> {
             "array_type" => {
                 let item_ty = self.parse_type_expr(node.required_field("item_type"));
                 let len = node.field("length").map(|n| {
-                    n.get_text(&self.ctx.source(self.src_idx).content().text)
-                        .parse::<usize>()
-                        .expect("Cannot cast length to integer")
+                    n.get_text(
+                        &self.ctx.source_manager.source(self.src_idx).content().text,
+                    )
+                    .parse::<usize>()
+                    .expect("Cannot cast length to integer")
                 });
                 b::TypeBody::Array(b::ArrayType::new(
                     item_ty.into(),
@@ -55,10 +59,9 @@ impl<'a, 't> TypeParser<'a, 't> {
                 ))
             }
             "generic_type" => {
-                let name = node
-                    .required_field("name")
-                    .of_kind("ident")
-                    .get_text(&self.ctx.source(self.src_idx).content().text);
+                let name = node.required_field("name").of_kind("ident").get_text(
+                    &self.ctx.source_manager.source(self.src_idx).content().text,
+                );
 
                 let args = node
                     .iter_field("args")
@@ -128,7 +131,14 @@ impl<'a, 't> TypeParser<'a, 't> {
                         .map(|field_node| {
                             let name_node = field_node.required_field("name");
                             let name = name_node
-                                .get_text(&self.ctx.source(self.src_idx).content().text)
+                                .get_text(
+                                    &self
+                                        .ctx
+                                        .source_manager
+                                        .source(self.src_idx)
+                                        .content()
+                                        .text,
+                                )
                                 .to_string();
                             let record_field = b::RecordField::new(
                                 b::NameWithLoc::new(
@@ -147,7 +157,14 @@ impl<'a, 't> TypeParser<'a, 't> {
                         .map(|method_node| {
                             let name_node = method_node.required_field("name");
                             let name = name_node
-                                .get_text(&self.ctx.source(self.src_idx).content().text)
+                                .get_text(
+                                    &self
+                                        .ctx
+                                        .source_manager
+                                        .source(self.src_idx)
+                                        .content()
+                                        .text,
+                                )
                                 .to_string();
                             let func_ref = x.methods_idx.get(&name as &str).expect(
                                 "index of method's function should already be known",
@@ -193,7 +210,14 @@ impl<'a, 't> TypeParser<'a, 't> {
                         .map(|method_node| {
                             let name_node = method_node.required_field("name");
                             let name = name_node
-                                .get_text(&self.ctx.source(self.src_idx).content().text)
+                                .get_text(
+                                    &self
+                                        .ctx
+                                        .source_manager
+                                        .source(self.src_idx)
+                                        .content()
+                                        .text,
+                                )
                                 .to_string();
                             let func_ref = x.methods_idx.get(&name as &str).expect(
                                 "index of method's function should already be known",

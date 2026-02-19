@@ -1,7 +1,6 @@
 #![allow(irrefutable_let_patterns)]
 
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::{fs, process};
 
 use clap::Args;
@@ -69,23 +68,22 @@ pub fn build_maybe_run(
         run,
     });
 
-    ctx.parse_library();
-    let src_idx = ctx.preload(emit.file).expect("file not found");
+    if !ctx.parse_library() {
+        return Err(ctx.into_compile_error());
+    }
+
+    let Ok(src_idx) = ctx.preload(emit.file) else {
+        return Err(ctx.into_compile_error());
+    };
 
     ctx.parse(src_idx, true);
-
-    if { ctx.errors.lock().unwrap() }.len() > 0 {
-        let source_manager = Arc::new(ctx.source_manager);
-        let errors = ctx.errors.into_inner().unwrap();
-        return Err(CompilerError::new(source_manager, errors));
+    if ctx.has_errors() {
+        return Err(ctx.into_compile_error());
     }
 
     ctx.compile();
-
-    if { ctx.errors.lock().unwrap() }.len() > 0 {
-        let source_manager = Arc::new(ctx.source_manager);
-        let errors = ctx.errors.into_inner().unwrap();
-        return Err(CompilerError::new(source_manager, errors));
+    if ctx.has_errors() {
+        return Err(ctx.into_compile_error());
     }
 
     if ctx.cfg.run {

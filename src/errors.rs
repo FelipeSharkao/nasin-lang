@@ -1,9 +1,9 @@
-use std::fmt;
+use std::path::PathBuf;
 use std::sync::Arc;
+use std::{fmt, io};
 
 use derive_more::{Display, From};
 use derive_new::new;
-use itertools::Itertools;
 use thiserror::Error;
 
 use crate::{bytecode as b, sources, utils};
@@ -60,6 +60,7 @@ impl fmt::Display for CompilerError {
 
 #[derive(Debug, Clone, Display, From)]
 pub enum ErrorDetail {
+    ReadError(ReadError),
     ValueNotFound(ValueNotFound),
     TypeNotFound(TypeNotFound),
     UnexpectedType(UnexpectedType),
@@ -68,6 +69,13 @@ pub enum ErrorDetail {
     TypeNotFinal,
     TypeNotInterface(TypeNotInterface),
     Todo(Todo),
+}
+
+#[derive(Debug, Clone, Display, new)]
+#[display("Cannot read file `{}`: {kind}", path.display())]
+pub struct ReadError {
+    pub path: PathBuf,
+    pub kind: io::ErrorKind,
 }
 
 #[derive(Debug, Clone, Display, new)]

@@ -2,22 +2,20 @@ mod runtime;
 
 use std::fs;
 use std::ops::{Deref, DerefMut};
-use std::path::PathBuf;
-use std::sync::{Mutex, RwLock};
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, RwLock};
 
-use derive_more::derive::{Deref, DerefMut};
 use derive_new::new;
 use tree_sitter as ts;
 
 use self::runtime::RuntimeBuilder;
+use crate::sources::Source;
 use crate::{bytecode as b, codegen, config, errors, parser, sources, typecheck};
 
-#[derive(Debug, Deref, DerefMut, new)]
+#[derive(Debug, new)]
 pub struct BuildContext {
     pub cfg: config::BuildConfig,
     #[new(default)]
-    #[deref]
-    #[deref_mut]
     pub source_manager: sources::SourceManager,
     #[new(default)]
     pub errors: Mutex<Vec<errors::Error>>,
@@ -39,6 +37,16 @@ impl BuildContext {
 
     pub fn push_error(&self, value: errors::Error) {
         self.errors.lock().unwrap().push(value);
+    }
+
+    pub fn has_errors(&self) -> bool {
+        self.errors.lock().unwrap().len() > 0
+    }
+
+    pub fn into_compile_error(self) -> errors::CompilerError {
+        let source_manager = Arc::new(self.source_manager);
+        let errors = self.errors.into_inner().unwrap();
+        errors::CompilerError::new(source_manager, errors)
     }
 
     pub fn parse(&self, src_idx: usize, is_entry: bool) -> usize {
@@ -85,21 +93,23 @@ impl BuildContext {
         mod_idx
     }
 
-    pub fn parse_library(&mut self) {
+    pub fn parse_library(&mut self) -> bool {
         let lib_dir = PathBuf::from(
             option_env!("LIB_DIR").expect("env LIB_DIR should be provided"),
         );
-        let core_src_idx = self
-            .source_manager
-            .preload(lib_dir.join("core.nsn"))
-            .expect("should be able to locate core.nsn");
+
+        let Ok(core_src_idx) = self.preload(lib_dir.join("core.nsn")) else {
+            return false;
+        };
+
         self.core_mod_idx = Some(self.parse(core_src_idx, false));
+        true
     }
 
     pub fn compile(&self) {
         let rt_entry = RuntimeBuilder::new(self).add_entry().build();
         // RuntimeBuilder can push errors
-        if self.errors.lock().unwrap().len() > 0 {
+        if self.has_errors() {
             return;
         }
 
@@ -118,6 +128,26 @@ impl BuildContext {
 
         if !self.cfg.silent && !self.cfg.run {
             println!("Compiled program to {}", self.cfg.out.to_string_lossy());
+        }
+    }
+
+    pub fn open(&mut self, path: PathBuf) -> Result<usize, ()> {
+        match self.source_manager.open(path) {
+            Ok(idx) => Ok(idx),
+            Err(err) => {
+                self.push_error(err);
+                Err(())
+            }
+        }
+    }
+
+    pub fn preload(&mut self, path: PathBuf) -> Result<usize, ()> {
+        match self.source_manager.preload(path) {
+            Ok(idx) => Ok(idx),
+            Err(err) => {
+                self.push_error(err);
+                Err(())
+            }
         }
     }
 }
