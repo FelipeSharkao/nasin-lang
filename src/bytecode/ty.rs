@@ -193,6 +193,10 @@ impl Type {
         self.is_bool() || self.is_number() || matches!(&self.body, TypeBody::Ptr(_))
     }
 
+    pub fn is_ptr(&self) -> bool {
+        matches!(&self.body, TypeBody::Ptr(_))
+    }
+
     pub fn is_bool(&self) -> bool {
         matches!(&self.body, TypeBody::Bool)
     }

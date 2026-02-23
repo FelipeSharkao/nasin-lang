@@ -91,10 +91,12 @@ impl<'a> FuncCodegen<'a, '_> {
             declared_consts: HashMap::new(),
         });
     }
+
     pub fn finish(self) -> CodegenContext<'a> {
         assert!(self.scopes.len() == 1);
         self.ctx
     }
+
     #[tracing::instrument(skip_all)]
     pub fn add_body(
         &mut self,
@@ -111,6 +113,7 @@ impl<'a> FuncCodegen<'a, '_> {
             }
         }
     }
+
     #[tracing::instrument(skip(self))]
     pub fn add_instr(
         &mut self,
@@ -447,10 +450,12 @@ impl<'a> FuncCodegen<'a, '_> {
                             expect_builder!(self).ins().return_(&[]);
                         }
                         ResultPolicy::Return(ReturnPolicy::Struct(_)) => {
-                            let cl_values = self.use_value_by_value(mod_idx, *v);
                             if let Some(res) = self.scopes.last().result {
+                                let cl_values = self.use_value_by_value(mod_idx, *v);
                                 let res_cl = self.use_value_by_ref(mod_idx, res);
+
                                 let builder = expect_builder!(self);
+
                                 let mut offset = 0;
                                 for cl_value in &cl_values {
                                     builder.ins().store(
@@ -766,36 +771,30 @@ impl<'a> FuncCodegen<'a, '_> {
                     types::RuntimeValue::new(value.into(), mod_idx, instr.results[0]),
                 );
             }
-            b::InstrBody::ArrayIndex(source_v, idx_v) => {
-                let ty = &self.ctx.modules[mod_idx].values[instr.results[0]].ty;
+            b::InstrBody::StrFromPtr(ptr_v, len_v) => {
+                let ptr = self.use_value_by_ref(mod_idx, *ptr_v);
 
-                let values = self.use_value_by_value(mod_idx, *source_v);
-                if values.len() != 2 {
-                    todo!("array_index: {} values", values.len());
-                }
-                let ptr = values[0];
+                let len = self.use_value_by_value(mod_idx, *len_v);
+                assert!(
+                    len.len() == 1,
+                    "str_from_ptr length should be a single value"
+                );
+                let len = len[0];
 
-                let idx = self.use_value_by_value(mod_idx, *idx_v);
-                assert!(idx.len() == 1);
-                let idx = idx[0];
-
-                let size = self.add_const(types::Const::uint_ptr(
-                    types::get_size(ty, self.ctx.modules, &self.ctx.cl_module) as u64,
-                    &self.ctx.cl_module,
-                ));
-
-                let builder = expect_builder!(self);
-                let offset = builder.ins().imul(size, idx);
-                let ptr = builder.ins().iadd(ptr, offset);
-
-                let value = types::ValueSource::Ptr(ptr);
+                let value = types::ValueSource::Slice(
+                    types::Slice::new(
+                        types::ValueSource::Ptr(ptr),
+                        types::ValueSource::Primitive(len),
+                    )
+                    .into(),
+                );
 
                 self.values.insert(
                     (mod_idx, instr.results[0]),
                     types::RuntimeValue::new(value.into(), mod_idx, instr.results[0]),
                 );
             }
-            b::InstrBody::CopyStr(src_v, dst_v, offset_v) => {
+            b::InstrBody::StrCopy(src_v, dst_v, offset_v) => {
                 let values = self.use_value_by_value(mod_idx, *src_v);
                 if values.len() != 2 {
                     todo!("copy_str: {} values", values.len());
@@ -836,6 +835,77 @@ impl<'a> FuncCodegen<'a, '_> {
                 }
 
                 self.copy_bytes(src, dst, len);
+            }
+            b::InstrBody::ArrayIndex(source_v, idx_v) => {
+                let ty = &self.ctx.modules[mod_idx].values[instr.results[0]].ty;
+
+                let values = self.use_value_by_value(mod_idx, *source_v);
+                if values.len() != 2 {
+                    todo!("array_index: {} values", values.len());
+                }
+                let ptr = values[0];
+
+                let idx = self.use_value_by_value(mod_idx, *idx_v);
+                assert!(idx.len() == 1);
+                let idx = idx[0];
+
+                let size = self.add_const(types::Const::uint_ptr(
+                    types::get_size(ty, self.ctx.modules, &self.ctx.cl_module) as u64,
+                    &self.ctx.cl_module,
+                ));
+
+                let builder = expect_builder!(self);
+                let offset = builder.ins().imul(size, idx);
+                let ptr = builder.ins().iadd(ptr, offset);
+
+                let value = types::ValueSource::Ptr(ptr);
+
+                self.values.insert(
+                    (mod_idx, instr.results[0]),
+                    types::RuntimeValue::new(value.into(), mod_idx, instr.results[0]),
+                );
+            }
+            b::InstrBody::PtrOffset(ptr_v, offset_v) => {
+                let ptr = self.use_value_by_ref(mod_idx, *ptr_v);
+
+                let offset = self.use_value_by_value(mod_idx, *offset_v);
+                assert!(offset.len() == 1);
+                let offset = offset[0];
+
+                let ptr_ty = &self.ctx.modules[mod_idx].values[*ptr_v].ty;
+                let item_size = match &ptr_ty.body {
+                    b::TypeBody::Ptr(Some(item_ty)) => {
+                        types::get_size(item_ty, self.ctx.modules, &self.ctx.cl_module)
+                            as u64
+                    }
+                    b::TypeBody::Ptr(None) => 1,
+                    _ => panic!("type should be a pointer type"),
+                };
+                let item_size = self
+                    .add_const(types::Const::uint_ptr(item_size, &self.ctx.cl_module));
+
+                let builder = expect_builder!(self);
+                let offset_bytes = builder.ins().imul(item_size, offset);
+                let ptr = builder.ins().iadd(ptr, offset_bytes);
+
+                let value = types::ValueSource::Ptr(ptr);
+
+                self.values.insert(
+                    (mod_idx, instr.results[0]),
+                    types::RuntimeValue::new(value.into(), mod_idx, instr.results[0]),
+                );
+            }
+            b::InstrBody::PtrSet(ptr_v, value_v) => {
+                let ptr = self.use_value_by_ref(mod_idx, *ptr_v);
+                let values = self.use_value_canonical(mod_idx, *value_v);
+
+                let builder = expect_builder!(self);
+                let mut offset: i32 = 0;
+                for value in values {
+                    let native_ty = builder.func.dfg.value_type(value);
+                    builder.ins().store(cl::MemFlags::new(), value, ptr, offset);
+                    offset += native_ty.bytes() as i32;
+                }
             }
             b::InstrBody::Dispatch(v, iface_mod_idx, iface_ty_idx) => {
                 let ty = &self.ctx.modules[mod_idx].values[*v].ty;
@@ -1345,7 +1415,7 @@ impl<'a> FuncCodegen<'a, '_> {
 
     fn save_value(&mut self, mod_idx: usize, v: b::ValueIdx, value: cl::Value) {
         let ty = &self.ctx.modules[mod_idx].values[v].ty;
-        let src = if ty.is_aggregate(self.ctx.modules) {
+        let src = if ty.is_aggregate(self.ctx.modules) || ty.is_ptr() {
             types::ValueSource::Ptr(value)
         } else {
             types::ValueSource::Primitive(value)

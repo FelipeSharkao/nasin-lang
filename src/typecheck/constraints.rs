@@ -17,6 +17,7 @@ pub enum ConstraintKind {
     Array(b::ValueIdx),
     ArrayElem(b::ValueIdx),
     Ptr(b::ValueIdx),
+    Deref(b::ValueIdx),
     ReturnOf(b::ValueIdx),
     ParameterOf(b::ValueIdx, usize),
     IsProperty(b::ValueIdx, String),
@@ -39,6 +40,7 @@ impl Constraint {
             | ConstraintKind::Array(..)
             | ConstraintKind::ArrayElem(..)
             | ConstraintKind::Ptr(..)
+            | ConstraintKind::Deref(..)
             | ConstraintKind::ReturnOf(..)
             | ConstraintKind::ParameterOf(..)
             | ConstraintKind::GetFunc(..)

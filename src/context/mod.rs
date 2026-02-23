@@ -2,14 +2,13 @@ mod runtime;
 
 use std::fs;
 use std::ops::{Deref, DerefMut};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex, RwLock};
 
 use derive_new::new;
 use tree_sitter as ts;
 
 use self::runtime::RuntimeBuilder;
-use crate::sources::Source;
 use crate::{bytecode as b, codegen, config, errors, parser, sources, typecheck};
 
 #[derive(Debug, new)]

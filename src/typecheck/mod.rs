@@ -531,6 +531,51 @@ impl<'a> TypeChecker<'a> {
                     Constraint::new(ConstraintKind::Is(ty), instr.loc),
                 );
             }
+            b::InstrBody::StrFromPtr(ptr_v, len_v) => {
+                let v = instr.results[0];
+
+                let ptr_ty = b::Type::new(
+                    b::TypeBody::Ptr(Some(b::Type::new(b::TypeBody::U8, None).into())),
+                    None,
+                );
+                self.add_constraint(
+                    *ptr_v,
+                    Constraint::new(ConstraintKind::Is(ptr_ty), instr.loc),
+                );
+
+                let len_ty = b::Type::new(b::TypeBody::USize, None);
+                self.add_constraint(
+                    *len_v,
+                    Constraint::new(ConstraintKind::Is(len_ty), instr.loc),
+                );
+
+                let ty =
+                    b::Type::new(b::TypeBody::String(b::StringType::new(None)), None);
+                self.add_constraint(
+                    v,
+                    Constraint::new(ConstraintKind::Is(ty), instr.loc),
+                );
+            }
+            b::InstrBody::StrCopy(src_v, dst_v, offset_v) => {
+                let str_ty =
+                    b::Type::new(b::TypeBody::String(b::StringType::new(None)), None);
+                self.add_constraint(
+                    *src_v,
+                    Constraint::new(ConstraintKind::Is(str_ty.clone()), instr.loc),
+                );
+                self.add_constraint(
+                    *dst_v,
+                    Constraint::new(ConstraintKind::Is(str_ty), instr.loc),
+                );
+
+                if let Some(offset_v) = offset_v {
+                    let offset_ty = b::Type::new(b::TypeBody::USize, None);
+                    self.add_constraint(
+                        *offset_v,
+                        Constraint::new(ConstraintKind::Is(offset_ty), instr.loc),
+                    );
+                }
+            }
             b::InstrBody::ArrayLen(input) => {
                 let v = instr.results[0];
                 let arr_ty = b::Type::new(
@@ -566,25 +611,32 @@ impl<'a> TypeChecker<'a> {
                     Constraint::new(ConstraintKind::ArrayElem(*input), instr.loc),
                 );
             }
-            b::InstrBody::CopyStr(src_v, dst_v, offset_v) => {
-                let str_ty =
-                    b::Type::new(b::TypeBody::String(b::StringType::new(None)), None);
+            b::InstrBody::PtrOffset(ptr, offset) => {
+                let v = instr.results[0];
+                self.merge_types([&v, &*ptr]);
+
+                let ptr_ty = b::Type::new(b::TypeBody::Ptr(None), None);
                 self.add_constraint(
-                    *src_v,
-                    Constraint::new(ConstraintKind::Is(str_ty.clone()), instr.loc),
-                );
-                self.add_constraint(
-                    *dst_v,
-                    Constraint::new(ConstraintKind::Is(str_ty), instr.loc),
+                    *ptr,
+                    Constraint::new(ConstraintKind::Is(ptr_ty), instr.loc),
                 );
 
-                if let Some(offset_v) = offset_v {
-                    let offset_ty = b::Type::new(b::TypeBody::USize, None);
-                    self.add_constraint(
-                        *offset_v,
-                        Constraint::new(ConstraintKind::Is(offset_ty), instr.loc),
-                    );
-                }
+                let offset_ty = b::Type::new(b::TypeBody::USize, None);
+                self.add_constraint(
+                    *offset,
+                    Constraint::new(ConstraintKind::Is(offset_ty), instr.loc),
+                );
+            }
+            b::InstrBody::PtrSet(ptr, value) => {
+                self.add_constraint(
+                    *ptr,
+                    Constraint::new(ConstraintKind::Ptr(*value), instr.loc),
+                );
+
+                self.add_constraint(
+                    *value,
+                    Constraint::new(ConstraintKind::Deref(*ptr), instr.loc),
+                );
             }
             b::InstrBody::Type(v, ty) => {
                 self.add_constraint(
@@ -692,18 +744,23 @@ impl<'a> TypeChecker<'a> {
 
         let mut merge_with = items
             .into_iter()
+            .unique()
             .sorted_by(|a, b| a.cmp(b).reverse())
             .copied()
             .collect_vec();
 
+        if merge_with.len() <= 1 {
+            return;
+        }
+
         let head = merge_with.pop().unwrap();
 
-        while let Some(idx) = merge_with.pop() {
+        while let Some(v) = merge_with.pop() {
             let constraints = {
                 let values = &mut self.ctx.lock_modules_mut()[self.mod_idx].values;
 
-                values[idx].same_type_of.insert(head);
-                mem::replace(&mut self.nodes[idx].constraints, HashSet::new())
+                values[v].same_type_of.insert(head);
+                mem::replace(&mut self.nodes[v].constraints, HashSet::new())
             };
 
             for constraint in constraints {
@@ -847,6 +904,17 @@ impl<'a> TypeChecker<'a> {
                             .ty
                             .clone();
                         b::Type::new(b::TypeBody::Ptr(Some(ty.into())), None)
+                    }
+                    ConstraintKind::Deref(target) => {
+                        tracing::trace!(target, "will validate Deref");
+                        success &= !self.validate_value(target, visited).is_failed();
+                        let ty = self.ctx.lock_modules()[self.mod_idx].values[target]
+                            .ty
+                            .clone();
+                        match &ty.body {
+                            b::TypeBody::Ptr(Some(ty)) => ty.as_ref().clone(),
+                            _ => b::Type::unknown(None),
+                        }
                     }
                     ConstraintKind::ReturnOf(target) => {
                         tracing::trace!(target, "will validate ReturnOf");

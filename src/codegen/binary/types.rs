@@ -351,6 +351,7 @@ pub fn take_value_from_args(
             let proto = FuncPrototype::from_closure_type(func_ty, modules, cl_module);
             FuncAsValue::new(next(), next(), proto).into()
         }
+        b::TypeBody::Ptr(_) => ValueSource::Ptr(next()),
         _ => ValueSource::Primitive(next()),
     };
 

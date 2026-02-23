@@ -345,7 +345,7 @@ impl<'a, 't> ExprParser<'a, 't> {
                 b::InstrBody::CreateNumber(v.clone()),
                 value_ref.loc,
             )),
-            ValueRefBody::Never | ValueRefBody::CompileError => self
+            ValueRefBody::Void | ValueRefBody::Never | ValueRefBody::CompileError => self
                 .add_instr_with_result(b::Instr::new(
                     b::InstrBody::CompileError,
                     value_ref.loc,
@@ -459,12 +459,12 @@ impl<'a, 't> ExprParser<'a, 't> {
         ));
 
         self.add_instr(b::Instr::new(
-            b::InstrBody::CopyStr(left_v, v, None),
+            b::InstrBody::StrCopy(left_v, v, None),
             Some(loc),
         ));
 
         self.add_instr(b::Instr::new(
-            b::InstrBody::CopyStr(right_v, v, Some(left_len_v)),
+            b::InstrBody::StrCopy(right_v, v, Some(left_len_v)),
             Some(loc),
         ));
 
@@ -580,6 +580,59 @@ impl<'a, 't> ExprParser<'a, 't> {
                     Some(loc),
                 ));
                 ValueRef::new(ValueRefBody::Value(v), Some(loc))
+            }
+            "internal_str_from_ptr" => {
+                check_args!(2);
+
+                let ptr = self.add_expr_node(args[0], false);
+                let ptr_v = self.use_value_ref(&ptr);
+
+                let len = self.add_expr_node(args[1], false);
+                let len_v = self.use_value_ref(&len);
+
+                let v = self.add_instr_with_result(b::Instr::new(
+                    b::InstrBody::StrFromPtr(ptr_v, len_v),
+                    Some(loc),
+                ));
+                ValueRef::new(ValueRefBody::Value(v), Some(loc))
+            }
+            "internal_ptr_offset" => {
+                check_args!(2);
+
+                let ptr = self.add_expr_node(args[0], false);
+                let ptr_v = self.use_value_ref(&ptr);
+
+                let offset = self.add_expr_node(args[1], false);
+                let offset_v = self.use_value_ref(&offset);
+
+                let v = self.add_instr_with_result(b::Instr::new(
+                    b::InstrBody::PtrOffset(ptr_v, offset_v),
+                    Some(loc),
+                ));
+                ValueRef::new(ValueRefBody::Value(v), Some(loc))
+            }
+            "internal_ptr_set" => {
+                check_args!(3);
+
+                let ptr = self.add_expr_node(args[0], false);
+                let ptr_v = self.use_value_ref(&ptr);
+
+                let offset = self.add_expr_node(args[1], false);
+                let offset_v = self.use_value_ref(&offset);
+
+                let ptr_v = self.add_instr_with_result(b::Instr::new(
+                    b::InstrBody::PtrOffset(ptr_v, offset_v),
+                    Some(loc),
+                ));
+
+                let value = self.add_expr_node(args[2], false);
+                let value_v = self.use_value_ref(&value);
+
+                self.add_instr(b::Instr::new(
+                    b::InstrBody::PtrSet(ptr_v, value_v),
+                    Some(loc),
+                ));
+                ValueRef::new(ValueRefBody::Void, Some(loc))
             }
             _ => {
                 panic!("unhandled macro: `{name}`")

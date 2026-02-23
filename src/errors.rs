@@ -68,6 +68,7 @@ pub enum ErrorDetail {
     #[display("Type should be known at this point")]
     TypeNotFinal,
     TypeNotInterface(TypeNotInterface),
+    WrongArgumentCount(WrongArgumentCount),
     Todo(Todo),
 }
 
@@ -114,6 +115,14 @@ pub struct TypeMisatch {
 #[display("`{ty}` is not an interface type")]
 pub struct TypeNotInterface {
     pub ty: b::Type,
+}
+
+#[derive(Debug, Clone, Display, new)]
+#[display("`{name}` requires {expected} arguments, but {found} were provided")]
+pub struct WrongArgumentCount {
+    pub name:     String,
+    pub expected: usize,
+    pub found:    usize,
 }
 
 #[derive(Debug, Clone, Display, new)]
