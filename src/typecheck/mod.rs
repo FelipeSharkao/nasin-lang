@@ -7,7 +7,7 @@ use std::mem;
 use derive_new::new;
 use itertools::{enumerate, izip, Itertools};
 
-use self::constraints::Constraint;
+use self::constraints::{Constraint, ConstraintKind};
 use crate::utils::{cfor, SortedMap};
 use crate::{bytecode as b, context, errors, utils};
 
@@ -57,7 +57,10 @@ impl<'a> TypeChecker<'a> {
                 .map(|value| {
                     let mut node = TypeNode::new();
                     if !value.ty.is_unknown() {
-                        node.constraints.insert(Constraint::Is(value.ty.clone()));
+                        node.constraints.insert(Constraint::new(
+                            ConstraintKind::Is(value.ty.clone()),
+                            value.ty.loc,
+                        ));
                     }
                     node
                 })
@@ -75,7 +78,8 @@ impl<'a> TypeChecker<'a> {
             tracing::trace!(i, "adding global");
             let (body, value) = {
                 let module = &self.ctx.lock_modules()[self.mod_idx];
-                (module.globals[i].body.clone(), module.globals[i].value)
+                let global = &module.globals[i];
+                (global.body.clone(), global.value)
             };
             let mut scopes = utils::ScopeStack::new(ScopePayload::new());
             if let Some(result) = self.add_body(body, &mut scopes, None) {
@@ -115,14 +119,23 @@ impl<'a> TypeChecker<'a> {
                     let parent_func = &modules[parent_mod_idx].funcs[parent_func_idx];
                     for (param, parent_param) in izip!(&func.params, &parent_func.params)
                     {
+                        let v = &modules[parent_mod_idx].values[*parent_param];
                         if *mod_idx == parent_mod_idx {
                             self.add_constraint(
                                 *param,
-                                Constraint::TypeOf(*parent_param),
+                                Constraint::new(
+                                    ConstraintKind::TypeOf(*parent_param),
+                                    parent_func.loc,
+                                ),
                             );
                         } else {
-                            let v = &modules[parent_mod_idx].values[*parent_param];
-                            self.add_constraint(*param, Constraint::Is(v.ty.clone()));
+                            self.add_constraint(
+                                *param,
+                                Constraint::new(
+                                    ConstraintKind::Is(v.ty.clone()),
+                                    parent_func.loc,
+                                ),
+                            );
                         }
                     }
                 }
@@ -180,23 +193,35 @@ impl<'a> TypeChecker<'a> {
                         let gv = module.globals[*idx].value;
                         module.values[gv].ty.clone()
                     };
-                    self.add_constraint(v, Constraint::Is(ty));
+                    self.add_constraint(
+                        v,
+                        Constraint::new(ConstraintKind::Is(ty), instr.loc),
+                    );
                 };
             }
             &mut b::InstrBody::GetFunc(mod_idx, func_idx) => {
                 let v = instr.results[0];
-                self.add_constraint(v, Constraint::GetFunc(mod_idx, func_idx));
+                self.add_constraint(
+                    v,
+                    Constraint::new(
+                        ConstraintKind::GetFunc(mod_idx, func_idx),
+                        instr.loc,
+                    ),
+                );
             }
             b::InstrBody::GetProperty(source_v, name)
             | b::InstrBody::GetField(source_v, name)
             | b::InstrBody::GetMethod(source_v, name) => {
                 let v = instr.results[0];
-                self.define_property(*source_v, v, name);
+                self.define_property(*source_v, v, name, instr.loc);
             }
             b::InstrBody::CreateBool(_) => {
                 let v = instr.results[0];
                 let ty = b::Type::new(b::TypeBody::Bool, None);
-                self.add_constraint(v, Constraint::Is(ty));
+                self.add_constraint(
+                    v,
+                    Constraint::new(ConstraintKind::Is(ty), instr.loc),
+                );
             }
             b::InstrBody::CreateNumber(num) => {
                 let v = instr.results[0];
@@ -208,7 +233,13 @@ impl<'a> TypeChecker<'a> {
                 } else {
                     b::TypeBody::AnyNumber
                 };
-                self.add_constraint(v, Constraint::Is(b::Type::new(ty_body, None)));
+                self.add_constraint(
+                    v,
+                    Constraint::new(
+                        ConstraintKind::Is(b::Type::new(ty_body, None)),
+                        instr.loc,
+                    ),
+                );
             }
             b::InstrBody::CreateString(x) => {
                 let v = instr.results[0];
@@ -218,22 +249,34 @@ impl<'a> TypeChecker<'a> {
                     }),
                     None,
                 );
-                self.add_constraint(v, Constraint::Is(ty.clone()));
+                self.add_constraint(
+                    v,
+                    Constraint::new(ConstraintKind::Is(ty.clone()), instr.loc),
+                );
             }
             b::InstrBody::CreateUninitializedString(len_v) => {
                 let v = instr.results[0];
                 let ty =
                     b::Type::new(b::TypeBody::String(b::StringType { len: None }), None);
-                self.add_constraint(v, Constraint::Is(ty.clone()));
+                self.add_constraint(
+                    v,
+                    Constraint::new(ConstraintKind::Is(ty.clone()), instr.loc),
+                );
 
                 let len_ty = b::Type::new(b::TypeBody::AnyNumber, None);
-                self.add_constraint(*len_v, Constraint::Is(len_ty));
+                self.add_constraint(
+                    *len_v,
+                    Constraint::new(ConstraintKind::Is(len_ty), instr.loc),
+                );
             }
             b::InstrBody::CreateArray(vs) => {
                 let v = instr.results[0];
                 if vs.len() > 0 {
                     self.merge_types(&*vs);
-                    self.add_constraint(v, Constraint::Array(vs[0]));
+                    self.add_constraint(
+                        v,
+                        Constraint::new(ConstraintKind::Array(vs[0]), instr.loc),
+                    )
                 } else {
                     let item_ty = b::Type::new(b::TypeBody::Never, None);
                     let arr_ty = b::Type::new(
@@ -243,14 +286,25 @@ impl<'a> TypeChecker<'a> {
                         }),
                         None,
                     );
-                    self.add_constraint(v, Constraint::Is(arr_ty));
+                    self.add_constraint(
+                        v,
+                        Constraint::new(ConstraintKind::Is(arr_ty), instr.loc),
+                    );
                 }
             }
             b::InstrBody::CreateRecord(fields) => {
                 let v = instr.results[0];
-                self.add_constraint(v, Constraint::Members(fields.clone()));
+                self.add_constraint(
+                    v,
+                    Constraint::new(
+                        ConstraintKind::Members(
+                            fields.iter().map(|(k, v)| (k.clone(), *v)).collect(),
+                        ),
+                        instr.loc,
+                    ),
+                );
                 for (name, fields_v) in fields {
-                    self.define_property(v, *fields_v, name);
+                    self.define_property(v, *fields_v, name, instr.loc);
                 }
             }
             b::InstrBody::Add(a, b)
@@ -259,18 +313,24 @@ impl<'a> TypeChecker<'a> {
             | b::InstrBody::Div(a, b)
             | b::InstrBody::Mod(a, b) => {
                 let v = instr.results[0];
-                self.merge_types([a, b, &v]);
+                self.merge_types([&a, &b, &v]);
                 // FIXME: use interface/trait
                 let ty = b::Type::new(b::TypeBody::AnyNumber, None);
-                self.add_constraint(*a, Constraint::Is(ty));
+                self.add_constraint(
+                    *a,
+                    Constraint::new(ConstraintKind::Is(ty), instr.loc),
+                );
             }
             b::InstrBody::Not(x) => {
                 let v = instr.results[0];
-                self.merge_types([x, &v]);
+                self.merge_types([&x, &v]);
                 // FIXME: use interface/trait
                 self.add_constraint(
                     *x,
-                    Constraint::Is(b::Type::new(b::TypeBody::Bool, None)),
+                    Constraint::new(
+                        ConstraintKind::Is(b::Type::new(b::TypeBody::Bool, None)),
+                        instr.loc,
+                    ),
                 );
             }
             b::InstrBody::Eq(a, b)
@@ -284,8 +344,15 @@ impl<'a> TypeChecker<'a> {
                 // FIXME: use interface/trait
                 let number_ty = b::Type::new(b::TypeBody::AnyNumber, None);
                 let bool_ty = b::Type::new(b::TypeBody::Bool, None);
-                self.add_constraint(*a, Constraint::Is(number_ty));
-                self.add_constraint(v, Constraint::Is(bool_ty));
+                self.add_constraint(
+                    *a,
+                    Constraint::new(ConstraintKind::Is(number_ty), instr.loc),
+                );
+
+                self.add_constraint(
+                    v,
+                    Constraint::new(ConstraintKind::Is(bool_ty), instr.loc),
+                );
             }
             b::InstrBody::Call(mod_idx, idx, args) => {
                 let v = instr.results[0];
@@ -300,9 +367,15 @@ impl<'a> TypeChecker<'a> {
                         }
                     } else {
                         for (arg, param) in izip!(args, func.params) {
-                            self.add_constraint(*arg, Constraint::TypeOf(param));
+                            self.add_constraint(
+                                *arg,
+                                Constraint::new(ConstraintKind::TypeOf(param), instr.loc),
+                            );
                         }
-                        self.add_constraint(v, Constraint::TypeOf(func.ret));
+                        self.add_constraint(
+                            v,
+                            Constraint::new(ConstraintKind::TypeOf(func.ret), instr.loc),
+                        );
                     }
                 } else {
                     let (params_tys, ret_ty) = {
@@ -318,19 +391,25 @@ impl<'a> TypeChecker<'a> {
                     };
 
                     for (arg, param_ty) in izip!(args, params_tys) {
-                        self.add_constraint(*arg, Constraint::Is(param_ty));
+                        self.add_constraint(
+                            *arg,
+                            Constraint::new(ConstraintKind::Is(param_ty), instr.loc),
+                        );
                     }
-                    self.add_constraint(v, Constraint::Is(ret_ty))
+                    self.add_constraint(
+                        v,
+                        Constraint::new(ConstraintKind::Is(ret_ty), instr.loc),
+                    )
                 }
             }
             b::InstrBody::IndirectCall(func, args) => {
                 let v = instr.results[0];
 
                 let mut has_get_func = false;
-                for c in self
-                    .get_contraints_with(*func, |c| matches!(c, Constraint::GetFunc(..)))
-                {
-                    let Constraint::GetFunc(mod_idx, func_idx) = c else {
+                for c in self.get_contraints_with(*func, |c| {
+                    matches!(c.kind, ConstraintKind::GetFunc(..))
+                }) {
+                    let ConstraintKind::GetFunc(mod_idx, func_idx) = c.kind else {
                         continue;
                     };
                     has_get_func = true;
@@ -341,23 +420,41 @@ impl<'a> TypeChecker<'a> {
                     };
 
                     for (param, arg) in izip!(&params, &*args) {
-                        self.add_constraint(*arg, Constraint::TypeOf(*param));
+                        self.add_constraint(
+                            *arg,
+                            Constraint::new(ConstraintKind::TypeOf(*param), instr.loc),
+                        );
                     }
-                    self.add_constraint(v, Constraint::TypeOf(ret));
+                    self.add_constraint(
+                        v,
+                        Constraint::new(ConstraintKind::TypeOf(ret), instr.loc),
+                    );
                 }
                 if !has_get_func {
-                    self.add_constraint(*func, Constraint::Func(args.clone(), v));
+                    self.add_constraint(
+                        *func,
+                        Constraint::new(ConstraintKind::Func(args.clone(), v), instr.loc),
+                    );
                 }
 
                 for (i, arg) in enumerate(args) {
-                    self.add_constraint(*arg, Constraint::ParameterOf(*func, i));
+                    self.add_constraint(
+                        *arg,
+                        Constraint::new(ConstraintKind::ParameterOf(*func, i), instr.loc),
+                    );
                 }
-                self.add_constraint(v, Constraint::ReturnOf(*func));
+                self.add_constraint(
+                    v,
+                    Constraint::new(ConstraintKind::ReturnOf(*func), instr.loc),
+                );
             }
             b::InstrBody::If(cond_v, then_, else_) => {
                 self.add_constraint(
                     *cond_v,
-                    Constraint::Is(b::Type::new(b::TypeBody::Bool, None)),
+                    Constraint::new(
+                        ConstraintKind::Is(b::Type::new(b::TypeBody::Bool, None)),
+                        instr.loc,
+                    ),
                 );
 
                 scopes.begin(ScopePayload::new());
@@ -398,27 +495,41 @@ impl<'a> TypeChecker<'a> {
                     .expect("continue should be called inside a loop")
                     .loop_args;
                 for (v, loop_v) in izip!(vs, loop_args) {
-                    self.merge_types([v, loop_v]);
+                    if v != loop_v {
+                        self.merge_types([v, loop_v]);
+                    }
                 }
             }
             b::InstrBody::StrLen(input) => {
                 let v = instr.results[0];
                 let str_ty =
                     b::Type::new(b::TypeBody::String(b::StringType::new(None)), None);
-                self.add_constraint(*input, Constraint::Is(str_ty));
+                self.add_constraint(
+                    *input,
+                    Constraint::new(ConstraintKind::Is(str_ty), instr.loc),
+                );
                 let ty = b::Type::new(b::TypeBody::USize, None);
-                self.add_constraint(v, Constraint::Is(ty));
+                self.add_constraint(
+                    v,
+                    Constraint::new(ConstraintKind::Is(ty), instr.loc),
+                );
             }
             b::InstrBody::StrPtr(input) => {
                 let v = instr.results[0];
                 let str_ty =
                     b::Type::new(b::TypeBody::String(b::StringType::new(None)), None);
-                self.add_constraint(*input, Constraint::Is(str_ty));
+                self.add_constraint(
+                    *input,
+                    Constraint::new(ConstraintKind::Is(str_ty), instr.loc),
+                );
                 let ty = b::Type::new(
                     b::TypeBody::Ptr(Some(b::Type::new(b::TypeBody::U8, None).into())),
                     None,
                 );
-                self.add_constraint(v, Constraint::Is(ty));
+                self.add_constraint(
+                    v,
+                    Constraint::new(ConstraintKind::Is(ty), instr.loc),
+                );
             }
             b::InstrBody::ArrayLen(input) => {
                 let v = instr.results[0];
@@ -429,34 +540,64 @@ impl<'a> TypeChecker<'a> {
                     )),
                     None,
                 );
-                self.add_constraint(*input, Constraint::Is(arr_ty));
+                self.add_constraint(
+                    *input,
+                    Constraint::new(ConstraintKind::Is(arr_ty), instr.loc),
+                );
                 let ty = b::Type::new(b::TypeBody::USize, None);
-                self.add_constraint(v, Constraint::Is(ty));
+                self.add_constraint(
+                    v,
+                    Constraint::new(ConstraintKind::Is(ty), instr.loc),
+                );
             }
             b::InstrBody::ArrayIndex(input, idx) => {
                 let v = instr.results[0];
-                self.add_constraint(*input, Constraint::Array(v));
+                self.add_constraint(
+                    *input,
+                    Constraint::new(ConstraintKind::Array(v), instr.loc),
+                );
                 let idx_ty = b::Type::new(b::TypeBody::USize, None);
-                self.add_constraint(*idx, Constraint::Is(idx_ty));
-                self.add_constraint(v, Constraint::ArrayElem(*input));
+                self.add_constraint(
+                    *idx,
+                    Constraint::new(ConstraintKind::Is(idx_ty), instr.loc),
+                );
+                self.add_constraint(
+                    v,
+                    Constraint::new(ConstraintKind::ArrayElem(*input), instr.loc),
+                );
             }
             b::InstrBody::CopyStr(src_v, dst_v, offset_v) => {
                 let str_ty =
                     b::Type::new(b::TypeBody::String(b::StringType::new(None)), None);
-                self.add_constraint(*src_v, Constraint::Is(str_ty.clone()));
-                self.add_constraint(*dst_v, Constraint::Is(str_ty));
+                self.add_constraint(
+                    *src_v,
+                    Constraint::new(ConstraintKind::Is(str_ty.clone()), instr.loc),
+                );
+                self.add_constraint(
+                    *dst_v,
+                    Constraint::new(ConstraintKind::Is(str_ty), instr.loc),
+                );
 
                 if let Some(offset_v) = offset_v {
                     let offset_ty = b::Type::new(b::TypeBody::USize, None);
-                    self.add_constraint(*offset_v, Constraint::Is(offset_ty));
+                    self.add_constraint(
+                        *offset_v,
+                        Constraint::new(ConstraintKind::Is(offset_ty), instr.loc),
+                    );
                 }
             }
             b::InstrBody::Type(v, ty) => {
-                self.add_constraint(*v, Constraint::Is(ty.clone()));
+                self.add_constraint(
+                    *v,
+                    Constraint::new(ConstraintKind::Is(ty.clone()), instr.loc),
+                );
             }
             b::InstrBody::Dispatch(v, mod_idx, ty_idx) => {
                 let ty = b::Type::new(b::TypeRef::new(*mod_idx, *ty_idx).into(), None);
-                self.add_constraint(*v, Constraint::Is(ty));
+                self.add_constraint(
+                    *v,
+                    Constraint::new(ConstraintKind::Is(ty), instr.loc),
+                );
             }
             b::InstrBody::Break(_) | b::InstrBody::CompileError => {}
         }
@@ -485,19 +626,19 @@ impl<'a> TypeChecker<'a> {
         // Some constraints cannot be repeated, and instead indicates that two values have
         // the same type. In these cases, e merge the values types
         for c in &self.nodes[idx].constraints.clone() {
-            match (c, &constraint) {
-                (Constraint::Array(a), Constraint::Array(b))
-                | (Constraint::Ptr(a), Constraint::Ptr(b))
-                | (Constraint::ArrayElem(a), Constraint::ArrayElem(b)) => {
+            match (&c.kind, &constraint.kind) {
+                (ConstraintKind::Array(a), ConstraintKind::Array(b))
+                | (ConstraintKind::Ptr(a), ConstraintKind::Ptr(b))
+                | (ConstraintKind::ArrayElem(a), ConstraintKind::ArrayElem(b)) => {
                     self.merge_types([a, b]);
                 }
                 (
-                    Constraint::HasProperty(name_a, a),
-                    Constraint::HasProperty(name_b, b),
+                    ConstraintKind::HasProperty(name_a, a),
+                    ConstraintKind::HasProperty(name_b, b),
                 )
                 | (
-                    Constraint::IsProperty(a, name_a),
-                    Constraint::IsProperty(b, name_b),
+                    ConstraintKind::IsProperty(a, name_a),
+                    ConstraintKind::IsProperty(b, name_b),
                 ) if name_a == name_b => {
                     self.merge_types([a, b]);
                 }
@@ -668,16 +809,16 @@ impl<'a> TypeChecker<'a> {
 
             for c in constraints {
                 tracing::trace!(?c, "checking constraint");
-                let merge_with = match c {
-                    Constraint::Is(ty) => ty.clone(),
-                    Constraint::TypeOf(target) => {
+                let merge_with = match c.kind {
+                    ConstraintKind::Is(ty) => ty.clone(),
+                    ConstraintKind::TypeOf(target) => {
                         tracing::trace!(target, "will validate TypeOf");
                         success &= !self.validate_value(target, visited).is_failed();
                         self.ctx.lock_modules()[self.mod_idx].values[target]
                             .ty
                             .clone()
                     }
-                    Constraint::Array(target) => {
+                    ConstraintKind::Array(target) => {
                         tracing::trace!(target, "will validate Array");
                         success &= !self.validate_value(target, visited).is_failed();
                         let ty = self.ctx.lock_modules()[self.mod_idx].values[target]
@@ -688,7 +829,7 @@ impl<'a> TypeChecker<'a> {
                             None,
                         )
                     }
-                    Constraint::ArrayElem(target) => {
+                    ConstraintKind::ArrayElem(target) => {
                         tracing::trace!(target, "will validate ArrayElem");
                         success &= !self.validate_value(target, visited).is_failed();
                         if let b::TypeBody::Array(arr_ty) =
@@ -699,7 +840,7 @@ impl<'a> TypeChecker<'a> {
                             b::Type::unknown(None)
                         }
                     }
-                    Constraint::Ptr(target) => {
+                    ConstraintKind::Ptr(target) => {
                         tracing::trace!(target, "will validate Ptr");
                         success &= !self.validate_value(target, visited).is_failed();
                         let ty = self.ctx.lock_modules()[self.mod_idx].values[target]
@@ -707,7 +848,7 @@ impl<'a> TypeChecker<'a> {
                             .clone();
                         b::Type::new(b::TypeBody::Ptr(Some(ty.into())), None)
                     }
-                    Constraint::ReturnOf(target) => {
+                    ConstraintKind::ReturnOf(target) => {
                         tracing::trace!(target, "will validate ReturnOf");
                         success &= !self.validate_value(target, visited).is_failed();
                         if let b::TypeBody::Func(func_ty) =
@@ -718,7 +859,7 @@ impl<'a> TypeChecker<'a> {
                             b::Type::unknown(None)
                         }
                     }
-                    Constraint::ParameterOf(target, idx) => {
+                    ConstraintKind::ParameterOf(target, idx) => {
                         tracing::trace!(target, idx, "will validate ParameterOf");
                         success &= !self.validate_value(target, visited).is_failed();
                         if let b::TypeBody::Func(func_ty) =
@@ -733,7 +874,7 @@ impl<'a> TypeChecker<'a> {
                             b::Type::unknown(None)
                         }
                     }
-                    Constraint::IsProperty(target, key) => {
+                    ConstraintKind::IsProperty(target, key) => {
                         tracing::trace!(target, key, "will validate IsProperty");
                         success &= !self.validate_value(target, visited).is_failed();
                         for prop_dep in {
@@ -747,10 +888,10 @@ impl<'a> TypeChecker<'a> {
                         self.get_property_type(target, &key, &self.ctx.lock_modules())
                             .unwrap_or_else(|| b::Type::unknown(None))
                     }
-                    Constraint::Members(members) => {
+                    ConstraintKind::Members(members) => {
                         for member in members.values() {
                             tracing::trace!(member, "will validate member");
-                            success = !self.validate_value(*member, visited).is_failed();
+                            success &= !self.validate_value(*member, visited).is_failed();
                         }
                         b::Type::new(
                             b::TypeBody::Inferred(b::InferredType {
@@ -768,9 +909,9 @@ impl<'a> TypeChecker<'a> {
                             None,
                         )
                     }
-                    Constraint::HasProperty(key, target) => {
+                    ConstraintKind::HasProperty(key, target) => {
                         tracing::trace!(key, target, "will validate HasProperty");
-                        success = !self.validate_value(target, visited).is_failed();
+                        success &= !self.validate_value(target, visited).is_failed();
                         let ty = {
                             self.ctx.lock_modules()[self.mod_idx].values[target]
                                 .ty
@@ -784,7 +925,7 @@ impl<'a> TypeChecker<'a> {
                             None,
                         )
                     }
-                    Constraint::GetFunc(mod_idx, func_idx) => {
+                    ConstraintKind::GetFunc(mod_idx, func_idx) => {
                         let (params, ret) = {
                             let func = &self.ctx.lock_modules()[mod_idx].funcs[func_idx];
                             (func.params.clone(), func.ret)
@@ -793,11 +934,11 @@ impl<'a> TypeChecker<'a> {
                         if mod_idx == self.mod_idx {
                             for param in &params {
                                 tracing::trace!(param, "will validate GetFunc param");
-                                success =
+                                success &=
                                     !self.validate_value(*param, visited).is_failed();
                             }
                             tracing::trace!(ret, "will validate GetFunc ret");
-                            success = !self.validate_value(ret, visited).is_failed();
+                            success &= !self.validate_value(ret, visited).is_failed();
                         }
 
                         let (params, ret) = {
@@ -815,13 +956,13 @@ impl<'a> TypeChecker<'a> {
                             None,
                         )
                     }
-                    Constraint::Func(params, ret) => {
+                    ConstraintKind::Func(params, ret) => {
                         for param in &params {
                             tracing::trace!(param, "will validate Func param");
-                            success = !self.validate_value(*param, visited).is_failed();
+                            success &= !self.validate_value(*param, visited).is_failed();
                         }
                         tracing::trace!(ret, "will validate Func ret");
-                        success = !self.validate_value(ret, visited).is_failed();
+                        success &= !self.validate_value(ret, visited).is_failed();
 
                         let (params, ret) = {
                             let module = &self.ctx.lock_modules()[self.mod_idx];
@@ -852,7 +993,7 @@ impl<'a> TypeChecker<'a> {
                             merge_with.clone(),
                         )
                         .into(),
-                        modules[self.mod_idx].values[idx].loc,
+                        c.loc.or(modules[self.mod_idx].values[idx].loc),
                     ));
                     tracing::trace!(?result_ty, ?merge_with, "incompatible types");
                 }
@@ -880,6 +1021,7 @@ impl<'a> TypeChecker<'a> {
         src_v: b::ValueIdx,
         prop_v: b::ValueIdx,
         prop_name: &str,
+        loc: Option<b::Loc>,
     ) {
         let same_of = {
             self.ctx.lock_modules()[self.mod_idx].values[src_v]
@@ -889,13 +1031,13 @@ impl<'a> TypeChecker<'a> {
 
         if same_of.len() >= 1 {
             for v in &same_of {
-                self.define_property(*v, prop_v, prop_name);
+                self.define_property(*v, prop_v, prop_name, loc);
             }
             return;
         }
 
         for item in &self.nodes[src_v].constraints {
-            if let Constraint::HasProperty(prop_name_, prop_v_) = item {
+            if let ConstraintKind::HasProperty(prop_name_, prop_v_) = &item.kind {
                 if prop_name == prop_name_ {
                     self.merge_types(&[*prop_v_, prop_v]);
                     return;
@@ -905,9 +1047,18 @@ impl<'a> TypeChecker<'a> {
 
         self.add_constraint(
             src_v,
-            Constraint::HasProperty(prop_name.to_string(), prop_v),
+            Constraint::new(
+                ConstraintKind::HasProperty(prop_name.to_string(), prop_v),
+                loc,
+            ),
         );
-        self.add_constraint(prop_v, Constraint::IsProperty(src_v, prop_name.to_string()));
+        self.add_constraint(
+            prop_v,
+            Constraint::new(
+                ConstraintKind::IsProperty(src_v, prop_name.to_string()),
+                loc,
+            ),
+        );
     }
 
     fn get_property_deps(

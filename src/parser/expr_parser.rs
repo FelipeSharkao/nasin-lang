@@ -538,10 +538,27 @@ impl<'a, 't> ExprParser<'a, 't> {
     }
 
     fn add_macro(&mut self, name: &str, args: &[ts::Node<'t>], loc: b::Loc) -> ValueRef {
+        macro_rules! check_args {
+            ($n:expr) => {{
+                let n = $n;
+                if args.len() != n {
+                    self.module.ctx.push_error(errors::Error::new(
+                        errors::WrongArgumentCount::new(
+                            format!("@{name}"),
+                            n,
+                            args.len(),
+                        )
+                        .into(),
+                        Some(loc),
+                    ));
+                    return ValueRef::new(ValueRefBody::CompileError, Some(loc));
+                }
+            }};
+        }
+
         match name {
             "internal_str_len" => {
-                // TODO: better error handling
-                assert!(args.len() == 1, "@str_len() expects a single argument");
+                check_args!(1);
 
                 let source = self.add_expr_node(args[0], false);
                 let source_v = self.use_value_ref(&source);
@@ -553,8 +570,7 @@ impl<'a, 't> ExprParser<'a, 't> {
                 ValueRef::new(ValueRefBody::Value(v), Some(loc))
             }
             "internal_str_ptr" => {
-                // TODO: better error handling
-                assert!(args.len() == 1, "@str_ptr() expects a single argument");
+                check_args!(1);
 
                 let source = self.add_expr_node(args[0], false);
                 let source_v = self.use_value_ref(&source);
