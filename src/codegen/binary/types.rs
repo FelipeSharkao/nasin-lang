@@ -342,7 +342,7 @@ pub fn take_value_from_args(
                 b::TypeDefBody::Record(_) => ValueSource::Ptr(next()),
             }
         }
-        b::TypeBody::String(_) | b::TypeBody::Array(_) => Box::new(Slice::new(
+        b::TypeBody::String | b::TypeBody::Array(_) => Box::new(Slice::new(
             ValueSource::Ptr(next()),
             ValueSource::Primitive(next()),
         ))
@@ -370,11 +370,11 @@ pub fn get_type_canonical(
             b::TypeDefBody::Interface(_) => vec![cl_module.isa().pointer_type(); 2],
         },
         b::TypeBody::Ptr(_) => vec![cl_module.isa().pointer_type()],
-        _ => get_type_by_value(ty, modules, cl_module),
+        _ => get_type_by_type(ty, modules, cl_module),
     }
 }
 
-pub fn get_type_by_value(
+pub fn get_type_by_type(
     ty: &b::Type,
     modules: &[b::Module],
     cl_module: &impl cl::Module,
@@ -398,11 +398,11 @@ pub fn get_type_by_value(
             b::TypeDefBody::Record(rec) => rec
                 .fields
                 .values()
-                .flat_map(|field| get_type_by_value(&field.ty, modules, cl_module))
+                .flat_map(|field| get_type_by_type(&field.ty, modules, cl_module))
                 .collect_vec(),
             b::TypeDefBody::Interface(_) => vec![cl_module.isa().pointer_type(); 2],
         },
-        b::TypeBody::Func(_) | b::TypeBody::String(_) | b::TypeBody::Array(_) => {
+        b::TypeBody::Func(_) | b::TypeBody::String | b::TypeBody::Array(_) => {
             vec![cl_module.isa().pointer_type(); 2]
         }
         b::TypeBody::Void => vec![],
@@ -425,7 +425,7 @@ pub fn get_size(ty: &b::Type, modules: &[b::Module], cl_module: &impl cl::Module
             b::TypeDefBody::Record(rec) => rec
                 .fields
                 .values()
-                .flat_map(|field| get_type_by_value(&field.ty, modules, cl_module))
+                .flat_map(|field| get_type_by_type(&field.ty, modules, cl_module))
                 .map(|ty| ty.bytes())
                 .sum(),
             b::TypeDefBody::Interface(_) => ptr * 2,
@@ -442,9 +442,9 @@ pub fn get_size(ty: &b::Type, modules: &[b::Module], cl_module: &impl cl::Module
         | b::TypeBody::USize
         | b::TypeBody::F32
         | b::TypeBody::F64
-        | b::TypeBody::String(_)
+        | b::TypeBody::String
         | b::TypeBody::Array(_)
-        | b::TypeBody::Ptr(_) => get_type_by_value(ty, modules, cl_module)
+        | b::TypeBody::Ptr(_) => get_type_by_type(ty, modules, cl_module)
             .into_iter()
             .map(|ty| ty.bytes())
             .sum(),

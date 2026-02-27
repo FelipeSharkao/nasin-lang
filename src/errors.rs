@@ -91,15 +91,33 @@ pub struct TypeNotFound {
     pub ident: String,
 }
 
-#[derive(Debug, Clone, Display, new)]
-#[display(
-    "Unexpected type {}. Expected one of:\n{}",
-    &actual.body,
-    utils::indented(2, expected.iter().map(|t| format!("- {}", &t.body))),
-)]
+#[derive(Debug, Clone, new)]
 pub struct UnexpectedType {
     pub expected: Vec<b::Type>,
     pub actual:   b::Type,
+}
+
+impl Display for UnexpectedType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.expected.len() == 1 {
+            write!(
+                f,
+                "Expected type {}, but found {} instead",
+                &self.expected[0].body, &self.actual.body,
+            )?;
+        } else {
+            write!(
+                f,
+                "Unexpected type {}. Expected one of:\n{}",
+                &self.actual.body,
+                utils::indented(
+                    2,
+                    self.expected.iter().map(|t| format!("- {}", &t.body))
+                ),
+            )?;
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Display, new)]

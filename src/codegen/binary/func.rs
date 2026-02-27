@@ -1170,17 +1170,14 @@ impl<'a> FuncCodegen<'a, '_> {
         let ptr = if let Some(data) = data {
             data.into()
         } else if self.builder.is_some() {
-            let b::TypeBody::Array(array_ty) =
+            let b::TypeBody::Array(item_ty) =
                 &self.ctx.modules[mod_idx].values[instr.results[0]].ty.body
             else {
                 panic!("type should be an array type");
             };
 
-            let item_tys = types::get_type_by_value(
-                &array_ty.item,
-                self.ctx.modules,
-                &self.ctx.cl_module,
-            );
+            let item_tys =
+                types::get_type_by_type(&item_ty, self.ctx.modules, &self.ctx.cl_module);
 
             let size =
                 item_tys.iter().map(|ty| ty.bytes()).sum::<u32>() * vs.len() as u32;
@@ -1324,7 +1321,7 @@ impl<'a> FuncCodegen<'a, '_> {
                 let mut values = vec![];
                 let mut offset = 0;
                 for native_ty in
-                    types::get_type_by_value(ty, self.ctx.modules, &self.ctx.cl_module)
+                    types::get_type_by_type(ty, self.ctx.modules, &self.ctx.cl_module)
                 {
                     values.push(expect_builder!(self).ins().load(
                         native_ty,

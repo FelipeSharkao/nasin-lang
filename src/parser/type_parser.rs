@@ -46,17 +46,7 @@ impl<'a, 't> TypeParser<'a, 't> {
             }
             "array_type" => {
                 let item_ty = self.parse_type_expr(node.required_field("item_type"));
-                let len = node.field("length").map(|n| {
-                    n.get_text(
-                        &self.ctx.source_manager.source(self.src_idx).content().text,
-                    )
-                    .parse::<usize>()
-                    .expect("Cannot cast length to integer")
-                });
-                b::TypeBody::Array(b::ArrayType::new(
-                    item_ty.into(),
-                    len.map(|x| x as u32),
-                ))
+                b::TypeBody::Array(item_ty.into())
             }
             "generic_type" => {
                 let name = node.required_field("name").of_kind("ident").get_text(
@@ -271,9 +261,6 @@ fn default_idents() -> HashMap<String, b::TypeBody> {
         ("usize".to_string(), b::TypeBody::USize),
         ("f32".to_string(), b::TypeBody::F32),
         ("f64".to_string(), b::TypeBody::F64),
-        (
-            "str".to_string(),
-            b::TypeBody::String(b::StringType { len: None }),
-        ),
+        ("str".to_string(), b::TypeBody::String),
     ])
 }

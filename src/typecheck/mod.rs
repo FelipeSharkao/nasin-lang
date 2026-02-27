@@ -243,12 +243,7 @@ impl<'a> TypeChecker<'a> {
             }
             b::InstrBody::CreateString(x) => {
                 let v = instr.results[0];
-                let ty = b::Type::new(
-                    b::TypeBody::String(b::StringType {
-                        len: Some(x.len() as u32),
-                    }),
-                    None,
-                );
+                let ty = b::Type::new(b::TypeBody::String, None);
                 self.add_constraint(
                     v,
                     Constraint::new(ConstraintKind::Is(ty.clone()), instr.loc),
@@ -256,8 +251,7 @@ impl<'a> TypeChecker<'a> {
             }
             b::InstrBody::CreateUninitializedString(len_v) => {
                 let v = instr.results[0];
-                let ty =
-                    b::Type::new(b::TypeBody::String(b::StringType { len: None }), None);
+                let ty = b::Type::new(b::TypeBody::String, None);
                 self.add_constraint(
                     v,
                     Constraint::new(ConstraintKind::Is(ty.clone()), instr.loc),
@@ -279,13 +273,7 @@ impl<'a> TypeChecker<'a> {
                     )
                 } else {
                     let item_ty = b::Type::new(b::TypeBody::Never, None);
-                    let arr_ty = b::Type::new(
-                        b::TypeBody::Array(b::ArrayType {
-                            len:  Some(0),
-                            item: item_ty.into(),
-                        }),
-                        None,
-                    );
+                    let arr_ty = b::Type::new(b::TypeBody::Array(item_ty.into()), None);
                     self.add_constraint(
                         v,
                         Constraint::new(ConstraintKind::Is(arr_ty), instr.loc),
@@ -502,8 +490,7 @@ impl<'a> TypeChecker<'a> {
             }
             b::InstrBody::StrLen(input) => {
                 let v = instr.results[0];
-                let str_ty =
-                    b::Type::new(b::TypeBody::String(b::StringType::new(None)), None);
+                let str_ty = b::Type::new(b::TypeBody::String, None);
                 self.add_constraint(
                     *input,
                     Constraint::new(ConstraintKind::Is(str_ty), instr.loc),
@@ -516,8 +503,7 @@ impl<'a> TypeChecker<'a> {
             }
             b::InstrBody::StrPtr(input) => {
                 let v = instr.results[0];
-                let str_ty =
-                    b::Type::new(b::TypeBody::String(b::StringType::new(None)), None);
+                let str_ty = b::Type::new(b::TypeBody::String, None);
                 self.add_constraint(
                     *input,
                     Constraint::new(ConstraintKind::Is(str_ty), instr.loc),
@@ -549,16 +535,14 @@ impl<'a> TypeChecker<'a> {
                     Constraint::new(ConstraintKind::Is(len_ty), instr.loc),
                 );
 
-                let ty =
-                    b::Type::new(b::TypeBody::String(b::StringType::new(None)), None);
+                let ty = b::Type::new(b::TypeBody::String, None);
                 self.add_constraint(
                     v,
                     Constraint::new(ConstraintKind::Is(ty), instr.loc),
                 );
             }
             b::InstrBody::StrCopy(src_v, dst_v, offset_v) => {
-                let str_ty =
-                    b::Type::new(b::TypeBody::String(b::StringType::new(None)), None);
+                let str_ty = b::Type::new(b::TypeBody::String, None);
                 self.add_constraint(
                     *src_v,
                     Constraint::new(ConstraintKind::Is(str_ty.clone()), instr.loc),
@@ -578,13 +562,8 @@ impl<'a> TypeChecker<'a> {
             }
             b::InstrBody::ArrayLen(input) => {
                 let v = instr.results[0];
-                let arr_ty = b::Type::new(
-                    b::TypeBody::Array(b::ArrayType::new(
-                        Box::new(b::Type::unknown(None)),
-                        None,
-                    )),
-                    None,
-                );
+                let arr_ty =
+                    b::Type::new(b::TypeBody::Array(b::Type::unknown(None).into()), None);
                 self.add_constraint(
                     *input,
                     Constraint::new(ConstraintKind::Is(arr_ty), instr.loc),
@@ -857,214 +836,227 @@ impl<'a> TypeChecker<'a> {
                 ));
             }
         } else {
-            let constraints = self.nodes[idx]
+            let error_tys = self.nodes[idx]
                 .constraints
                 .iter()
                 .cloned()
                 .sorted_by(|a, b| b.priority().cmp(&a.priority()))
-                .collect_vec();
-
-            for c in constraints {
-                tracing::trace!(?c, "checking constraint");
-                let merge_with = match c.kind {
-                    ConstraintKind::Is(ty) => ty.clone(),
-                    ConstraintKind::TypeOf(target) => {
-                        tracing::trace!(target, "will validate TypeOf");
-                        success &= !self.validate_value(target, visited).is_failed();
-                        self.ctx.lock_modules()[self.mod_idx].values[target]
-                            .ty
-                            .clone()
-                    }
-                    ConstraintKind::Array(target) => {
-                        tracing::trace!(target, "will validate Array");
-                        success &= !self.validate_value(target, visited).is_failed();
-                        let ty = self.ctx.lock_modules()[self.mod_idx].values[target]
-                            .ty
-                            .clone();
-                        b::Type::new(
-                            b::TypeBody::Array(b::ArrayType::new(ty.into(), None)),
-                            None,
-                        )
-                    }
-                    ConstraintKind::ArrayElem(target) => {
-                        tracing::trace!(target, "will validate ArrayElem");
-                        success &= !self.validate_value(target, visited).is_failed();
-                        if let b::TypeBody::Array(arr_ty) =
-                            &self.ctx.lock_modules()[self.mod_idx].values[target].ty.body
-                        {
-                            (&*arr_ty.item).clone()
-                        } else {
-                            b::Type::unknown(None)
-                        }
-                    }
-                    ConstraintKind::Ptr(target) => {
-                        tracing::trace!(target, "will validate Ptr");
-                        success &= !self.validate_value(target, visited).is_failed();
-                        let ty = self.ctx.lock_modules()[self.mod_idx].values[target]
-                            .ty
-                            .clone();
-                        b::Type::new(b::TypeBody::Ptr(Some(ty.into())), None)
-                    }
-                    ConstraintKind::Deref(target) => {
-                        tracing::trace!(target, "will validate Deref");
-                        success &= !self.validate_value(target, visited).is_failed();
-                        let ty = self.ctx.lock_modules()[self.mod_idx].values[target]
-                            .ty
-                            .clone();
-                        match &ty.body {
-                            b::TypeBody::Ptr(Some(ty)) => ty.as_ref().clone(),
-                            _ => b::Type::unknown(None),
-                        }
-                    }
-                    ConstraintKind::ReturnOf(target) => {
-                        tracing::trace!(target, "will validate ReturnOf");
-                        success &= !self.validate_value(target, visited).is_failed();
-                        if let b::TypeBody::Func(func_ty) =
-                            &self.ctx.lock_modules()[self.mod_idx].values[target].ty.body
-                        {
-                            func_ty.ret.clone()
-                        } else {
-                            b::Type::unknown(None)
-                        }
-                    }
-                    ConstraintKind::ParameterOf(target, idx) => {
-                        tracing::trace!(target, idx, "will validate ParameterOf");
-                        success &= !self.validate_value(target, visited).is_failed();
-                        if let b::TypeBody::Func(func_ty) =
-                            &self.ctx.lock_modules()[self.mod_idx].values[target].ty.body
-                        {
-                            func_ty
-                                .params
-                                .get(idx)
-                                .cloned()
-                                .unwrap_or(b::Type::unknown(None))
-                        } else {
-                            b::Type::unknown(None)
-                        }
-                    }
-                    ConstraintKind::IsProperty(target, key) => {
-                        tracing::trace!(target, key, "will validate IsProperty");
-                        success &= !self.validate_value(target, visited).is_failed();
-                        for prop_dep in {
-                            let modules = self.ctx.lock_modules();
-                            self.get_property_deps(target, &key, &modules)
-                        } {
-                            tracing::trace!(prop_dep, "will validate property_deps");
-                            success &=
-                                !self.validate_value(prop_dep, visited).is_failed();
-                        }
-                        self.get_property_type(target, &key, &self.ctx.lock_modules())
-                            .unwrap_or_else(|| b::Type::unknown(None))
-                    }
-                    ConstraintKind::Members(members) => {
-                        for member in members.values() {
-                            tracing::trace!(member, "will validate member");
-                            success &= !self.validate_value(*member, visited).is_failed();
-                        }
-                        b::Type::new(
-                            b::TypeBody::Inferred(b::InferredType {
-                                members:    members
-                                    .iter()
-                                    .map(|(k, v)| {
-                                        let value = &self.ctx.lock_modules()
-                                            [self.mod_idx]
-                                            .values[*v];
-                                        (k.clone(), value.ty.clone())
-                                    })
-                                    .collect(),
-                                properties: SortedMap::new(),
-                            }),
-                            None,
-                        )
-                    }
-                    ConstraintKind::HasProperty(key, target) => {
-                        tracing::trace!(key, target, "will validate HasProperty");
-                        success &= !self.validate_value(target, visited).is_failed();
-                        let ty = {
+                .filter_map(|c| {
+                    tracing::trace!(?c, "checking constraint");
+                    let merge_with = match c.kind {
+                        ConstraintKind::Is(ty) => ty.clone(),
+                        ConstraintKind::TypeOf(target) => {
+                            tracing::trace!(target, "will validate TypeOf");
+                            success &= !self.validate_value(target, visited).is_failed();
                             self.ctx.lock_modules()[self.mod_idx].values[target]
                                 .ty
                                 .clone()
-                        };
-                        b::Type::new(
-                            b::TypeBody::Inferred(b::InferredType {
-                                properties: SortedMap::from([(key.clone(), ty)]),
-                                members:    SortedMap::new(),
-                            }),
-                            None,
-                        )
-                    }
-                    ConstraintKind::GetFunc(mod_idx, func_idx) => {
-                        let (params, ret) = {
-                            let func = &self.ctx.lock_modules()[mod_idx].funcs[func_idx];
-                            (func.params.clone(), func.ret)
-                        };
+                        }
+                        ConstraintKind::Array(target) => {
+                            tracing::trace!(target, "will validate Array");
+                            success &= !self.validate_value(target, visited).is_failed();
+                            let ty = self.ctx.lock_modules()[self.mod_idx].values[target]
+                                .ty
+                                .clone();
+                            b::Type::new(b::TypeBody::Array(ty.into()), None)
+                        }
+                        ConstraintKind::ArrayElem(target) => {
+                            tracing::trace!(target, "will validate ArrayElem");
+                            success &= !self.validate_value(target, visited).is_failed();
+                            if let b::TypeBody::Array(item_ty) =
+                                &self.ctx.lock_modules()[self.mod_idx].values[target]
+                                    .ty
+                                    .body
+                            {
+                                item_ty.as_ref().clone()
+                            } else {
+                                b::Type::unknown(None)
+                            }
+                        }
+                        ConstraintKind::Ptr(target) => {
+                            tracing::trace!(target, "will validate Ptr");
+                            success &= !self.validate_value(target, visited).is_failed();
+                            let ty = self.ctx.lock_modules()[self.mod_idx].values[target]
+                                .ty
+                                .clone();
+                            b::Type::new(b::TypeBody::Ptr(Some(ty.into())), None)
+                        }
+                        ConstraintKind::Deref(target) => {
+                            tracing::trace!(target, "will validate Deref");
+                            success &= !self.validate_value(target, visited).is_failed();
+                            let ty = self.ctx.lock_modules()[self.mod_idx].values[target]
+                                .ty
+                                .clone();
+                            match &ty.body {
+                                b::TypeBody::Ptr(Some(ty)) => ty.as_ref().clone(),
+                                _ => b::Type::unknown(None),
+                            }
+                        }
+                        ConstraintKind::ReturnOf(target) => {
+                            tracing::trace!(target, "will validate ReturnOf");
+                            success &= !self.validate_value(target, visited).is_failed();
+                            if let b::TypeBody::Func(func_ty) =
+                                &self.ctx.lock_modules()[self.mod_idx].values[target]
+                                    .ty
+                                    .body
+                            {
+                                func_ty.ret.clone()
+                            } else {
+                                b::Type::unknown(None)
+                            }
+                        }
+                        ConstraintKind::ParameterOf(target, idx) => {
+                            tracing::trace!(target, idx, "will validate ParameterOf");
+                            success &= !self.validate_value(target, visited).is_failed();
+                            if let b::TypeBody::Func(func_ty) =
+                                &self.ctx.lock_modules()[self.mod_idx].values[target]
+                                    .ty
+                                    .body
+                            {
+                                func_ty
+                                    .params
+                                    .get(idx)
+                                    .cloned()
+                                    .unwrap_or(b::Type::unknown(None))
+                            } else {
+                                b::Type::unknown(None)
+                            }
+                        }
+                        ConstraintKind::IsProperty(target, key) => {
+                            tracing::trace!(target, key, "will validate IsProperty");
+                            success &= !self.validate_value(target, visited).is_failed();
+                            for prop_dep in {
+                                let modules = self.ctx.lock_modules();
+                                self.get_property_deps(target, &key, &modules)
+                            } {
+                                tracing::trace!(prop_dep, "will validate property_deps");
+                                success &=
+                                    !self.validate_value(prop_dep, visited).is_failed();
+                            }
+                            self.get_property_type(target, &key, &self.ctx.lock_modules())
+                                .unwrap_or_else(|| b::Type::unknown(None))
+                        }
+                        ConstraintKind::Members(members) => {
+                            for member in members.values() {
+                                tracing::trace!(member, "will validate member");
+                                success &=
+                                    !self.validate_value(*member, visited).is_failed();
+                            }
+                            b::Type::new(
+                                b::TypeBody::Inferred(b::InferredType {
+                                    members:    members
+                                        .iter()
+                                        .map(|(k, v)| {
+                                            let value = &self.ctx.lock_modules()
+                                                [self.mod_idx]
+                                                .values[*v];
+                                            (k.clone(), value.ty.clone())
+                                        })
+                                        .collect(),
+                                    properties: SortedMap::new(),
+                                }),
+                                None,
+                            )
+                        }
+                        ConstraintKind::HasProperty(key, target) => {
+                            tracing::trace!(key, target, "will validate HasProperty");
+                            success &= !self.validate_value(target, visited).is_failed();
+                            let ty = {
+                                self.ctx.lock_modules()[self.mod_idx].values[target]
+                                    .ty
+                                    .clone()
+                            };
+                            b::Type::new(
+                                b::TypeBody::Inferred(b::InferredType {
+                                    properties: SortedMap::from([(key.clone(), ty)]),
+                                    members:    SortedMap::new(),
+                                }),
+                                None,
+                            )
+                        }
+                        ConstraintKind::GetFunc(mod_idx, func_idx) => {
+                            let (params, ret) = {
+                                let func =
+                                    &self.ctx.lock_modules()[mod_idx].funcs[func_idx];
+                                (func.params.clone(), func.ret)
+                            };
 
-                        if mod_idx == self.mod_idx {
+                            if mod_idx == self.mod_idx {
+                                for param in &params {
+                                    tracing::trace!(param, "will validate GetFunc param");
+                                    success &=
+                                        !self.validate_value(*param, visited).is_failed();
+                                }
+                                tracing::trace!(ret, "will validate GetFunc ret");
+                                success &= !self.validate_value(ret, visited).is_failed();
+                            }
+
+                            let (params, ret) = {
+                                let module = &self.ctx.lock_modules()[self.mod_idx];
+                                let params = params
+                                    .into_iter()
+                                    .map(|v| module.values[v].ty.clone())
+                                    .collect();
+                                let ret = module.values[ret].ty.clone();
+                                (params, ret)
+                            };
+
+                            b::Type::new(
+                                b::TypeBody::Func(Box::new(b::FuncType::new(
+                                    params, ret,
+                                ))),
+                                None,
+                            )
+                        }
+                        ConstraintKind::Func(params, ret) => {
                             for param in &params {
-                                tracing::trace!(param, "will validate GetFunc param");
+                                tracing::trace!(param, "will validate Func param");
                                 success &=
                                     !self.validate_value(*param, visited).is_failed();
                             }
-                            tracing::trace!(ret, "will validate GetFunc ret");
+                            tracing::trace!(ret, "will validate Func ret");
                             success &= !self.validate_value(ret, visited).is_failed();
+
+                            let (params, ret) = {
+                                let module = &self.ctx.lock_modules()[self.mod_idx];
+                                let params = params
+                                    .into_iter()
+                                    .map(|v| module.values[v].ty.clone())
+                                    .collect();
+                                let ret = module.values[ret].ty.clone();
+                                (params, ret)
+                            };
+
+                            b::Type::new(
+                                b::TypeBody::Func(Box::new(b::FuncType::new(
+                                    params, ret,
+                                ))),
+                                None,
+                            )
                         }
+                    };
 
-                        let (params, ret) = {
-                            let module = &self.ctx.lock_modules()[self.mod_idx];
-                            let params = params
-                                .into_iter()
-                                .map(|v| module.values[v].ty.clone())
-                                .collect();
-                            let ret = module.values[ret].ty.clone();
-                            (params, ret)
-                        };
+                    tracing::trace!(?merge_with, "got type");
 
-                        b::Type::new(
-                            b::TypeBody::Func(Box::new(b::FuncType::new(params, ret))),
-                            None,
-                        )
+                    let modules = &mut self.ctx.lock_modules_mut();
+                    if let Some(ty) = result_ty.intersection(&merge_with, modules) {
+                        result_ty = ty;
+                        None
+                    } else {
+                        tracing::trace!(?result_ty, ?merge_with, "incompatible types");
+                        Some((
+                            merge_with,
+                            c.loc.or(modules[self.mod_idx].values[idx].loc),
+                        ))
                     }
-                    ConstraintKind::Func(params, ret) => {
-                        for param in &params {
-                            tracing::trace!(param, "will validate Func param");
-                            success &= !self.validate_value(*param, visited).is_failed();
-                        }
-                        tracing::trace!(ret, "will validate Func ret");
-                        success &= !self.validate_value(ret, visited).is_failed();
-
-                        let (params, ret) = {
-                            let module = &self.ctx.lock_modules()[self.mod_idx];
-                            let params = params
-                                .into_iter()
-                                .map(|v| module.values[v].ty.clone())
-                                .collect();
-                            let ret = module.values[ret].ty.clone();
-                            (params, ret)
-                        };
-
-                        b::Type::new(
-                            b::TypeBody::Func(Box::new(b::FuncType::new(params, ret))),
-                            None,
-                        )
-                    }
-                };
-
-                tracing::trace!(?merge_with, "got type");
-
-                let modules = &mut self.ctx.lock_modules_mut();
-                if let Some(ty) = result_ty.intersection(&merge_with, modules) {
-                    result_ty = ty;
-                } else {
-                    self.ctx.push_error(errors::Error::new(
-                        errors::UnexpectedType::new(
-                            vec![modules[self.mod_idx].values[idx].ty.to_owned()],
-                            merge_with.clone(),
-                        )
+                })
+                .collect_vec();
+            for (merge_with, loc) in error_tys {
+                self.ctx.push_error(errors::Error::new(
+                    errors::UnexpectedType::new(vec![merge_with], result_ty.clone())
                         .into(),
-                        c.loc.or(modules[self.mod_idx].values[idx].loc),
-                    ));
-                    tracing::trace!(?result_ty, ?merge_with, "incompatible types");
-                }
+                    loc,
+                ));
             }
         }
 

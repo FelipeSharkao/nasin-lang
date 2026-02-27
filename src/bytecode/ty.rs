@@ -34,8 +34,9 @@ pub enum TypeBody {
     F32,
     F64,
     Inferred(InferredType),
-    String(StringType),
-    Array(ArrayType),
+    String,
+    #[from(skip)]
+    Array(Box<Type>),
     #[from(skip)]
     Ptr(Option<Box<Type>>),
     Func(Box<FuncType>),
@@ -72,17 +73,11 @@ impl Display for TypeBody {
                 }
                 write!(f, " }}")?;
             }
-            TypeBody::String(v) => {
+            TypeBody::String => {
                 write!(f, "string")?;
-                if let Some(len) = v.len {
-                    write!(f, " {}", len)?;
-                }
             }
             TypeBody::Array(v) => {
-                write!(f, "array {}", v.item)?;
-                if let Some(len) = v.len {
-                    write!(f, " {}", len)?;
-                }
+                write!(f, "array {}", v)?;
             }
             TypeBody::Ptr(ty) => {
                 write!(f, "ptr")?;
@@ -133,8 +128,8 @@ impl TypeBody {
                 || func.ret.body.is_not_final();
         }
 
-        if let TypeBody::Array(arr) = self {
-            return arr.item.body.is_not_final();
+        if let TypeBody::Array(ty) = self {
+            return ty.body.is_not_final();
         }
 
         if let TypeBody::Ptr(Some(ty)) = self {
@@ -181,7 +176,7 @@ impl Type {
 
     pub fn is_aggregate(&self, modules: &[Module]) -> bool {
         match &self.body {
-            TypeBody::String(_) | TypeBody::Array(_) => true,
+            TypeBody::String | TypeBody::Array(_) => true,
             TypeBody::TypeRef(t) => match &modules[t.mod_idx].typedefs[t.idx].body {
                 TypeDefBody::Record(_) | TypeDefBody::Interface(_) => true,
             },
@@ -338,24 +333,8 @@ impl Type {
             number!(I64, AnySignedNumber) => TypeBody::I64,
             number!(F32, AnySignedNumber, AnyFloat) => TypeBody::F32,
             number!(F64, AnySignedNumber, AnyFloat) => TypeBody::F64,
-            (body!(TypeBody::String(a)), body!(TypeBody::String(b))) => {
-                let len = match (&a.len, &b.len) {
-                    (a_len, b_len) if a_len == b_len => a_len.clone(),
-                    (Some(len), None) | (None, Some(len)) => Some(*len),
-                    _ => return None,
-                };
-                TypeBody::String(StringType { len })
-            }
             (body!(TypeBody::Array(a)), body!(TypeBody::Array(b))) => {
-                let len = match (&a.len, &b.len) {
-                    (a_len, b_len) if a_len == b_len => a_len.clone(),
-                    (Some(len), None) | (None, Some(len)) => Some(*len),
-                    _ => return None,
-                };
-                TypeBody::Array(ArrayType {
-                    len,
-                    item: a.item.intersection(&b.item, modules)?.into(),
-                })
+                TypeBody::Array(a.intersection(&b, modules)?.into())
             }
             (body!(TypeBody::Ptr(a)), body!(TypeBody::Ptr(b))) => {
                 let ty = match (a, b) {
@@ -477,16 +456,8 @@ impl Type {
     pub fn union(&self, other: &Type, modules: &[Module]) -> Option<Type> {
         let body = match (self, other) {
             unordered!(body!(TypeBody::Never), body!(a)) => a.clone(),
-            (body!(TypeBody::String(a)), body!(TypeBody::String(b))) => {
-                TypeBody::String(StringType {
-                    len: if a.len == b.len { a.len.clone() } else { None },
-                })
-            }
             (body!(TypeBody::Array(a)), body!(TypeBody::Array(b))) => {
-                TypeBody::Array(ArrayType {
-                    item: a.item.union(&b.item, modules)?.into(),
-                    len:  if a.len == b.len { a.len.clone() } else { None },
-                })
+                TypeBody::Array(a.union(&b, modules)?.into())
             }
             (body!(TypeBody::Ptr(a)), body!(TypeBody::Ptr(b))) => {
                 let ty = match (a, b) {
@@ -628,17 +599,6 @@ impl InferredType {
             properties: props.into_iter().collect(),
         }
     }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, new)]
-pub struct StringType {
-    pub len: Option<u32>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Hash, new)]
-pub struct ArrayType {
-    pub item: Box<Type>,
-    pub len:  Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Display, new)]
