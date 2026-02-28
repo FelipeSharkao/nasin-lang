@@ -21,8 +21,10 @@ pub struct FuncBinding {
 
 #[derive(Debug, Clone)]
 pub struct GlobalBinding<'a> {
+    #[allow(dead_code)]
     pub symbol_name: String,
     pub value: types::RuntimeValue,
+    #[allow(dead_code)]
     pub ty: Cow<'a, b::Type>,
     pub is_const: bool,
 }
@@ -65,7 +67,7 @@ pub struct CodegenContext<'a> {
     next_helper_id: u32,
 }
 impl<'a> CodegenContext<'a> {
-    pub fn get_global(&self, mod_idx: usize, idx: usize) -> Option<&GlobalBinding> {
+    pub fn get_global(&self, mod_idx: usize, idx: usize) -> Option<&GlobalBinding<'_>> {
         self.globals.get(&(mod_idx, idx))
     }
 

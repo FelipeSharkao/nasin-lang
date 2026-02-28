@@ -3,7 +3,7 @@ name = "nasin"
 description = "Elegant pure functional programming language"
 authors = ["Felipe Nascimento <felipenasgomes@gmail.com>"]
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 [workspace]
 members = ["cranelift-shim", "tree-sitter-nasin"]

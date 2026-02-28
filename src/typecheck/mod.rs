@@ -241,7 +241,7 @@ impl<'a> TypeChecker<'a> {
                     ),
                 );
             }
-            b::InstrBody::CreateString(x) => {
+            b::InstrBody::CreateString(_) => {
                 let v = instr.results[0];
                 let ty = b::Type::new(b::TypeBody::String, None);
                 self.add_constraint(
