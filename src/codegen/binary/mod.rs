@@ -326,7 +326,14 @@ impl BinaryCodegen<'_> {
             func_builder.append_block_params_for_function_params(block);
             func_builder.switch_to_block(block);
 
-            let params = func_builder.block_params(block)[1..].to_vec();
+            let mut params = func_builder.block_params(block).to_vec();
+            // If the function returns a struct, it is strictly required to be the first
+            // argument, so the env will be the second
+            let env_idx = match &binding.ret_policy {
+                ReturnPolicy::Struct(_) => 1,
+                _ => 0,
+            };
+            params.splice(env_idx..(env_idx + 1), []);
 
             let target_func_ref = self
                 .ctx

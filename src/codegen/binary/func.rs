@@ -300,9 +300,10 @@ impl<'a> FuncCodegen<'a, '_> {
                     &[],
                 );
 
+                let declared_consts = self.scopes.last().declared_consts.clone();
                 let mut scope = ScopePayload::new(
                     then_block.unwrap_or(self.scopes.last().block),
-                    self.scopes.last().declared_consts.clone(),
+                    declared_consts.clone(),
                 );
                 scope.next_branches.push(else_block.unwrap_or(next_block));
 
@@ -331,6 +332,7 @@ impl<'a> FuncCodegen<'a, '_> {
                 }
 
                 self.scopes.branch();
+                self.scopes.last_mut().declared_consts = declared_consts;
 
                 if let Some(else_block) = else_block {
                     expect_builder!(self).switch_to_block(else_block);
@@ -584,7 +586,7 @@ impl<'a> FuncCodegen<'a, '_> {
                     .ins()
                     .func_addr(self.ctx.cl_module.isa().pointer_type(), closure_func_ref);
 
-                let env = self.add_const(types::Const::uint_ptr(0, &self.ctx.cl_module));
+                let env = self.add_const(types::Const::uint_ptr(1, &self.ctx.cl_module));
                 let value = types::FuncAsValue::new(closure_ptr, env, proto);
 
                 self.values.insert(
