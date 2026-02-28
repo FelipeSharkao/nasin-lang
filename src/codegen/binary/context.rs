@@ -235,7 +235,8 @@ impl<'a> CodegenContext<'a> {
         let func_binding = &self.funcs[&key];
         let mut sig = func_binding.proto.signature.clone();
 
-        // First parameters can be dedicated to the return. In that case, we need to skip them.
+        // If the function returns a struct, it is strictly required to be the first
+        // argument, so the env will be the second
         let env_idx = match &func_binding.proto.ret_policy {
             ReturnPolicy::Struct(_) => 1,
             _ => 0,

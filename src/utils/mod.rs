@@ -36,25 +36,3 @@ macro_rules! unwrap {
     };
 }
 pub(crate) use unwrap;
-
-macro_rules! cfor {
-    ($( $decl:stmt ),* $(,)? ; $cond:expr ; $( $step:expr ),* $(,)? ; $body:block) => {
-        {
-            let mut cfor_should_step = false;
-            $( $decl );*
-            loop {
-                if cfor_should_step {
-                    $( $step );*
-                } else {
-                    cfor_should_step = true;
-                }
-                if !$cond { break; }
-                $body
-            }
-        }
-    };
-    ($( $decl:stmt ),* $(,)? ; ; $( $step:expr ),* $(,)? ; $body:block) => {
-        cfor!($( $decl ),*; true; $( $step ),*; $body)
-    };
-}
-pub(crate) use cfor;

@@ -8,7 +8,7 @@ use derive_new::new;
 use itertools::{enumerate, izip, Itertools};
 
 use self::constraints::{Constraint, ConstraintKind};
-use crate::utils::{cfor, SortedMap};
+use crate::utils::SortedMap;
 use crate::{bytecode as b, context, errors, utils};
 
 #[derive(Debug, Clone, new)]
@@ -1169,10 +1169,12 @@ impl<'a> TypeChecker<'a> {
             let module = &self.ctx.lock_modules()[self.mod_idx];
             get_body(module).len()
         };
-        cfor!(let mut i = 0; i < len; i += 1; {
+        let mut i = 0;
+        while i < len {
             self.finish_get_property_instr(i, &get_body, &get_body_mut);
             i += self.finish_dispatch_instr(i, &get_body, &get_body_mut);
-        })
+            i += 1;
+        }
     }
 
     fn finish_get_property_instr(
