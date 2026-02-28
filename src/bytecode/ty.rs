@@ -3,7 +3,7 @@ use std::fmt;
 use std::hash::Hash;
 
 use derive_more::{Display, From};
-use derive_new::new;
+use derive_ctor::ctor;
 use derive_setters::Setters;
 use itertools::{chain, izip, Itertools};
 
@@ -140,7 +140,7 @@ impl TypeBody {
     }
 }
 
-#[derive(Debug, Clone, new)]
+#[derive(Debug, Clone, ctor)]
 pub struct Type {
     pub body: TypeBody,
     pub loc:  Option<Loc>,
@@ -568,11 +568,11 @@ impl Display for Type {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Setters, new)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Setters, ctor)]
 pub struct TypeRef {
     pub mod_idx: usize,
     pub idx:     usize,
-    #[new(value = "false")]
+    #[ctor(expr(false))]
     pub is_self: bool,
 }
 impl TypeRef {
@@ -601,7 +601,7 @@ impl InferredType {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Display, new)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Display, ctor)]
 #[display("func({}): {ret}", params.iter().join(", "))]
 pub struct FuncType {
     pub params: Vec<Type>,

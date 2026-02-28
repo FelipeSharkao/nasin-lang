@@ -3,7 +3,7 @@ use std::collections::HashMap;
 
 use cl::InstBuilder;
 use cranelift_shim::{self as cl, Module};
-use derive_new::new;
+use derive_ctor::ctor;
 use itertools::{izip, Itertools};
 
 use super::context::CodegenContext;
@@ -17,20 +17,20 @@ pub enum Callee {
     Indirect(cl::SigRef, cl::Value),
 }
 
-#[derive(new)]
+#[derive(ctor)]
 pub struct FuncCodegen<'a, 'b> {
     pub ctx: CodegenContext<'a>,
     pub builder: Option<cl::FunctionBuilder<'b>>,
     pub is_global: bool,
-    #[new(value = "utils::ScopeStack::empty()")]
+    #[ctor(expr(utils::ScopeStack::empty()))]
     pub scopes: utils::ScopeStack<ScopePayload<'a>>,
-    #[new(default)]
+    #[ctor(default)]
     pub values: HashMap<(usize, b::ValueIdx), types::RuntimeValue>,
-    #[new(default)]
+    #[ctor(default)]
     imported_signatures: HashMap<cl::Signature, cl::SigRef>,
-    #[new(default)]
+    #[ctor(default)]
     declared_funcs: HashMap<cl::FuncId, cl::FuncRef>,
-    #[new(default)]
+    #[ctor(default)]
     declared_globals: HashMap<cl::DataId, cl::GlobalValue>,
 }
 macro_rules! expect_builder {
@@ -1643,16 +1643,16 @@ impl<'a> FuncCodegen<'a, '_> {
     // }
 }
 
-#[derive(Debug, new)]
+#[derive(Debug, ctor)]
 pub struct ScopePayload<'a> {
     pub start_block: cl::Block,
-    #[new(value = "start_block")]
+    #[ctor(expr(start_block))]
     pub block: cl::Block,
-    #[new(default)]
+    #[ctor(default)]
     pub next_branches: Vec<cl::Block>,
-    #[new(default)]
+    #[ctor(default)]
     pub result: Option<b::ValueIdx>,
-    #[new(default)]
+    #[ctor(default)]
     pub ty: Option<Cow<'a, b::Type>>,
     pub declared_consts: HashMap<types::Const, cl::Value>,
 }

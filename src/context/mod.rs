@@ -5,24 +5,24 @@ use std::ops::{Deref, DerefMut};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, RwLock};
 
-use derive_new::new;
+use derive_ctor::ctor;
 use tree_sitter as ts;
 
 use self::runtime::RuntimeBuilder;
 use crate::{bytecode as b, codegen, config, errors, parser, sources, typecheck};
 
-#[derive(Debug, new)]
+#[derive(Debug, ctor)]
 pub struct BuildContext {
     pub cfg: config::BuildConfig,
-    #[new(default)]
+    #[ctor(default)]
     pub source_manager: sources::SourceManager,
-    #[new(default)]
+    #[ctor(default)]
     pub errors: Mutex<Vec<errors::Error>>,
-    #[new(default)]
+    #[ctor(default)]
     modules: RwLock<Vec<b::Module>>,
-    #[new(default)]
+    #[ctor(default)]
     pub main: RwLock<Option<(usize, usize)>>,
-    #[new(default)]
+    #[ctor(default)]
     pub core_mod_idx: Option<usize>,
 }
 impl BuildContext {

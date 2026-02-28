@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::{mem, usize};
 
-use derive_new::new;
+use derive_ctor::ctor;
 use itertools::{enumerate, Itertools};
 use tree_sitter as ts;
 
@@ -672,9 +672,9 @@ impl<'a, 't> ExprParser<'a, 't> {
     }
 }
 
-#[derive(Debug, Clone, new)]
+#[derive(Debug, Clone, ctor)]
 pub struct ScopePayload {
-    #[new(default)]
+    #[ctor(default)]
     pub instrs: Vec<b::Instr>,
     idents:     HashMap<String, ValueRef>,
 }

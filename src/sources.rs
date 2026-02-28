@@ -3,15 +3,15 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use derivative::Derivative;
-use derive_new::new;
+use derive_ctor::ctor;
 use itertools::Itertools;
 use lazy_init::LazyTransform;
 
 use crate::{bytecode as b, errors};
 
-#[derive(Default, Debug, new)]
+#[derive(Default, Debug, ctor)]
 pub struct SourceManager {
-    #[new(default)]
+    #[ctor(default)]
     pub sources: Vec<Source>,
 }
 impl SourceManager {

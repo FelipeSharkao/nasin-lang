@@ -2,8 +2,8 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use std::{cmp, fmt};
 
+use derive_ctor::ctor;
 use derive_more::{Debug, Display, From};
-use derive_new::new;
 use itertools::Itertools;
 use tree_sitter as ts;
 
@@ -12,16 +12,16 @@ use super::ty::*;
 use super::value::*;
 use crate::utils::{self, SortedMap};
 
-#[derive(Debug, Clone, new)]
+#[derive(Debug, Clone, ctor)]
 pub struct Module {
     pub idx:      usize,
-    #[new(default)]
+    #[ctor(default)]
     pub values:   Vec<Value>,
-    #[new(default)]
+    #[ctor(default)]
     pub typedefs: Vec<TypeDef>,
-    #[new(default)]
+    #[ctor(default)]
     pub globals:  Vec<Global>,
-    #[new(default)]
+    #[ctor(default)]
     pub funcs:    Vec<Func>,
     pub sources:  HashSet<Source>,
 }
@@ -189,7 +189,7 @@ pub struct InterfaceType {
     pub methods: SortedMap<String, Method>,
 }
 
-#[derive(Debug, Clone, Display, new)]
+#[derive(Debug, Clone, Display, ctor)]
 #[display("{ty} {loc}")]
 pub struct RecordField {
     pub name: NameWithLoc,
@@ -197,7 +197,7 @@ pub struct RecordField {
     pub loc:  Loc,
 }
 
-#[derive(Debug, Clone, Display, new)]
+#[derive(Debug, Clone, Display, ctor)]
 #[display("({}, {}) {loc}", func_ref.0, func_ref.1)]
 pub struct Method {
     pub name:     NameWithLoc,
@@ -205,7 +205,7 @@ pub struct Method {
     pub loc:      Loc,
 }
 
-#[derive(Debug, Clone, new)]
+#[derive(Debug, Clone, ctor)]
 pub struct NameWithLoc {
     pub value: String,
     pub loc:   Loc,
@@ -216,7 +216,7 @@ pub struct Extern {
     pub name: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, new)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, ctor)]
 pub struct Source {
     pub path: PathBuf,
 }

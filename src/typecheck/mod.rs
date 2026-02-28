@@ -4,22 +4,22 @@ use std::collections::HashSet;
 use std::fmt::Debug;
 use std::mem;
 
-use derive_new::new;
+use derive_ctor::ctor;
 use itertools::{enumerate, izip, Itertools};
 
 use self::constraints::{Constraint, ConstraintKind};
 use crate::utils::SortedMap;
 use crate::{bytecode as b, context, errors, utils};
 
-#[derive(Debug, Clone, new)]
+#[derive(Debug, Clone, ctor)]
 struct TypeNode {
-    #[new(default)]
+    #[ctor(default)]
     constraints: HashSet<Constraint>,
-    #[new(default)]
+    #[ctor(default)]
     status:      TypeNodeStatus,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, new)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, ctor)]
 enum TypeNodeStatus {
     #[default]
     Unresolved,
@@ -36,11 +36,11 @@ impl TypeNodeStatus {
     }
 }
 
-#[derive(Debug, Clone, new)]
+#[derive(Debug, Clone, ctor)]
 pub struct TypeChecker<'a> {
     ctx:     &'a context::BuildContext,
     mod_idx: usize,
-    #[new(default)]
+    #[ctor(default)]
     nodes:   Vec<TypeNode>,
 }
 
@@ -1299,9 +1299,9 @@ impl<'a> TypeChecker<'a> {
     }
 }
 
-#[derive(Debug, Clone, new)]
+#[derive(Debug, Clone, ctor)]
 struct ScopePayload {
-    #[new(default)]
+    #[ctor(default)]
     loop_args: Vec<b::ValueIdx>,
 }
 impl utils::SimpleScopePayload for ScopePayload {}

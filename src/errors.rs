@@ -3,18 +3,18 @@ use std::sync::Arc;
 use std::{fmt, io};
 
 use derive_more::{Display, From};
-use derive_new::new;
+use derive_ctor::ctor;
 use thiserror::Error;
 
 use crate::{bytecode as b, sources, utils};
 
-#[derive(Debug, Clone, new)]
+#[derive(Debug, Clone, ctor)]
 pub struct Error {
     detail: ErrorDetail,
     loc:    Option<b::Loc>,
 }
 
-#[derive(Debug, Clone, Error, new)]
+#[derive(Debug, Clone, Error, ctor)]
 pub struct CompilerError {
     source_manager: Arc<sources::SourceManager>,
     errors: Vec<Error>,
@@ -72,26 +72,26 @@ pub enum ErrorDetail {
     Todo(Todo),
 }
 
-#[derive(Debug, Clone, Display, new)]
+#[derive(Debug, Clone, Display, ctor)]
 #[display("Cannot read file `{}`: {kind}", path.display())]
 pub struct ReadError {
     pub path: PathBuf,
     pub kind: io::ErrorKind,
 }
 
-#[derive(Debug, Clone, Display, new)]
+#[derive(Debug, Clone, Display, ctor)]
 #[display("Cannot find value `{ident}` on the current scope")]
 pub struct ValueNotFound {
     pub ident: String,
 }
 
-#[derive(Debug, Clone, Display, new)]
+#[derive(Debug, Clone, Display, ctor)]
 #[display("Cannot find type `{ident}` on the current scope")]
 pub struct TypeNotFound {
     pub ident: String,
 }
 
-#[derive(Debug, Clone, new)]
+#[derive(Debug, Clone, ctor)]
 pub struct UnexpectedType {
     pub expected: Vec<b::Type>,
     pub actual:   b::Type,
@@ -120,7 +120,7 @@ impl Display for UnexpectedType {
     }
 }
 
-#[derive(Debug, Clone, Display, new)]
+#[derive(Debug, Clone, Display, ctor)]
 #[display(
     "All results of the expression should have the same type\n{}",
     utils::indented(2, types.iter().map(|t| format!("- found {t}"))),
@@ -129,13 +129,13 @@ pub struct TypeMisatch {
     pub types: Vec<b::Type>,
 }
 
-#[derive(Debug, Clone, Display, new)]
+#[derive(Debug, Clone, Display, ctor)]
 #[display("`{ty}` is not an interface type")]
 pub struct TypeNotInterface {
     pub ty: b::Type,
 }
 
-#[derive(Debug, Clone, Display, new)]
+#[derive(Debug, Clone, Display, ctor)]
 #[display("`{name}` requires {expected} arguments, but {found} were provided")]
 pub struct WrongArgumentCount {
     pub name:     String,
@@ -143,7 +143,7 @@ pub struct WrongArgumentCount {
     pub found:    usize,
 }
 
-#[derive(Debug, Clone, Display, new)]
+#[derive(Debug, Clone, Display, ctor)]
 #[display("Feature is not implemented yet: {feature}")]
 pub struct Todo {
     pub feature: String,

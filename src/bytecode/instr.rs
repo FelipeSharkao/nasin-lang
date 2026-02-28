@@ -1,7 +1,7 @@
 use std::fmt::{self, Display};
 
 use derive_more::derive::Debug;
-use derive_new::new;
+use derive_ctor::ctor;
 use itertools::{enumerate, Itertools};
 
 use super::{Loc, Type, ValueIdx};
@@ -172,11 +172,11 @@ impl Display for InstrBody {
     }
 }
 
-#[derive(Debug, Clone, new)]
+#[derive(Debug, Clone, ctor)]
 pub struct Instr {
     pub body:    InstrBody,
     pub loc:     Option<Loc>,
-    #[new(default)]
+    #[ctor(default)]
     pub results: Vec<ValueIdx>,
 }
 impl Instr {

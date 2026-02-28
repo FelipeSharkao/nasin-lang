@@ -1,4 +1,4 @@
-use derive_new::new;
+use derive_ctor::ctor;
 
 use crate::bytecode as b;
 use crate::utils::{number_enum, SortedMap};
@@ -27,7 +27,7 @@ pub enum ConstraintKind {
     Func(Vec<b::ValueIdx>, b::ValueIdx),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, new)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, ctor)]
 pub struct Constraint {
     pub kind: ConstraintKind,
     pub loc:  Option<b::Loc>,

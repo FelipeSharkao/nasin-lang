@@ -1,17 +1,17 @@
 use std::collections::{HashMap, HashSet};
 
-use derive_new::new;
+use derive_ctor::ctor;
 use itertools::Itertools;
 use tree_sitter as ts;
 
 use crate::utils::{IntoItem, SortedMap, TreeSitterUtils};
 use crate::{bytecode as b, context, errors};
 
-#[derive(new)]
+#[derive(ctor)]
 pub struct TypeParser<'a, 't> {
-    #[new(default)]
+    #[ctor(default)]
     pub typedefs: Vec<DeclaredTypeDef<'a, 't>>,
-    #[new(value = "default_idents()")]
+    #[ctor(expr(default_idents()))]
     pub idents: HashMap<String, b::TypeBody>,
     ctx: &'a context::BuildContext,
     src_idx: usize,

@@ -8,8 +8,8 @@ pub fn replace_with<T, U, R: ReplaceResult<T, U>>(
 ) -> U {
     unsafe {
         let old = ptr::read(dest);
-        let (new, ret) = f(old).get_replace_result();
-        ptr::write(dest, new);
+        let (ctor, ret) = f(old).get_replace_result();
+        ptr::write(dest, ctor);
         ret
     }
 }

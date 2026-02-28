@@ -2,7 +2,7 @@ use std::cmp::min;
 use std::fmt::Debug;
 
 use derive_more::{Deref, DerefMut, IntoIterator};
-use derive_new::new;
+use derive_ctor::ctor;
 
 #[derive(Debug, Clone, PartialEq, Eq, IntoIterator)]
 pub struct ScopeStack<T: ScopePayload> {
@@ -114,20 +114,20 @@ impl<T: ScopePayload> ScopeStack<T> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Deref, DerefMut, new)]
+#[derive(Debug, Clone, PartialEq, Eq, Deref, DerefMut, ctor)]
 pub struct Scope<T> {
     #[deref]
     #[deref_mut]
     pub payload: T,
-    #[new(value = "false")]
+    #[ctor(expr(false))]
     pub is_loop: bool,
-    #[new(value = "0")]
+    #[ctor(expr(0))]
     pub loop_arity: usize,
-    #[new(value = "1")]
+    #[ctor(expr(1))]
     branches: usize,
-    #[new(value = "0")]
+    #[ctor(expr(0))]
     never_branches: usize,
-    #[new(value = "false")]
+    #[ctor(expr(false))]
     is_never: bool,
 }
 

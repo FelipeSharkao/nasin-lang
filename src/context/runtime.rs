@@ -1,18 +1,18 @@
 use std::collections::HashSet;
 
-use derive_new::new;
+use derive_ctor::ctor;
 
 use super::BuildContext;
 use crate::{bytecode as b, errors};
 
-#[derive(new)]
+#[derive(ctor)]
 pub struct RuntimeBuilder<'a> {
     ctx: &'a BuildContext,
-    #[new(default)]
+    #[ctor(default)]
     values: Vec<b::Value>,
-    #[new(default)]
+    #[ctor(default)]
     funcs: Vec<b::Func>,
-    #[new(default)]
+    #[ctor(default)]
     entry_func_idx: Option<usize>,
 }
 impl<'a> RuntimeBuilder<'a> {

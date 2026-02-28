@@ -1,4 +1,4 @@
-use derive_new::new;
+use derive_ctor::ctor;
 
 use crate::bytecode as b;
 
@@ -14,10 +14,10 @@ pub enum ValueRefBody {
     CompileError,
 }
 
-#[derive(Debug, Clone, Hash, Eq, PartialEq, new)]
+#[derive(Debug, Clone, Hash, Eq, PartialEq, ctor)]
 pub struct ValueRef {
     pub body: ValueRefBody,
-    #[new(default)]
+    #[ctor(default)]
     pub ty:   Option<b::Type>,
     pub loc:  Option<b::Loc>,
 }

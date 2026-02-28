@@ -2,7 +2,7 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 
 use cranelift_shim::{self as cl, Module};
-use derive_new::new;
+use derive_ctor::ctor;
 use itertools::repeat_n;
 
 use super::func::FuncCodegen;
@@ -42,28 +42,28 @@ impl Into<types::FuncPrototype> for &FuncClosureBinding {
     }
 }
 
-#[derive(new)]
+#[derive(ctor)]
 pub struct CodegenContext<'a> {
     pub modules: &'a [b::Module],
     pub cfg: &'a config::BuildConfig,
     pub cl_module: cl::ObjectModule,
-    #[new(default)]
+    #[ctor(default)]
     pub funcs: HashMap<(usize, usize), FuncBinding>,
-    #[new(default)]
+    #[ctor(default)]
     pub data: HashMap<cl::DataId, cl::DataDescription>,
-    #[new(default)]
+    #[ctor(default)]
     pub globals: HashMap<(usize, usize), GlobalBinding<'a>>,
-    #[new(default)]
+    #[ctor(default)]
     pub vtables_desc: HashMap<(usize, usize), types::VTableDesc>,
-    #[new(default)]
+    #[ctor(default)]
     pub vtables_impl: HashMap<types::VTableRef, cl::DataId>,
-    #[new(default)]
+    #[ctor(default)]
     pub funcs_closures: HashMap<(usize, usize), FuncClosureBinding>,
-    #[new(default)]
+    #[ctor(default)]
     strings: HashMap<String, cl::DataId>,
-    #[new(default)]
+    #[ctor(default)]
     tuples: HashMap<Vec<types::ValueSource>, cl::DataId>,
-    #[new(default)]
+    #[ctor(default)]
     next_helper_id: u32,
 }
 impl<'a> CodegenContext<'a> {

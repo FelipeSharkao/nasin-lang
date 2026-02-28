@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
-use derive_new::new;
-use itertools::{enumerate, multizip, Itertools};
+use derive_ctor::ctor;
+use itertools::{Itertools, enumerate, multizip};
 use tree_sitter as ts;
 
 use super::parser_value::ValueRef;
@@ -15,17 +15,17 @@ const UNDEF_VALUE: b::ValueIdx = usize::MAX;
 
 const SELF_INDENT: &str = "Self";
 
-#[derive(new)]
+#[derive(ctor)]
 pub struct ModuleParser<'a, 't> {
-    #[new(value = "TypeParser::new(ctx, src_idx, mod_idx)")]
+    #[ctor(expr(TypeParser::new(ctx, src_idx, mod_idx)))]
     pub types:    TypeParser<'a, 't>,
-    #[new(default)]
+    #[ctor(default)]
     pub globals:  Vec<DeclaredGlobal<'t>>,
-    #[new(default)]
+    #[ctor(default)]
     pub funcs:    Vec<DeclaredFunc<'t>>,
-    #[new(default)]
+    #[ctor(default)]
     pub values:   Vec<b::Value>,
-    #[new(default)]
+    #[ctor(default)]
     pub idents:   HashMap<String, ValueRef>,
     pub ctx:      &'a context::BuildContext,
     pub src_idx:  usize,

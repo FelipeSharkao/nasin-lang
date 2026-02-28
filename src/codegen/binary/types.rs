@@ -2,12 +2,12 @@ use std::collections::HashMap;
 
 use cranelift_shim as cl;
 use derive_more::{Display, From};
-use derive_new::new;
+use derive_ctor::ctor;
 use itertools::Itertools;
 
 use crate::bytecode as b;
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Display, new)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Display, ctor)]
 #[display("{value_idx}")]
 pub struct RuntimeValue {
     pub src: ValueSource,
@@ -255,14 +255,14 @@ impl From<f64> for F64Bits {
     }
 }
 
-#[derive(Debug, Display, Clone, PartialEq, Eq, Hash, new)]
+#[derive(Debug, Display, Clone, PartialEq, Eq, Hash, ctor)]
 #[display("[{ptr}; {len}]")]
 pub struct Slice {
     pub ptr: ValueSource,
     pub len: ValueSource,
 }
 
-#[derive(Debug, Display, Clone, PartialEq, Eq, Hash, new)]
+#[derive(Debug, Display, Clone, PartialEq, Eq, Hash, ctor)]
 #[display("func {ptr} {proto} <- {env}")]
 pub struct FuncAsValue {
     pub ptr:   cl::Value,
@@ -270,7 +270,7 @@ pub struct FuncAsValue {
     pub proto: FuncPrototype,
 }
 
-#[derive(Debug, Display, Copy, Clone, PartialEq, Eq, Hash, new)]
+#[derive(Debug, Display, Copy, Clone, PartialEq, Eq, Hash, ctor)]
 #[display("dyn {vtable} <- {src}")]
 pub struct DynDispatched {
     pub src:    cl::Value,
@@ -505,7 +505,7 @@ impl ReturnPolicy {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Display, new)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Display, ctor)]
 #[display("{signature} {ret_policy}")]
 pub struct FuncPrototype {
     pub signature:  cl::Signature,
@@ -597,7 +597,7 @@ impl FuncPrototype {
     }
 }
 
-#[derive(new)]
+#[derive(ctor)]
 pub struct VTableDesc {
     pub methods: Vec<String>,
 }
@@ -615,7 +615,7 @@ impl VTableDesc {
     }
 }
 
-#[derive(new, Hash, PartialEq, Eq, Clone, Copy, Debug)]
+#[derive(ctor, Hash, PartialEq, Eq, Clone, Copy, Debug)]
 pub struct VTableRef {
     pub iface: (usize, usize),
     pub ty:    (usize, usize),
