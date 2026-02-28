@@ -181,7 +181,7 @@ dependencies = [
  "cranelift-control",
  "cranelift-entity",
  "cranelift-isle",
- "gimli",
+ "gimli 0.28.1",
  "hashbrown 0.14.3",
  "log",
  "regalloc2",
@@ -409,6 +409,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "gimli"
+version = "0.32.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cd54e8795d97c9f5561c63529d98fcc0c2eed9e982deecc396797f2c04cff298"
+dependencies = [
+ "fallible-iterator",
+ "indexmap",
+ "stable_deref_trait",
+]
+
+[[package]]
 name = "hashbrown"
 version = "0.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -491,6 +502,7 @@ dependencies = [
  "derive-new",
  "derive_more",
  "derive_setters",
+ "gimli 0.32.1",
  "itertools",
  "lazy-init",
  "target-lexicon",

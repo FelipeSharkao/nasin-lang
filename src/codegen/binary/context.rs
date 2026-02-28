@@ -234,8 +234,14 @@ impl<'a> CodegenContext<'a> {
 
         let func_binding = &self.funcs[&key];
         let mut sig = func_binding.proto.signature.clone();
+
+        // First parameters can be dedicated to the return. In that case, we need to skip them.
+        let env_idx = match &func_binding.proto.ret_policy {
+            ReturnPolicy::Struct(_) => 1,
+            _ => 0,
+        };
         sig.params.splice(
-            0..0,
+            env_idx..env_idx,
             [cl::AbiParam::new(self.cl_module.isa().pointer_type())],
         );
 

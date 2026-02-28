@@ -20,28 +20,52 @@ EX_PROTOCOL:    i32 = 76
 EX_NOPERM:      i32 = 77
 EX_CONFIG:      i32 = 78
 
-_write(f: i32, buf: Ptr(u8), len: usize): i32 @extern("write")
-_exit(code: i32): never @extern("exit")
-_malloc(size: usize): usize @extern("malloc")
+libc_write(f: i32, buf: Ptr(u8), len: usize): i32 @extern("write")
+libc_exit(code: i32): never @extern("exit")
+libc_malloc(size: usize): Ptr(u8) @extern("malloc")
 
 NL = "\n"
+NL_PTR = @internal_str_ptr(NL)
+NL_LEN = @internal_str_len(NL)
 
-print(message: str): bool =
-    let _ = _write(STDOUT_FILENO, @str_ptr(message), @str_len(message))
-    let _ = _write(STDOUT_FILENO, @str_ptr(NL), @str_len(NL))
+internal_print(message: str): bool =
+    let msg_ptr = @internal_str_ptr(message)
+    let msg_len = @internal_str_len(message)
+    let _ = libc_write(STDOUT_FILENO, msg_ptr, msg_len)
+    let _ = libc_write(STDOUT_FILENO, NL_PTR,  NL_LEN)
     true
 
-eprint(message: str): bool =
-    let _ = _write(STDERR_FILENO, @str_ptr(message), @str_len(message))
-    let _ = _write(STDERR_FILENO, @str_ptr(NL), @str_len(NL))
+internal_eprint(message: str): bool =
+    let msg_ptr = @internal_str_ptr(message)
+    let msg_len = @internal_str_len(message)
+    let _ = libc_write(STDERR_FILENO, msg_ptr, msg_len)
+    let _ = libc_write(STDERR_FILENO, NL_PTR,  NL_LEN)
     true
 
 assert(cond: bool, desc: str): bool =
     if not cond then
-        let _ = eprint(desc)
-        _exit(EX_SOFTWARE)
+        let _ = internal_eprint(desc)
+        libc_exit(EX_SOFTWARE)
     else
         true
 
-heap_alloc(size: usize): usize =
-    _malloc(size)
+internal_heap_alloc(size: usize): Ptr(u8) =
+    libc_malloc(size)
+
+experimental_u8_to_str(x: u8): str =
+    let BUF_SIZE = 4
+    let buf = internal_heap_alloc(BUF_SIZE)
+    let _ = @internal_ptr_set(buf, BUF_SIZE - 1, 0)
+    let len = _u8_to_str(x, buf, BUF_SIZE - 1, 0)
+    @internal_str_from_ptr(@internal_ptr_offset(buf, BUF_SIZE - len - 1), len)
+
+_u8_to_str(x: u8, buf: Ptr(u8), buf_size: usize, i: usize): usize =
+    if i >= buf_size then buf_size else
+    ; Yes it's mutable, and yes I don't like either
+    ; but it's better than creating a new string every iteration
+    ; FIXME: after mutation optimization is implemented, write this in a FP way
+    let digit = x % 10
+    let _ = @internal_ptr_set(buf, buf_size - i - 1, digit + 48)
+    let x = x / 10
+    if x == 0 then i + 1
+    else _u8_to_str(x, buf, buf_size, i + 1)

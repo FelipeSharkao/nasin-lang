@@ -1,9 +1,9 @@
-use std::fmt;
+use std::path::PathBuf;
 use std::sync::Arc;
+use std::{fmt, io};
 
 use derive_more::{Display, From};
 use derive_new::new;
-use itertools::Itertools;
 use thiserror::Error;
 
 use crate::{bytecode as b, sources, utils};
@@ -60,6 +60,7 @@ impl fmt::Display for CompilerError {
 
 #[derive(Debug, Clone, Display, From)]
 pub enum ErrorDetail {
+    ReadError(ReadError),
     ValueNotFound(ValueNotFound),
     TypeNotFound(TypeNotFound),
     UnexpectedType(UnexpectedType),
@@ -67,7 +68,15 @@ pub enum ErrorDetail {
     #[display("Type should be known at this point")]
     TypeNotFinal,
     TypeNotInterface(TypeNotInterface),
+    WrongArgumentCount(WrongArgumentCount),
     Todo(Todo),
+}
+
+#[derive(Debug, Clone, Display, new)]
+#[display("Cannot read file `{}`: {kind}", path.display())]
+pub struct ReadError {
+    pub path: PathBuf,
+    pub kind: io::ErrorKind,
 }
 
 #[derive(Debug, Clone, Display, new)]
@@ -82,15 +91,33 @@ pub struct TypeNotFound {
     pub ident: String,
 }
 
-#[derive(Debug, Clone, Display, new)]
-#[display(
-    "Unexpected type {}. Expected one of:\n{}",
-    &actual.body,
-    utils::indented(2, expected.iter().map(|t| format!("- {}", &t.body))),
-)]
+#[derive(Debug, Clone, new)]
 pub struct UnexpectedType {
     pub expected: Vec<b::Type>,
     pub actual:   b::Type,
+}
+
+impl Display for UnexpectedType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.expected.len() == 1 {
+            write!(
+                f,
+                "Expected type {}, but found {} instead",
+                &self.expected[0].body, &self.actual.body,
+            )?;
+        } else {
+            write!(
+                f,
+                "Unexpected type {}. Expected one of:\n{}",
+                &self.actual.body,
+                utils::indented(
+                    2,
+                    self.expected.iter().map(|t| format!("- {}", &t.body))
+                ),
+            )?;
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Display, new)]
@@ -106,6 +133,14 @@ pub struct TypeMisatch {
 #[display("`{ty}` is not an interface type")]
 pub struct TypeNotInterface {
     pub ty: b::Type,
+}
+
+#[derive(Debug, Clone, Display, new)]
+#[display("`{name}` requires {expected} arguments, but {found} were provided")]
+pub struct WrongArgumentCount {
+    pub name:     String,
+    pub expected: usize,
+    pub found:    usize,
 }
 
 #[derive(Debug, Clone, Display, new)]

@@ -1,27 +1,8 @@
-:i count 13
+:i count 15
 :b shell 29
 ./bin/nasin r tests/hello.nsn
 :i returncode 0
-:b stdout 44
-Compiled program to tests/build/hello
-Hello
-
-:b stderr 0
-
-:b shell 33
-./bin/nasin r tests/operators.nsn
-:i returncode 70
-:b stdout 42
-Compiled program to tests/build/operators
-
-:b stderr 29
-sanity check, this will fail
-
-:b shell 40
-./bin/nasin r tests/func_declaration.nsn
-:i returncode 0
-:b stdout 55
-Compiled program to tests/build/func_declaration
+:b stdout 6
 Hello
 
 :b stderr 0
@@ -29,26 +10,24 @@ Hello
 :b shell 37
 ./bin/nasin r tests/global_string.nsn
 :i returncode 0
-:b stdout 64
-Compiled program to tests/build/global_string
+:b stdout 18
 Hello from global
 
 :b stderr 0
 
-:b shell 47
-./bin/nasin r tests/global_string_from_func.nsn
+:b shell 35
+./bin/nasin r tests/hello_array.nsn
 :i returncode 0
-:b stdout 74
-Compiled program to tests/build/global_string_from_func
-Hello from global
+:b stdout 12
+Hello
+World
 
 :b stderr 0
 
 :b shell 26
 ./bin/nasin r tests/if.nsn
 :i returncode 0
-:b stdout 56
-Compiled program to tests/build/if
+:b stdout 21
 it's true
 it's false
 
@@ -57,27 +36,67 @@ it's false
 :b shell 36
 ./bin/nasin r tests/if_returning.nsn
 :i returncode 0
-:b stdout 66
-Compiled program to tests/build/if_returning
+:b stdout 21
 it's true
 it's false
+
+:b stderr 0
+
+:b shell 44
+./bin/nasin r tests/aritimetic_operators.nsn
+:i returncode 70
+:b stdout 0
+
+:b stderr 29
+sanity check, this will fail
+
+:b shell 44
+./bin/nasin r tests/comparison_operators.nsn
+:i returncode 70
+:b stdout 0
+
+:b stderr 29
+sanity check, this will fail
+
+:b shell 37
+./bin/nasin r tests/string_concat.nsn
+:i returncode 0
+:b stdout 11
+HelloWorld
+
+:b stderr 0
+
+:b shell 40
+./bin/nasin r tests/func_declaration.nsn
+:i returncode 0
+:b stdout 15
+Hello from foo
 
 :b stderr 0
 
 :b shell 33
 ./bin/nasin r tests/recursion.nsn
 :i returncode 0
-:b stdout 49
-Compiled program to tests/build/recursion
-got 10
+:b stdout 79
+rec: 0
+rec: 1
+rec: 2
+rec: 3
+rec: 4
+rec: 5
+rec: 6
+rec: 7
+rec: 8
+rec: 9
+rec: 10
+
 
 :b stderr 0
 
 :b shell 35
 ./bin/nasin r tests/record_type.nsn
 :i returncode 0
-:b stdout 62
-Compiled program to tests/build/record_type
+:b stdout 18
 Hello from record
 
 :b stderr 0
@@ -85,8 +104,7 @@ Hello from record
 :b shell 37
 ./bin/nasin r tests/return_record.nsn
 :i returncode 0
-:b stdout 64
-Compiled program to tests/build/return_record
+:b stdout 18
 Hello from record
 
 :b stderr 0
@@ -94,38 +112,35 @@ Hello from record
 :b shell 30
 ./bin/nasin r tests/method.nsn
 :i returncode 0
-:b stdout 67
-Compiled program to tests/build/method
+:b stdout 28
 Hello from record
 Hi method
-
-:b stderr 0
-
-:b shell 37
-./bin/nasin r tests/func_as_value.nsn
-:i returncode 0
-:b stdout 88
-Compiled program to tests/build/func_as_value
-PrintA
-Hello direct
-PrintA
-Hello indirect
 
 :b stderr 0
 
 :b shell 33
 ./bin/nasin r tests/interface.nsn
 :i returncode 0
-:b stdout 150
-Compiled program to tests/build/interface
-PrintA
+:b stdout 108
+LinesA
 implementation omitted
-PrintB
-PrintB 1
+LinesB
+LinesB 1
 implementation omitted
-PrintB
-PrintB 2
+LinesB
+LinesB 2
 implementation omitted
+
+:b stderr 0
+
+:b shell 37
+./bin/nasin r tests/func_as_value.nsn
+:i returncode 0
+:b stdout 42
+LinesA
+Hello direct
+LinesA
+Hello indirect
 
 :b stderr 0
 

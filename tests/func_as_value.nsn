@@ -1,15 +1,14 @@
 main =
-    let f = if true then print_a else print_b
-    let _ = f("Hello direct")
-    call(f)
+    let f = if true then lines_a else lines_b
+    let lines1 = f("Hello direct")
+    let lines2 = call(f)
+    [lines1, lines2]
 
-call(f): bool =
+call(f): [str] =
     f("Hello indirect")
 
-print_a(msg) =
-    let _ = print("PrintA")
-    print(msg)
+lines_a(msg) =
+    ["LinesA", msg]
 
-print_b(msg) =
-    let _ = print("PrintB")
-    print(msg)
+lines_b(msg) =
+    ["LinesB", msg]

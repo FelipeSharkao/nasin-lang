@@ -99,15 +99,29 @@ impl<'a, 't> ExprParser<'a, 't> {
             "false" => ValueRef::new(ValueRefBody::Bool(false), Some(loc)),
             "number" => {
                 let number = node.get_text(
-                    &self.module.ctx.source(self.module.src_idx).content().text,
+                    &self
+                        .module
+                        .ctx
+                        .source_manager
+                        .source(self.module.src_idx)
+                        .content()
+                        .text,
                 );
                 ValueRef::new(ValueRefBody::Number(number.to_string()), Some(loc))
             }
             "string_lit" => {
                 let string = match node.field("content") {
-                    Some(content) => utils::decode_string_lit(content.get_text(
-                        &self.module.ctx.source(self.module.src_idx).content().text,
-                    )),
+                    Some(content) => utils::decode_string_lit(
+                        content.get_text(
+                            &self
+                                .module
+                                .ctx
+                                .source_manager
+                                .source(self.module.src_idx)
+                                .content()
+                                .text,
+                        ),
+                    ),
                     None => "".to_string(),
                 };
                 let v = self.add_instr_with_result(b::Instr::new(
@@ -135,7 +149,13 @@ impl<'a, 't> ExprParser<'a, 't> {
                     .iter_field("fields")
                     .map(|field_node| {
                         let name = field_node.required_field("name").get_text(
-                            &self.module.ctx.source(self.module.src_idx).content().text,
+                            &self
+                                .module
+                                .ctx
+                                .source_manager
+                                .source(self.module.src_idx)
+                                .content()
+                                .text,
                         );
                         let value_ref =
                             self.add_expr_node(field_node.required_field("value"), false);
@@ -151,7 +171,13 @@ impl<'a, 't> ExprParser<'a, 't> {
             }
             "ident" => {
                 let ident = node.get_text(
-                    &self.module.ctx.source(self.module.src_idx).content().text,
+                    &self
+                        .module
+                        .ctx
+                        .source_manager
+                        .source(self.module.src_idx)
+                        .content()
+                        .text,
                 );
                 if let Some(value) = self.scopes.last().idents.get(ident) {
                     value.with_loc(loc)
@@ -172,7 +198,10 @@ impl<'a, 't> ExprParser<'a, 't> {
                 let op = node.required_field("op");
                 let left = self.add_expr_node(node.required_field("left"), false);
                 let right = self.add_expr_node(node.required_field("right"), false);
-                self.add_bin_op(op, left, right)
+                match op.kind() {
+                    "double_plus" => self.add_str_concat_op(op, left, right),
+                    _ => self.add_bin_op(op, left, right),
+                }
             }
             "type_bind" => {
                 let mut value =
@@ -188,7 +217,13 @@ impl<'a, 't> ExprParser<'a, 't> {
                 let parent = self.add_expr_node(node.required_field("parent"), false);
                 let prop_name_node = node.required_field("prop_name");
                 let prop_name = prop_name_node.get_text(
-                    &self.module.ctx.source(self.module.src_idx).content().text,
+                    &self
+                        .module
+                        .ctx
+                        .source_manager
+                        .source(self.module.src_idx)
+                        .content()
+                        .text,
                 );
                 self.add_get_prop(
                     parent,
@@ -272,7 +307,13 @@ impl<'a, 't> ExprParser<'a, 't> {
             }
             "macro" => {
                 let name = node.required_field("name").of_kind("ident").get_text(
-                    &self.module.ctx.source(self.module.src_idx).content().text,
+                    &self
+                        .module
+                        .ctx
+                        .source_manager
+                        .source(self.module.src_idx)
+                        .content()
+                        .text,
                 );
                 let args = node.iter_field("args").collect_vec();
                 self.add_macro(name, &args, b::Loc::from_node(self.module.src_idx, &node))
@@ -304,7 +345,7 @@ impl<'a, 't> ExprParser<'a, 't> {
                 b::InstrBody::CreateNumber(v.clone()),
                 value_ref.loc,
             )),
-            ValueRefBody::Never | ValueRefBody::CompileError => self
+            ValueRefBody::Void | ValueRefBody::Never | ValueRefBody::CompileError => self
                 .add_instr_with_result(b::Instr::new(
                     b::InstrBody::CompileError,
                     value_ref.loc,
@@ -381,6 +422,55 @@ impl<'a, 't> ExprParser<'a, 't> {
         ValueRef::new(ValueRefBody::Value(v), Some(loc))
     }
 
+    fn add_str_concat_op(
+        &mut self,
+        op: ts::Node,
+        left: ValueRef,
+        right: ValueRef,
+    ) -> ValueRef {
+        // TODO: operator overloading
+
+        let left_v = self.use_value_ref(&left);
+        let right_v = self.use_value_ref(&right);
+
+        let mut loc = b::Loc::from_node(self.module.src_idx, &op);
+        if let Some(left_loc) = &left.loc {
+            loc = loc.merge(left_loc);
+        }
+        if let Some(right_loc) = &right.loc {
+            loc = loc.merge(right_loc);
+        }
+
+        let left_len_v = self
+            .add_instr_with_result(b::Instr::new(b::InstrBody::StrLen(left_v), left.loc));
+        let right_len_v = self.add_instr_with_result(b::Instr::new(
+            b::InstrBody::StrLen(right_v),
+            right.loc,
+        ));
+
+        let len_v = self.add_instr_with_result(b::Instr::new(
+            b::InstrBody::Add(left_len_v, right_len_v),
+            Some(loc),
+        ));
+
+        let v = self.add_instr_with_result(b::Instr::new(
+            b::InstrBody::CreateUninitializedString(len_v),
+            Some(loc),
+        ));
+
+        self.add_instr(b::Instr::new(
+            b::InstrBody::StrCopy(left_v, v, None),
+            Some(loc),
+        ));
+
+        self.add_instr(b::Instr::new(
+            b::InstrBody::StrCopy(right_v, v, Some(left_len_v)),
+            Some(loc),
+        ));
+
+        ValueRef::new(ValueRefBody::Value(v), Some(loc))
+    }
+
     fn add_get_prop(
         &mut self,
         parent: ValueRef,
@@ -448,10 +538,27 @@ impl<'a, 't> ExprParser<'a, 't> {
     }
 
     fn add_macro(&mut self, name: &str, args: &[ts::Node<'t>], loc: b::Loc) -> ValueRef {
+        macro_rules! check_args {
+            ($n:expr) => {{
+                let n = $n;
+                if args.len() != n {
+                    self.module.ctx.push_error(errors::Error::new(
+                        errors::WrongArgumentCount::new(
+                            format!("@{name}"),
+                            n,
+                            args.len(),
+                        )
+                        .into(),
+                        Some(loc),
+                    ));
+                    return ValueRef::new(ValueRefBody::CompileError, Some(loc));
+                }
+            }};
+        }
+
         match name {
-            "str_len" => {
-                // TODO: better error handling
-                assert!(args.len() == 1, "@str_len() expects a single argument");
+            "internal_str_len" => {
+                check_args!(1);
 
                 let source = self.add_expr_node(args[0], false);
                 let source_v = self.use_value_ref(&source);
@@ -462,9 +569,8 @@ impl<'a, 't> ExprParser<'a, 't> {
                 ));
                 ValueRef::new(ValueRefBody::Value(v), Some(loc))
             }
-            "str_ptr" => {
-                // TODO: better error handling
-                assert!(args.len() == 1, "@str_ptr() expects a single argument");
+            "internal_str_ptr" => {
+                check_args!(1);
 
                 let source = self.add_expr_node(args[0], false);
                 let source_v = self.use_value_ref(&source);
@@ -474,6 +580,59 @@ impl<'a, 't> ExprParser<'a, 't> {
                     Some(loc),
                 ));
                 ValueRef::new(ValueRefBody::Value(v), Some(loc))
+            }
+            "internal_str_from_ptr" => {
+                check_args!(2);
+
+                let ptr = self.add_expr_node(args[0], false);
+                let ptr_v = self.use_value_ref(&ptr);
+
+                let len = self.add_expr_node(args[1], false);
+                let len_v = self.use_value_ref(&len);
+
+                let v = self.add_instr_with_result(b::Instr::new(
+                    b::InstrBody::StrFromPtr(ptr_v, len_v),
+                    Some(loc),
+                ));
+                ValueRef::new(ValueRefBody::Value(v), Some(loc))
+            }
+            "internal_ptr_offset" => {
+                check_args!(2);
+
+                let ptr = self.add_expr_node(args[0], false);
+                let ptr_v = self.use_value_ref(&ptr);
+
+                let offset = self.add_expr_node(args[1], false);
+                let offset_v = self.use_value_ref(&offset);
+
+                let v = self.add_instr_with_result(b::Instr::new(
+                    b::InstrBody::PtrOffset(ptr_v, offset_v),
+                    Some(loc),
+                ));
+                ValueRef::new(ValueRefBody::Value(v), Some(loc))
+            }
+            "internal_ptr_set" => {
+                check_args!(3);
+
+                let ptr = self.add_expr_node(args[0], false);
+                let ptr_v = self.use_value_ref(&ptr);
+
+                let offset = self.add_expr_node(args[1], false);
+                let offset_v = self.use_value_ref(&offset);
+
+                let ptr_v = self.add_instr_with_result(b::Instr::new(
+                    b::InstrBody::PtrOffset(ptr_v, offset_v),
+                    Some(loc),
+                ));
+
+                let value = self.add_expr_node(args[2], false);
+                let value_v = self.use_value_ref(&value);
+
+                self.add_instr(b::Instr::new(
+                    b::InstrBody::PtrSet(ptr_v, value_v),
+                    Some(loc),
+                ));
+                ValueRef::new(ValueRefBody::Void, Some(loc))
             }
             _ => {
                 panic!("unhandled macro: `{name}`")
@@ -492,7 +651,13 @@ impl<'a, 't> ExprParser<'a, 't> {
                 match pat_node.kind() {
                     "ident" => {
                         let ident = pat_node.get_text(
-                            &self.module.ctx.source(self.module.src_idx).content().text,
+                            &self
+                                .module
+                                .ctx
+                                .source_manager
+                                .source(self.module.src_idx)
+                                .content()
+                                .text,
                         );
                         self.scopes.last_mut().idents.insert(
                             ident.to_string(),

@@ -2,14 +2,14 @@ true_msg  = "it's true"
 false_msg = "it's false"
 
 main =
-    let if_result = if true then
+    let line1 = if true then
         true_msg
     else
         false_msg
-    let _ = print(if_result)
 
-    let if_result = if false then
+    let line2 = if false then
         true_msg
     else
         false_msg
-    print(if_result)
+
+    [line1, line2]

@@ -1,6 +1,5 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::mem;
 
 use cl::InstBuilder;
 use cranelift_shim::{self as cl, Module};
@@ -51,10 +50,10 @@ impl<'a> FuncCodegen<'a, '_> {
         mod_idx: usize,
     ) {
         let (block, mut cl_values) = {
-            let func = expect_builder!(self);
-            let block = func.create_block();
-            func.append_block_params_for_function_params(block);
-            (block, func.block_params(block).to_vec())
+            let builder = expect_builder!(self);
+            let block = builder.create_block();
+            builder.append_block_params_for_function_params(block);
+            (block, builder.block_params(block).to_vec())
         };
 
         if let (ResultPolicy::Return(types::ReturnPolicy::Struct(_)), Some(result)) =
@@ -89,12 +88,15 @@ impl<'a> FuncCodegen<'a, '_> {
                 .clone()
                 .map(|v| Cow::Borrowed(&self.ctx.modules[mod_idx].values[v].ty)),
             result,
+            declared_consts: HashMap::new(),
         });
     }
+
     pub fn finish(self) -> CodegenContext<'a> {
         assert!(self.scopes.len() == 1);
         self.ctx
     }
+
     #[tracing::instrument(skip_all)]
     pub fn add_body(
         &mut self,
@@ -111,6 +113,7 @@ impl<'a> FuncCodegen<'a, '_> {
             }
         }
     }
+
     #[tracing::instrument(skip(self))]
     pub fn add_instr(
         &mut self,
@@ -251,9 +254,9 @@ impl<'a> FuncCodegen<'a, '_> {
                 assert!(cond.len() == 1);
                 let cond = cond[0];
 
-                let builder = expect_builder!(self);
+                let v_false = self.add_const(types::Const::I8(0));
 
-                let v_false = builder.ins().iconst(cl::types::I8, 0);
+                let builder = expect_builder!(self);
                 let cl_value = builder.ins().icmp(cl::IntCC::Equal, cond, v_false);
 
                 self.values.insert(
@@ -297,8 +300,11 @@ impl<'a> FuncCodegen<'a, '_> {
                     &[],
                 );
 
-                let mut scope =
-                    ScopePayload::new(then_block.unwrap_or(self.scopes.last().block));
+                let declared_consts = self.scopes.last().declared_consts.clone();
+                let mut scope = ScopePayload::new(
+                    then_block.unwrap_or(self.scopes.last().block),
+                    declared_consts.clone(),
+                );
                 scope.next_branches.push(else_block.unwrap_or(next_block));
 
                 self.scopes.last_mut().block = next_block;
@@ -326,6 +332,7 @@ impl<'a> FuncCodegen<'a, '_> {
                 }
 
                 self.scopes.branch();
+                self.scopes.last_mut().declared_consts = declared_consts;
 
                 if let Some(else_block) = else_block {
                     expect_builder!(self).switch_to_block(else_block);
@@ -396,6 +403,7 @@ impl<'a> FuncCodegen<'a, '_> {
                     next_branches: vec![],
                     result,
                     ty,
+                    declared_consts: self.scopes.last().declared_consts.clone(),
                 });
                 scope.is_loop = true;
 
@@ -444,10 +452,12 @@ impl<'a> FuncCodegen<'a, '_> {
                             expect_builder!(self).ins().return_(&[]);
                         }
                         ResultPolicy::Return(ReturnPolicy::Struct(_)) => {
-                            let cl_values = self.use_value_by_value(mod_idx, *v);
                             if let Some(res) = self.scopes.last().result {
+                                let cl_values = self.use_value_by_value(mod_idx, *v);
                                 let res_cl = self.use_value_by_ref(mod_idx, res);
+
                                 let builder = expect_builder!(self);
+
                                 let mut offset = 0;
                                 for cl_value in &cl_values {
                                     builder.ins().store(
@@ -576,9 +586,7 @@ impl<'a> FuncCodegen<'a, '_> {
                     .ins()
                     .func_addr(self.ctx.cl_module.isa().pointer_type(), closure_func_ref);
 
-                let env = builder
-                    .ins()
-                    .iconst(self.ctx.cl_module.isa().pointer_type(), 0);
+                let env = self.add_const(types::Const::uint_ptr(1, &self.ctx.cl_module));
                 let value = types::FuncAsValue::new(closure_ptr, env, proto);
 
                 self.values.insert(
@@ -765,6 +773,71 @@ impl<'a> FuncCodegen<'a, '_> {
                     types::RuntimeValue::new(value.into(), mod_idx, instr.results[0]),
                 );
             }
+            b::InstrBody::StrFromPtr(ptr_v, len_v) => {
+                let ptr = self.use_value_by_ref(mod_idx, *ptr_v);
+
+                let len = self.use_value_by_value(mod_idx, *len_v);
+                assert!(
+                    len.len() == 1,
+                    "str_from_ptr length should be a single value"
+                );
+                let len = len[0];
+
+                let value = types::ValueSource::Slice(
+                    types::Slice::new(
+                        types::ValueSource::Ptr(ptr),
+                        types::ValueSource::Primitive(len),
+                    )
+                    .into(),
+                );
+
+                self.values.insert(
+                    (mod_idx, instr.results[0]),
+                    types::RuntimeValue::new(value.into(), mod_idx, instr.results[0]),
+                );
+            }
+            b::InstrBody::StrCopy(src_v, dst_v, offset_v) => {
+                let values = self.use_value_by_value(mod_idx, *src_v);
+                if values.len() != 2 {
+                    todo!("copy_str: {} values", values.len());
+                }
+                let src = values[0];
+                let len = values[1];
+
+                let dst = self.use_value_by_value(mod_idx, *dst_v);
+                if dst.len() != 2 {
+                    todo!("copy_str: {} values", dst.len());
+                }
+                let dst = dst[0];
+
+                let dst = if let Some(offset_v) = offset_v {
+                    let offset = self.use_value_by_value(mod_idx, *offset_v);
+                    assert!(offset.len() == 1);
+                    let offset = offset[0];
+                    expect_builder!(self).ins().iadd(dst, offset)
+                } else {
+                    dst
+                };
+
+                if let types::ValueSource::Slice(slice) =
+                    &self.values[&(mod_idx, *src_v)].src
+                {
+                    let len = match &slice.len {
+                        types::ValueSource::I8(len) => Some(*len as usize),
+                        types::ValueSource::I16(len) => Some(*len as usize),
+                        types::ValueSource::I32(len) => Some(*len as usize),
+                        types::ValueSource::I64(len) => Some(*len as usize),
+                        _ => None,
+                    };
+
+                    if let Some(len) = len {
+                        self.copy_sized_bytes(src, dst, len);
+                        return;
+                    }
+                }
+
+                self.copy_bytes(src, dst, len);
+            }
             b::InstrBody::ArrayIndex(source_v, idx_v) => {
                 let ty = &self.ctx.modules[mod_idx].values[instr.results[0]].ty;
 
@@ -778,12 +851,12 @@ impl<'a> FuncCodegen<'a, '_> {
                 assert!(idx.len() == 1);
                 let idx = idx[0];
 
-                let builder = expect_builder!(self);
+                let size = self.add_const(types::Const::uint_ptr(
+                    types::get_size(ty, self.ctx.modules, &self.ctx.cl_module) as u64,
+                    &self.ctx.cl_module,
+                ));
 
-                let size = builder.ins().iconst(
-                    self.ctx.cl_module.isa().pointer_type(),
-                    types::get_size(ty, self.ctx.modules, &self.ctx.cl_module) as i64,
-                );
+                let builder = expect_builder!(self);
                 let offset = builder.ins().imul(size, idx);
                 let ptr = builder.ins().iadd(ptr, offset);
 
@@ -793,6 +866,48 @@ impl<'a> FuncCodegen<'a, '_> {
                     (mod_idx, instr.results[0]),
                     types::RuntimeValue::new(value.into(), mod_idx, instr.results[0]),
                 );
+            }
+            b::InstrBody::PtrOffset(ptr_v, offset_v) => {
+                let ptr = self.use_value_by_ref(mod_idx, *ptr_v);
+
+                let offset = self.use_value_by_value(mod_idx, *offset_v);
+                assert!(offset.len() == 1);
+                let offset = offset[0];
+
+                let ptr_ty = &self.ctx.modules[mod_idx].values[*ptr_v].ty;
+                let item_size = match &ptr_ty.body {
+                    b::TypeBody::Ptr(Some(item_ty)) => {
+                        types::get_size(item_ty, self.ctx.modules, &self.ctx.cl_module)
+                            as u64
+                    }
+                    b::TypeBody::Ptr(None) => 1,
+                    _ => panic!("type should be a pointer type"),
+                };
+                let item_size = self
+                    .add_const(types::Const::uint_ptr(item_size, &self.ctx.cl_module));
+
+                let builder = expect_builder!(self);
+                let offset_bytes = builder.ins().imul(item_size, offset);
+                let ptr = builder.ins().iadd(ptr, offset_bytes);
+
+                let value = types::ValueSource::Ptr(ptr);
+
+                self.values.insert(
+                    (mod_idx, instr.results[0]),
+                    types::RuntimeValue::new(value.into(), mod_idx, instr.results[0]),
+                );
+            }
+            b::InstrBody::PtrSet(ptr_v, value_v) => {
+                let ptr = self.use_value_by_ref(mod_idx, *ptr_v);
+                let values = self.use_value_canonical(mod_idx, *value_v);
+
+                let builder = expect_builder!(self);
+                let mut offset: i32 = 0;
+                for value in values {
+                    let native_ty = builder.func.dfg.value_type(value);
+                    builder.ins().store(cl::MemFlags::new(), value, ptr, offset);
+                    offset += native_ty.bytes() as i32;
+                }
             }
             b::InstrBody::Dispatch(v, iface_mod_idx, iface_ty_idx) => {
                 let ty = &self.ctx.modules[mod_idx].values[*v].ty;
@@ -816,6 +931,36 @@ impl<'a> FuncCodegen<'a, '_> {
                     (mod_idx, instr.results[0]),
                     types::RuntimeValue::new(
                         dispatched.into(),
+                        mod_idx,
+                        instr.results[0],
+                    ),
+                );
+            }
+            b::InstrBody::CreateUninitializedString(len_v) => {
+                let len = self.use_value_by_value(mod_idx, *len_v);
+                assert!(len.len() == 1);
+                let len = len[0];
+
+                let zero = self.add_const(types::Const::I8(0));
+                let one = self.add_const(types::Const::uint_ptr(1, &self.ctx.cl_module));
+
+                let builder = expect_builder!(self);
+                let size = builder.ins().iadd(len, one);
+
+                let data = self.heap_alloc(size);
+                let data_ptr = self.add_by_ref(&data);
+
+                let builder = expect_builder!(self);
+                let terminator = builder.ins().iadd(data_ptr, len);
+                builder
+                    .ins()
+                    .store(cl::MemFlags::new(), zero, terminator, 0);
+
+                let slice = types::Slice::new(data, types::ValueSource::Primitive(len));
+                self.values.insert(
+                    (mod_idx, instr.results[0]),
+                    types::RuntimeValue::new(
+                        Box::new(slice).into(),
                         mod_idx,
                         instr.results[0],
                     ),
@@ -1004,6 +1149,7 @@ impl<'a> FuncCodegen<'a, '_> {
             ReturnPolicy::Struct(..) => Some(args[0]),
             ReturnPolicy::NoReturn => {
                 builder.ins().trap(cl::TrapCode::UnreachableCodeReached);
+                builder.set_cold_block(self.scopes.last().block);
                 self.scopes.last_mut().mark_as_never();
                 None
             }
@@ -1026,23 +1172,20 @@ impl<'a> FuncCodegen<'a, '_> {
         let ptr = if let Some(data) = data {
             data.into()
         } else if self.builder.is_some() {
-            let b::TypeBody::Array(array_ty) =
+            let b::TypeBody::Array(item_ty) =
                 &self.ctx.modules[mod_idx].values[instr.results[0]].ty.body
             else {
                 panic!("type should be an array type");
             };
 
-            let item_tys = types::get_type_by_value(
-                &array_ty.item,
-                self.ctx.modules,
-                &self.ctx.cl_module,
-            );
+            let item_tys =
+                types::get_type_by_type(&item_ty, self.ctx.modules, &self.ctx.cl_module);
 
             let size =
                 item_tys.iter().map(|ty| ty.bytes()).sum::<u32>() * vs.len() as u32;
 
             // TODO: escape analysis
-            let buf = self.crate_buf_sized(size, true);
+            let buf = self.create_buf_sized(size, true);
             let ptr = self.add_by_ref(&buf);
 
             let mut offset = 0;
@@ -1109,9 +1252,9 @@ impl<'a> FuncCodegen<'a, '_> {
         let builder = expect_builder!(self);
         match src {
             types::ValueSource::Ptr(v) => *v,
-            types::ValueSource::UnitPtr => builder
-                .ins()
-                .iconst(self.ctx.cl_module.isa().pointer_type(), 1),
+            types::ValueSource::UnitPtr => {
+                self.add_const(types::Const::uint_ptr(1, &self.ctx.cl_module))
+            }
             types::ValueSource::Data(data_id) => {
                 let field_gv = if true {
                     self.get_global_value(*data_id)
@@ -1163,24 +1306,16 @@ impl<'a> FuncCodegen<'a, '_> {
         src: &types::ValueSource,
         ty: &b::Type,
     ) -> Vec<cl::Value> {
-        let builder = expect_builder!(self);
         match src {
             types::ValueSource::Primitive(v) => vec![*v],
-            types::ValueSource::I8(n) => {
-                vec![builder.ins().iconst(cl::types::I8, *n as i64)]
+            types::ValueSource::I8(_)
+            | types::ValueSource::I16(_)
+            | types::ValueSource::I32(_)
+            | types::ValueSource::I64(_)
+            | types::ValueSource::F32(_)
+            | types::ValueSource::F64(_) => {
+                vec![self.add_const(src.try_into().unwrap())]
             }
-            types::ValueSource::I16(n) => {
-                vec![builder.ins().iconst(cl::types::I16, *n as i64)]
-            }
-            types::ValueSource::I32(n) => {
-                vec![builder.ins().iconst(cl::types::I32, *n as i64)]
-            }
-            types::ValueSource::I64(n) => {
-                let n = unsafe { mem::transmute_copy::<u64, i64>(&n) };
-                vec![builder.ins().iconst(cl::types::I64, n)]
-            }
-            types::ValueSource::F32(n) => vec![builder.ins().f32const(n.to_float())],
-            types::ValueSource::F64(n) => vec![builder.ins().f64const(n.to_float())],
             types::ValueSource::Ptr(_)
             | types::ValueSource::Data(_)
             | types::ValueSource::StackSlot(_) => {
@@ -1188,7 +1323,7 @@ impl<'a> FuncCodegen<'a, '_> {
                 let mut values = vec![];
                 let mut offset = 0;
                 for native_ty in
-                    types::get_type_by_value(ty, self.ctx.modules, &self.ctx.cl_module)
+                    types::get_type_by_type(ty, self.ctx.modules, &self.ctx.cl_module)
                 {
                     values.push(expect_builder!(self).ins().load(
                         native_ty,
@@ -1230,6 +1365,34 @@ impl<'a> FuncCodegen<'a, '_> {
         }
     }
 
+    fn add_const(&mut self, n: types::Const) -> cl::Value {
+        self.scopes
+            .last_mut()
+            .declared_consts
+            .entry(n)
+            .or_insert_with(|| {
+                let builder = expect_builder!(self);
+
+                macro_rules! iconst {
+                    ($ty:ident, $n:expr) => {
+                        builder
+                            .ins()
+                            .iconst(cl::types::$ty, ($n as u64).cast_signed())
+                    };
+                }
+
+                match n {
+                    types::Const::I8(n) => iconst!(I8, n),
+                    types::Const::I16(n) => iconst!(I16, n),
+                    types::Const::I32(n) => iconst!(I32, n),
+                    types::Const::I64(n) => iconst!(I64, n),
+                    types::Const::F32(n) => builder.ins().f32const(n.to_float()),
+                    types::Const::F64(n) => builder.ins().f64const(n.to_float()),
+                }
+            })
+            .clone()
+    }
+
     fn use_value_by_ref(&mut self, mod_idx: usize, v: b::ValueIdx) -> cl::Value {
         let runtime_value = unwrap!(
             self.values.get(&(mod_idx, v)),
@@ -1251,7 +1414,7 @@ impl<'a> FuncCodegen<'a, '_> {
 
     fn save_value(&mut self, mod_idx: usize, v: b::ValueIdx, value: cl::Value) {
         let ty = &self.ctx.modules[mod_idx].values[v].ty;
-        let src = if ty.is_aggregate(self.ctx.modules) {
+        let src = if ty.is_aggregate(self.ctx.modules) || ty.is_ptr() {
             types::ValueSource::Ptr(value)
         } else {
             types::ValueSource::Primitive(value)
@@ -1307,39 +1470,44 @@ impl<'a> FuncCodegen<'a, '_> {
         }
     }
 
-    /// Allocate bytes statically. If comping a global, this bytes are a writable data,
-    /// otherwise, it's a stack slot.
-    fn crate_buf_sized<'v>(&mut self, size: u32, escape: bool) -> types::ValueSource {
+    /// Allocate bytes statically. If compiling a global, this bytes are a writable data,
+    /// otherwise, it's a stack slot or a heap allocation.
+    fn create_buf_sized<'v>(&mut self, size: u32, escape: bool) -> types::ValueSource {
         if self.is_global {
             let data_id = self.ctx.create_writable_sized(size);
             data_id.into()
         } else {
             let builder = expect_builder!(self);
             if escape {
-                // FIXME: get from module
-                let Some(cl::FuncOrDataId::Func(heap_alloc_func_id)) =
-                    self.ctx.cl_module.get_name("heap_alloc")
-                else {
-                    panic!("heap_alloc should be declared");
-                };
-                let size_value = builder
-                    .ins()
-                    .iconst(self.ctx.cl_module.isa().pointer_type(), size as i64);
-
-                let ptr = self
-                    .call(
-                        Callee::Direct(heap_alloc_func_id),
-                        &[size_value],
-                        ReturnPolicy::Normal,
-                    )
-                    .unwrap();
-                types::ValueSource::Ptr(ptr)
+                let size_value = self
+                    .add_const(types::Const::uint_ptr(size as u64, &self.ctx.cl_module));
+                self.heap_alloc(size_value)
             } else {
                 let ss_data =
                     cl::StackSlotData::new(cl::StackSlotKind::ExplicitSlot, size);
                 builder.create_sized_stack_slot(ss_data).into()
             }
         }
+    }
+
+    /// Allocate bytes in the heap.
+    fn heap_alloc(&mut self, size: cl::Value) -> types::ValueSource {
+        // FIXME: get from module
+        let Some(cl::FuncOrDataId::Func(heap_alloc_func_id)) =
+            self.ctx.cl_module.get_name("internal_heap_alloc")
+        else {
+            panic!("internal_heap_alloc should be declared");
+        };
+
+        let ptr = self
+            .call(
+                Callee::Direct(heap_alloc_func_id),
+                &[size],
+                ReturnPolicy::Normal,
+            )
+            .unwrap();
+
+        types::ValueSource::Ptr(ptr)
     }
 
     fn store_tuple<'v>(
@@ -1357,7 +1525,7 @@ impl<'a> FuncCodegen<'a, '_> {
             }
         }
 
-        let buf = self.crate_buf_sized(size, escape);
+        let buf = self.create_buf_sized(size, escape);
         let ptr = self.add_by_ref(&buf);
         for (offset, value) in stored_values {
             expect_builder!(self).ins().store(
@@ -1369,6 +1537,86 @@ impl<'a> FuncCodegen<'a, '_> {
         }
 
         types::ValueSource::Ptr(ptr)
+    }
+
+    /// Copy `size` bytes from `src` to `dst`.
+    fn copy_bytes(&mut self, src: cl::Value, dst: cl::Value, size: cl::Value) {
+        //   end = src + size
+        //   br loop(src, dst)
+        // loop(src, dst):
+        //   cond = src < end
+        //   br_if cond, body, cont
+        // body:
+        //   byte = load src
+        //   store byte, dst
+        //   src = src + 1
+        //   dst = dst + 1
+        //   br loop(src, dst)
+        // cont:
+
+        let ptr_ty = self.ctx.cl_module.isa().pointer_type();
+
+        let builder = expect_builder!(self);
+        let loop_end = builder.ins().iadd(src, size);
+        let one = self.add_const(types::Const::uint_ptr(1, &self.ctx.cl_module));
+
+        let builder = expect_builder!(self);
+        let loop_block = builder.create_block();
+        let src_cursor = builder.append_block_param(loop_block, ptr_ty);
+        let dst_cursor = builder.append_block_param(loop_block, ptr_ty);
+
+        let body_block = builder.create_block();
+        let cont_block = builder.create_block();
+
+        builder.ins().jump(loop_block, &[src, dst]);
+        builder.switch_to_block(loop_block);
+
+        let cond = builder
+            .ins()
+            .icmp(cl::IntCC::UnsignedLessThan, src_cursor, loop_end);
+        builder.ins().brif(cond, body_block, &[], cont_block, &[]);
+
+        builder.switch_to_block(body_block);
+        let byte = builder
+            .ins()
+            .load(cl::types::I8, cl::MemFlags::new(), src_cursor, 0);
+        builder
+            .ins()
+            .store(cl::MemFlags::new(), byte, dst_cursor, 0);
+        let next_src_cursor = builder.ins().iadd(src_cursor, one);
+        let next_dst_cursor = builder.ins().iadd(dst_cursor, one);
+        builder
+            .ins()
+            .jump(loop_block, &[next_src_cursor, next_dst_cursor]);
+
+        builder.switch_to_block(cont_block);
+        self.scopes.last_mut().block = cont_block;
+    }
+
+    /// Copy `size` bytes from `src` to `dst`, where `size` is known at compile time.
+    fn copy_sized_bytes(&mut self, src: cl::Value, dst: cl::Value, size: usize) {
+        let builder = expect_builder!(self);
+
+        let mut offset = 0;
+        while offset < size {
+            let ty = match size - offset {
+                x if x >= 16 => cl::types::I128,
+                x if x >= 8 => cl::types::I64,
+                x if x >= 4 => cl::types::I32,
+                x if x >= 2 => cl::types::I16,
+                _ => cl::types::I8,
+            };
+
+            let value = builder
+                .ins()
+                .load(ty, cl::MemFlags::new(), src, offset as i32);
+
+            builder
+                .ins()
+                .store(cl::MemFlags::new(), value, dst, offset as i32);
+
+            offset += ty.bytes() as usize;
+        }
     }
 
     fn get_func_ref(&mut self, func_id: cl::FuncId) -> cl::FuncRef {
@@ -1406,6 +1654,7 @@ pub struct ScopePayload<'a> {
     pub result: Option<b::ValueIdx>,
     #[new(default)]
     pub ty: Option<Cow<'a, b::Type>>,
+    pub declared_consts: HashMap<types::Const, cl::Value>,
 }
 impl utils::SimpleScopePayload for ScopePayload<'_> {
     fn branch(&mut self, _: Option<&Self>) {

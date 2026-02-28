@@ -1,5 +1,4 @@
 use std::fs::File;
-use std::io;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
@@ -8,7 +7,7 @@ use derive_new::new;
 use itertools::Itertools;
 use lazy_init::LazyTransform;
 
-use crate::bytecode as b;
+use crate::{bytecode as b, errors};
 
 #[derive(Default, Debug, new)]
 pub struct SourceManager {
@@ -19,14 +18,17 @@ impl SourceManager {
     pub fn source(&self, idx: usize) -> &Source {
         &self.sources.get(idx).expect("source should exist")
     }
+
     pub fn find_source(&self, path: &Path) -> Option<&Source> {
         self.sources.iter().find(|item| item.path == path)
     }
-    pub fn open(&mut self, path: PathBuf) -> io::Result<usize> {
+
+    pub fn open(&mut self, path: PathBuf) -> Result<usize, errors::Error> {
         self.sources.push(Source::open(path)?);
         Ok(self.sources.len() - 1)
     }
-    pub fn preload(&mut self, path: PathBuf) -> io::Result<usize> {
+
+    pub fn preload(&mut self, path: PathBuf) -> Result<usize, errors::Error> {
         let idx = self.open(path)?;
         self.source(idx).content();
         Ok(idx)
@@ -41,12 +43,22 @@ pub struct Source {
     content:  LazyTransform<File, SourceContent>,
 }
 impl Source {
-    pub fn open(path: PathBuf) -> io::Result<Self> {
+    pub fn open(path: PathBuf) -> Result<Self, errors::Error> {
+        let file = match File::open(&path) {
+            Ok(file) => file,
+            Err(err) => {
+                return Err(errors::Error::new(
+                    errors::ReadError::new(path, err.kind()).into(),
+                    None,
+                ))
+            }
+        };
         Ok(Self {
-            content: LazyTransform::new(File::open(&path)?),
+            content: LazyTransform::new(file),
             path,
         })
     }
+
     pub fn content(&self) -> &SourceContent {
         self.content.get_or_create(|mut file| {
             let mut buf = "".to_string();

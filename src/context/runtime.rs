@@ -96,25 +96,19 @@ impl<'a> RuntimeBuilder<'a> {
         let main_global_def = &modules[main_global.0].globals[main_global.1];
         let main_ty = &modules[main_global.0].values[main_global_def.value].ty;
 
-        let str_ty = b::Type::new(b::StringType::new(None).into(), None);
+        let str_ty = b::Type::new(b::TypeBody::String, None);
         if main_ty.intersection(&str_ty, &*modules).is_some() {
             self.add_print_str(body, main_v, &*modules);
             return Ok(());
         }
 
-        let array_ty = b::Type::new(
-            b::ArrayType::new(Box::new(str_ty.clone()), None).into(),
-            None,
-        );
+        let array_ty = b::Type::new(b::TypeBody::Array(str_ty.clone().into()), None);
         if main_ty.intersection(&array_ty, &*modules).is_some() {
             self.add_print_array(body, main_v, &*modules);
             return Ok(());
         }
 
-        let array_2d_ty = b::Type::new(
-            b::ArrayType::new(Box::new(array_ty.clone()), None).into(),
-            None,
-        );
+        let array_2d_ty = b::Type::new(b::TypeBody::Array(array_ty.clone().into()), None);
         if main_ty.intersection(&array_2d_ty, &*modules).is_some() {
             self.add_print_array_2d(body, main_v, &*modules);
             return Ok(());
@@ -139,8 +133,8 @@ impl<'a> RuntimeBuilder<'a> {
         let core_mod_idx = self.ctx.core_mod_idx.expect("core should be defined");
 
         let (print_func_idx, print_func) = modules[core_mod_idx]
-            .get_func("print")
-            .expect("core.print should be defined");
+            .get_func("internal_print")
+            .expect("core.internal_print should be defined");
 
         let print_ty = &modules[core_mod_idx].values[print_func.ret].ty;
         let print_v = self.add_value(print_ty.body.clone());
@@ -174,7 +168,7 @@ impl<'a> RuntimeBuilder<'a> {
 
         let mut then_body = vec![];
 
-        let str_v = self.add_value(b::TypeBody::String(b::StringType::new(None)));
+        let str_v = self.add_value(b::TypeBody::String);
         then_body.push(b::Instr::array_index(v, idx_v, str_v, None));
 
         self.add_print_str(&mut then_body, str_v, &*modules);
@@ -215,13 +209,9 @@ impl<'a> RuntimeBuilder<'a> {
 
         let mut then_body = vec![];
 
-        let str_array_v = self.add_value(b::TypeBody::Array(b::ArrayType::new(
-            Box::new(b::Type::new(
-                b::TypeBody::String(b::StringType::new(None)),
-                None,
-            )),
-            None,
-        )));
+        let str_array_v = self.add_value(b::TypeBody::Array(
+            b::Type::new(b::TypeBody::String, None).into(),
+        ));
         then_body.push(b::Instr::array_index(v, idx_v, str_array_v, None));
 
         self.add_print_array(&mut then_body, str_array_v, &*modules);

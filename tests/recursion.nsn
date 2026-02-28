@@ -1,10 +1,6 @@
-msg = "got 10"
+rec(i: u8, acc) =
+    let acc = acc ++ "rec: " ++ experimental_u8_to_str(i) ++ "\n"
+    if i >= 10 then acc
+    else rec(i + 1, acc)
 
-rec(i: u8) =
-    if i >= 10 then
-        msg
-    else
-        rec(i + 1)
-
-main =
-    print(rec(0))
+main = rec(0, "")
