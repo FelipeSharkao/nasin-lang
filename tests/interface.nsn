@@ -1,33 +1,26 @@
-type PrintA : Print {
-    print(text, self: Self) =
-        let _ = print("PrintA")
-        let _ = print(text)
-        true
+type LinesA : Lines {
+    lines(text, self: Self) = ["LinesA", text]
 }
 
-type PrintB : Print {
+type LinesB : Lines {
     data: str
 
-    print(text, self: Self) =
-        let _ = print("PrintB")
-        let _ = print(self.data)
-        let _ = print(text)
-        true
+    lines(text, self: Self) = ["LinesB", self.data, text]
 }
 
-type Print interface {
-    print(text: str, self: Self): bool
+type Lines interface {
+    lines(text: str, self: Self): [str]
 }
 
-print_with(printer: Print) =
-    printer.print("implementation omitted")
+lines_with(lines: Lines) =
+    lines.lines("implementation omitted")
 
-a: PrintA = {}
-b: PrintB = {data="PrintB 1"}
-c: PrintB = {data="PrintB 2"}
+a: LinesA = {}
+b: LinesB = {data="LinesB 1"}
+c: LinesB = {data="LinesB 2"}
 
-main =
-    let _ = print_with(a)
-    let _ = print_with(b)
-    let _ = print_with(c)
-    true
+main = [
+    lines_with(a)
+    lines_with(b)
+    lines_with(c)
+]
