@@ -7,6 +7,7 @@ mod replace_with;
 mod scope_stack;
 mod sorted_map;
 mod string_lit;
+mod to_radix;
 mod traits;
 
 pub use cmd::*;
@@ -16,6 +17,7 @@ pub use replace_with::*;
 pub use scope_stack::*;
 pub use sorted_map::*;
 pub use string_lit::*;
+pub use to_radix::*;
 pub use traits::*;
 
 macro_rules! unordered {

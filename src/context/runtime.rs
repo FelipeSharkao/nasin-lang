@@ -23,6 +23,7 @@ impl<'a> RuntimeBuilder<'a> {
 
         let idx = modules.len();
         modules.push(b::Module {
+            name: b::Name::new([b::NameNode::Ident("runtime".to_string())], None),
             idx,
             values: self.values,
             funcs: self.funcs,
@@ -67,7 +68,7 @@ impl<'a> RuntimeBuilder<'a> {
 
         let entry_idx = self.funcs.len();
         self.funcs.push(b::Func {
-            name: "entry".to_string(),
+            name: b::Name::from_ident("entry", None),
             body,
             params: vec![],
             ret: entry_v,

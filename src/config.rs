@@ -5,6 +5,8 @@ use std::path::PathBuf;
 pub struct BuildConfig {
     /// Path where to place the output file
     pub out: PathBuf,
+    /// Paths to lookup for libraries
+    pub lib_dirs: Vec<PathBuf>,
     /// Omit all messages
     pub silent: bool,
     /// Whether to dump the AST of the source file

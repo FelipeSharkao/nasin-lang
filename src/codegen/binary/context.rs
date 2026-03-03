@@ -3,11 +3,12 @@ use std::collections::HashMap;
 
 use cranelift_shim::{self as cl, Module};
 use derive_ctor::ctor;
-use itertools::repeat_n;
+use itertools::{Itertools, repeat_n};
 
 use super::func::FuncCodegen;
+use super::name_mangling::NameMangler;
 use super::types::ReturnPolicy;
-use super::{types, FuncNS};
+use super::{FuncNS, types};
 use crate::{bytecode as b, config, utils};
 
 #[derive(Debug)]
@@ -76,8 +77,7 @@ impl<'a> CodegenContext<'a> {
         let global = &module.globals[idx];
         let global_value = &module.values[global.value];
 
-        // TODO: improve name mangling
-        let symbol_name = global.name.clone();
+        let symbol_name = NameMangler::new(self.modules).mangle(&global.name, []);
 
         let (value, is_const) = utils::replace_with(self, |s| {
             let mut codegen = FuncCodegen::new(s, None, true);
@@ -243,9 +243,9 @@ impl<'a> CodegenContext<'a> {
             ReturnPolicy::Struct(_) => 1,
             _ => 0,
         };
-        sig.params.splice(
-            env_idx..env_idx,
-            [cl::AbiParam::new(self.cl_module.isa().pointer_type())],
+        sig.params.insert(
+            env_idx,
+            cl::AbiParam::new(self.cl_module.isa().pointer_type()),
         );
 
         let func = cl::Function::with_name_signature(
@@ -254,8 +254,18 @@ impl<'a> CodegenContext<'a> {
         );
         self.next_helper_id += 1;
 
-        // TODO: improve name mangling
-        let symbol_name = format!("{}$$closure", &func_binding.symbol_name);
+        let symbol_name = {
+            let func_decl = &self.modules[mod_idx].funcs[func_idx];
+            let mut params = func_decl
+                .params
+                .iter()
+                .map(|v| &self.modules[mod_idx].values[*v].ty)
+                .collect_vec();
+            let void_ptr = b::Type::new(b::TypeBody::Ptr(None), None);
+            params.insert(0, &void_ptr);
+            NameMangler::new(self.modules)
+                .mangle(&func_decl.name.with("call", None), params)
+        };
 
         let func_id = self
             .cl_module

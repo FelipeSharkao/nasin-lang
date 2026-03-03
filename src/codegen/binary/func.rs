@@ -4,9 +4,10 @@ use std::collections::HashMap;
 use cl::InstBuilder;
 use cranelift_shim::{self as cl, Module};
 use derive_ctor::ctor;
-use itertools::{izip, Itertools};
+use itertools::{Itertools, izip};
 
 use super::context::CodegenContext;
+use super::name_mangling::NameMangler;
 use super::types::{self, ResultPolicy, ReturnPolicy};
 use crate::utils::unwrap;
 use crate::{bytecode as b, utils};
@@ -1493,8 +1494,15 @@ impl<'a> FuncCodegen<'a, '_> {
     /// Allocate bytes in the heap.
     fn heap_alloc(&mut self, size: cl::Value) -> types::ValueSource {
         // FIXME: get from module
+        let Some(name) = self.ctx.modules.iter().enumerate().find_map(|(i, module)| {
+            module
+                .get_func("internal_heap_alloc")
+                .map(|(j, _)| NameMangler::new(self.ctx.modules).mangle_func(i, j))
+        }) else {
+            panic!("internal_heap_alloc should be declared");
+        };
         let Some(cl::FuncOrDataId::Func(heap_alloc_func_id)) =
-            self.ctx.cl_module.get_name("internal_heap_alloc")
+            self.ctx.cl_module.get_name(&name)
         else {
             panic!("internal_heap_alloc should be declared");
         };

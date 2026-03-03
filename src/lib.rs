@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use std::{fs, process};
 
 use clap::Args;
+use itertools::Itertools;
 
 use self::config::BuildConfig;
 use self::errors::CompilerError;
@@ -55,6 +56,12 @@ pub fn build_maybe_run(
     out: Option<PathBuf>,
     run: bool,
 ) -> Result<(), CompilerError> {
+    let lib_dirs = option_env!("LIB_DIR")
+        .iter()
+        .flat_map(|s| s.split(':'))
+        .map(PathBuf::from)
+        .collect_vec();
+
     let mut ctx = context::BuildContext::new(BuildConfig {
         out: out.unwrap_or_else(|| {
             emit.file
@@ -62,6 +69,7 @@ pub fn build_maybe_run(
                 .unwrap()
                 .join(emit.file.file_stem().unwrap())
         }),
+        lib_dirs,
         silent: emit.silent,
         dump_ast: emit.dump_ast,
         dump_bytecode: emit.dump_bytecode,
@@ -94,7 +102,9 @@ pub fn build_maybe_run(
         } else if let Some(signal) = status.signal() {
             if signal == 11 {
                 eprintln!("Segmentation fault");
-                eprintln!("Unless you are doing some unsafe stuff, this is likely a bug in Nasin itself");
+                eprintln!(
+                    "Unless you are doing some unsafe stuff, this is likely a bug in Nasin itself"
+                );
             } else {
                 eprintln!("Terminated by signal {signal}");
             }

@@ -83,14 +83,20 @@ impl<'a, 't> ModuleParser<'a, 't> {
         module.funcs = self.funcs.into_iter().map(|x| x.func).collect();
         module.values = self.values;
     }
+
     pub fn add_root(&mut self, node: ts::Node<'t>) {
         node.of_kind("root");
 
         for sym_node in node.iter_children() {
-            let ident_node = sym_node.required_field("name").of_kind("ident");
-            let name = ident_node
-                .get_text(&self.ctx.source_manager.source(self.src_idx).content().text)
-                .to_string();
+            let name_node = sym_node.required_field("name").of_kind("ident");
+            let name = {
+                self.ctx.lock_modules()[self.mod_idx].name.with(
+                    name_node.get_text(
+                        &self.ctx.source_manager.source(self.src_idx).content().text,
+                    ),
+                    Some(b::Loc::from_node(self.src_idx, &name_node)),
+                )
+            };
 
             match sym_node.kind() {
                 "type_decl" => {
@@ -107,9 +113,9 @@ impl<'a, 't> ModuleParser<'a, 't> {
                     let methods = body_node
                         .iter_field("methods")
                         .map(|method_node| {
-                            let method_ident_node =
+                            let method_name_node =
                                 method_node.required_field("name").of_kind("ident");
-                            let method_name = method_ident_node.get_text(
+                            let method_name = method_name_node.get_text(
                                 &self
                                     .ctx
                                     .source_manager
@@ -117,10 +123,14 @@ impl<'a, 't> ModuleParser<'a, 't> {
                                     .content()
                                     .text,
                             );
-                            let func_name = format!("{name}.{method_name}");
-
                             let func_idx = self.add_func(
-                                func_name,
+                                name.with(
+                                    method_name,
+                                    Some(b::Loc::from_node(
+                                        self.src_idx,
+                                        &method_name_node,
+                                    )),
+                                ),
                                 method_node,
                                 Some((self.mod_idx, ty_idx, method_name.to_string())),
                                 is_virt,
@@ -149,29 +159,24 @@ impl<'a, 't> ModuleParser<'a, 't> {
             }
         }
     }
+
     pub fn open_module(&mut self, mod_idx: usize) {
         let module = &self.ctx.lock_modules()[mod_idx];
 
         for (i, item) in enumerate(&module.typedefs) {
-            if item.name.starts_with('_') {
-                continue;
-            }
             let ty_ref = b::TypeRef::new(mod_idx, i);
-            self.types.idents.insert(item.name.clone(), ty_ref.into());
+            self.types
+                .idents
+                .insert(item.name.last_ident().to_string(), ty_ref.into());
         }
 
         for (i, item) in enumerate(&module.funcs) {
-            if item.name.starts_with('_') {
-                continue;
-            }
             let value = ValueRef::new(ValueRefBody::Func(mod_idx, i), item.loc);
-            self.idents.insert(item.name.clone(), value);
+            self.idents
+                .insert(item.name.last_ident().to_string(), value);
         }
 
         for (i, item) in enumerate(&module.globals) {
-            if item.name.starts_with('_') {
-                continue;
-            }
             let mut value =
                 ValueRef::new(ValueRefBody::Global(mod_idx, i), Some(item.loc));
             if item.body.len() == 1 {
@@ -185,9 +190,11 @@ impl<'a, 't> ModuleParser<'a, 't> {
                     _ => {}
                 }
             }
-            self.idents.insert(item.name.clone(), value);
+            self.idents
+                .insert(item.name.last_ident().to_string(), value);
         }
     }
+
     pub fn create_value(&mut self, ty: b::Type, loc: Option<b::Loc>) -> b::ValueIdx {
         self.values.push(b::Value::new(ty, loc));
         self.values.len() - 1
@@ -195,7 +202,7 @@ impl<'a, 't> ModuleParser<'a, 't> {
 
     fn add_func(
         &mut self,
-        name: String,
+        name: b::Name,
         node: ts::Node<'t>,
         method: Option<(usize, usize, String)>,
         is_virt: bool,
@@ -266,7 +273,7 @@ impl<'a, 't> ModuleParser<'a, 't> {
         };
         let func_idx = self.funcs.len();
         self.idents.insert(
-            func.name.clone(),
+            func.name.last_ident().to_string(),
             ValueRef::new(ValueRefBody::Func(self.mod_idx, func_idx), Some(loc)),
         );
         self.funcs.push(DeclaredFunc {
@@ -278,7 +285,8 @@ impl<'a, 't> ModuleParser<'a, 't> {
 
         func_idx
     }
-    fn add_global(&mut self, name: String, node: ts::Node<'t>) {
+
+    fn add_global(&mut self, name: b::Name, node: ts::Node<'t>) {
         assert_eq!(node.kind(), "global_decl");
 
         let ty = match node.field("type") {
@@ -286,7 +294,7 @@ impl<'a, 't> ModuleParser<'a, 't> {
             None => b::Type::unknown(None),
         };
 
-        let is_main = name == "main";
+        let is_main = name.last_ident() == "main";
 
         let global = b::Global {
             name,
@@ -295,7 +303,7 @@ impl<'a, 't> ModuleParser<'a, 't> {
             loc: b::Loc::from_node(self.src_idx, &node),
         };
         self.idents.insert(
-            global.name.clone(),
+            global.name.last_ident().to_string(),
             ValueRef::new(
                 ValueRefBody::Global(self.mod_idx, self.globals.len()),
                 Some(b::Loc::from_node(self.src_idx, &node)),

@@ -62,6 +62,11 @@ impl BuildContext {
             println!("{}", root_node.to_sexp());
         }
 
+        let name = b::Name::from_path(
+            &self.source_manager.source(src_idx).path,
+            &self.cfg.lib_dirs,
+        );
+
         let mod_idx = {
             let mut modules = self.lock_modules_mut();
             let sources = self
@@ -71,7 +76,7 @@ impl BuildContext {
                 .map(|s| s.into())
                 .collect();
             let mod_idx = modules.len();
-            modules.push(b::Module::new(mod_idx, sources));
+            modules.push(b::Module::new(mod_idx, name, sources));
             mod_idx
         };
 
@@ -93,11 +98,20 @@ impl BuildContext {
     }
 
     pub fn parse_library(&mut self) -> bool {
-        let lib_dir = PathBuf::from(
-            option_env!("LIB_DIR").expect("env LIB_DIR should be provided"),
-        );
+        let mut core = None;
+        for lib_dir in &self.cfg.lib_dirs {
+            let file = lib_dir.join("core.nsn");
+            if file.is_file() {
+                core = Some(file);
+                break;
+            }
+        }
+        let Some(core) = core else {
+            eprintln!("Could not find core.nsn");
+            return false;
+        };
 
-        let Ok(core_src_idx) = self.preload(lib_dir.join("core.nsn")) else {
+        let Ok(core_src_idx) = self.preload(core) else {
             return false;
         };
 

@@ -1,7 +1,10 @@
 use gimli;
 
-pub fn struct_sections(
-) -> gimli::write::Sections<gimli::write::EndianVec<gimli::LittleEndian>> {
+use super::name_mangling::NameMangler;
+use crate::bytecode as b;
+
+pub fn struct_sections()
+-> gimli::write::Sections<gimli::write::EndianVec<gimli::LittleEndian>> {
     // FIXME: read that from the compilation
 
     let encoding = gimli::Encoding {
@@ -16,7 +19,13 @@ pub fn struct_sections(
     let char_ptr = add_pointer_type(&mut unit, char);
 
     // str
-    let str = add_struct_type(&mut unit, "str", 16);
+    let str_name = b::Name::from_ident("str", None);
+    let str = add_struct_type(
+        &mut unit,
+        "str",
+        NameMangler::new(&[]).mangle(&str_name, &[]),
+        16,
+    );
     {
         add_member(&mut unit, str, "data", 0, char_ptr);
         add_member(&mut unit, str, "len", 8, ulong);
@@ -25,7 +34,14 @@ pub fn struct_sections(
     let str_ptr = add_pointer_type(&mut unit, str);
 
     // [str]
-    let str_array = add_struct_type(&mut unit, "array<str>", 16);
+    let str_array_name = b::Name::from_ident("array", None)
+        .with_type_params([b::Type::new(b::TypeBody::String, None)], None);
+    let str_array = add_struct_type(
+        &mut unit,
+        "array<str>",
+        NameMangler::new(&[]).mangle(&str_array_name, &[]),
+        16,
+    );
     {
         add_member(&mut unit, str_array, "data", 0, str_ptr);
         add_member(&mut unit, str_array, "len", 8, ulong);
@@ -85,6 +101,7 @@ fn add_pointer_type(
 fn add_struct_type(
     unit: &mut gimli::write::DwarfUnit,
     name: impl Into<Vec<u8>>,
+    linkage_name: impl Into<Vec<u8>>,
     size: u64,
 ) -> gimli::write::UnitEntryId {
     let die = unit
@@ -93,6 +110,10 @@ fn add_struct_type(
     unit.unit.get_mut(die).set(
         gimli::DW_AT_name,
         gimli::write::AttributeValue::String(name.into()),
+    );
+    unit.unit.get_mut(die).set(
+        gimli::DW_AT_linkage_name,
+        gimli::write::AttributeValue::String(linkage_name.into()),
     );
     unit.unit.get_mut(die).set(
         gimli::DW_AT_byte_size,

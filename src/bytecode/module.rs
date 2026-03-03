@@ -1,5 +1,5 @@
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::path::{Component, Path, PathBuf};
 use std::{cmp, fmt};
 
 use derive_ctor::ctor;
@@ -15,6 +15,7 @@ use crate::utils::{self, SortedMap};
 #[derive(Debug, Clone, ctor)]
 pub struct Module {
     pub idx:      usize,
+    pub name:     Name,
     #[ctor(default)]
     pub values:   Vec<Value>,
     #[ctor(default)]
@@ -28,7 +29,10 @@ pub struct Module {
 
 impl Module {
     pub fn get_func(&self, name: &str) -> Option<(usize, &Func)> {
-        self.funcs.iter().enumerate().find(|(_, f)| f.name == name)
+        self.funcs
+            .iter()
+            .enumerate()
+            .find(|(_, f)| f.name.last_ident() == name)
     }
 }
 
@@ -130,7 +134,7 @@ impl Display for Module {
 
 #[derive(Debug, Clone)]
 pub struct TypeDef {
-    pub name: String,
+    pub name: Name,
     pub body: TypeDefBody,
     pub loc:  Loc,
 }
@@ -152,7 +156,7 @@ impl TypeDef {
 
 #[derive(Debug, Clone)]
 pub struct Global {
-    pub name:  String,
+    pub name:  Name,
     pub value: ValueIdx,
     pub body:  Vec<Instr>,
     pub loc:   Loc,
@@ -160,7 +164,7 @@ pub struct Global {
 
 #[derive(Debug, Clone)]
 pub struct Func {
-    pub name:     String,
+    pub name:     Name,
     pub params:   Vec<ValueIdx>,
     pub ret:      ValueIdx,
     pub body:     Vec<Instr>,
@@ -192,7 +196,7 @@ pub struct InterfaceType {
 #[derive(Debug, Clone, Display, ctor)]
 #[display("{ty} {loc}")]
 pub struct RecordField {
-    pub name: NameWithLoc,
+    pub name: String,
     pub ty:   Type,
     pub loc:  Loc,
 }
@@ -200,15 +204,122 @@ pub struct RecordField {
 #[derive(Debug, Clone, Display, ctor)]
 #[display("({}, {}) {loc}", func_ref.0, func_ref.1)]
 pub struct Method {
-    pub name:     NameWithLoc,
+    pub name:     String,
     pub func_ref: (usize, usize),
     pub loc:      Loc,
 }
 
-#[derive(Debug, Clone, ctor)]
-pub struct NameWithLoc {
-    pub value: String,
-    pub loc:   Loc,
+#[derive(Debug, Clone, PartialEq, Eq, Hash, ctor)]
+pub struct Name {
+    #[ctor(iter(NameNode))]
+    pub nodes: Vec<NameNode>,
+    pub loc:   Option<Loc>,
+}
+
+impl Name {
+    /// Create a new name from a identifier
+    pub fn from_ident(ident: impl Into<String>, loc: Option<Loc>) -> Self {
+        Self {
+            nodes: vec![NameNode::Ident(ident.into())],
+            loc,
+        }
+    }
+
+    /// Resolves the name to a path. Uses the base paths to resolve relative paths.
+    /// Assumes that all paths are absolute and canonicalized.
+    pub fn from_path(path: &Path, base_paths: &[PathBuf]) -> Self {
+        let mut relative_path = None;
+        for base_path in base_paths {
+            if let Ok(path) = path.strip_prefix(base_path) {
+                relative_path = Some(path);
+                break;
+            }
+        }
+        let path = relative_path.unwrap_or(path);
+        let mut nodes = path
+            .parent()
+            .iter()
+            .flat_map(|p| p.components())
+            .filter(|c| *c != Component::CurDir)
+            .map(|c| NameNode::Ident(c.as_os_str().to_string_lossy().to_string()))
+            .collect_vec();
+        if let Some(file_stem) = path.file_stem() {
+            nodes.push(NameNode::Ident(file_stem.to_string_lossy().to_string()));
+        }
+        Self { nodes, loc: None }
+    }
+
+    /// Create a new name by appending a new identifier to the end
+    pub fn with(&self, ident: impl Into<String>, loc: Option<Loc>) -> Self {
+        let mut nodes = self.nodes.clone();
+        nodes.push(NameNode::Ident(ident.into()));
+        Self {
+            nodes,
+            loc: loc.or(self.loc),
+        }
+    }
+
+    /// Create a new name by appending a new type parameter list to the end. If the last
+    /// node is a type parameter, it will inserted at the end of the list instead of
+    /// creating a new type parameter list.
+    pub fn with_type_params(
+        &self,
+        tys: impl IntoIterator<Item = Type>,
+        loc: Option<Loc>,
+    ) -> Self {
+        let mut nodes = self.nodes.clone();
+        if let Some(NameNode::TypeParams(params)) = nodes.last_mut() {
+            params.extend(tys);
+        } else {
+            nodes.push(NameNode::TypeParams(tys.into_iter().collect()));
+        }
+        Self {
+            nodes,
+            loc: loc.or(self.loc),
+        }
+    }
+
+    /// Get the last identifier of the name
+    pub fn last_ident(&self) -> &str {
+        for node in self.nodes.iter().rev() {
+            if let NameNode::Ident(ident) = node {
+                return ident;
+            }
+        }
+        panic!("Name is empty")
+    }
+}
+
+impl Display for Name {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for (i, node) in self.nodes.iter().enumerate() {
+            match node {
+                NameNode::Ident(ident) => {
+                    if i > 0 {
+                        write!(f, ".")?;
+                    }
+                    write!(f, "{ident}")?;
+                }
+                NameNode::TypeParams(params) => {
+                    write!(f, "<")?;
+                    for (i, param) in params.iter().enumerate() {
+                        if i > 0 {
+                            write!(f, ", ")?;
+                        }
+                        write!(f, "{param}")?;
+                    }
+                    write!(f, ">")?;
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum NameNode {
+    Ident(String),
+    TypeParams(Vec<Type>),
 }
 
 #[derive(Debug, Clone)]

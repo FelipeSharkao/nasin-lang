@@ -73,7 +73,7 @@ impl<'a, 't> TypeParser<'a, 't> {
     }
     pub fn parse_type_decl(
         &mut self,
-        name: String,
+        name: b::Name,
         node: ts::Node<'t>,
         methods_idx: HashMap<&'a str, (usize, usize)>,
     ) {
@@ -98,7 +98,7 @@ impl<'a, 't> TypeParser<'a, 't> {
             loc: b::Loc::from_node(self.src_idx, &node),
         };
         self.idents.insert(
-            value.name.clone(),
+            value.name.last_ident().to_string(),
             b::TypeRef::new(self.mod_idx, self.typedefs.len()).into(),
         );
         self.typedefs.push(DeclaredTypeDef {
@@ -131,10 +131,7 @@ impl<'a, 't> TypeParser<'a, 't> {
                                 )
                                 .to_string();
                             let record_field = b::RecordField::new(
-                                b::NameWithLoc::new(
-                                    name.clone(),
-                                    b::Loc::from_node(self.src_idx, &name_node),
-                                ),
+                                name.clone(),
                                 self.parse_type_expr(field_node.required_field("type")),
                                 b::Loc::from_node(self.src_idx, &field_node),
                             );
@@ -161,10 +158,7 @@ impl<'a, 't> TypeParser<'a, 't> {
                             );
 
                             let method = b::Method::new(
-                                b::NameWithLoc::new(
-                                    name.clone(),
-                                    b::Loc::from_node(self.src_idx, &name_node),
-                                ),
+                                name.clone(),
                                 *func_ref,
                                 b::Loc::from_node(self.src_idx, &method_node),
                             );
@@ -214,10 +208,7 @@ impl<'a, 't> TypeParser<'a, 't> {
                             );
 
                             let method = b::Method::new(
-                                b::NameWithLoc::new(
-                                    name.clone(),
-                                    b::Loc::from_node(self.src_idx, &name_node),
-                                ),
+                                name.clone(),
                                 *func_ref,
                                 b::Loc::from_node(self.src_idx, &method_node),
                             );

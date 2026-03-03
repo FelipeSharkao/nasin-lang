@@ -2,6 +2,7 @@ mod context;
 mod debug;
 mod dump;
 mod func;
+mod name_mangling;
 mod types;
 
 use std::borrow::Cow;
@@ -18,6 +19,7 @@ use target_lexicon::Triple;
 
 use self::context::{CodegenContext, FuncBinding};
 use self::func::{Callee, FuncCodegen};
+use self::name_mangling::NameMangler;
 use self::types::{ResultPolicy, ReturnPolicy};
 use crate::{bytecode as b, cmd, config, utils};
 
@@ -139,8 +141,7 @@ impl BinaryCodegen<'_> {
         let symbol_name = if let Some(b::Extern { name }) = &decl.extrn {
             name.clone()
         } else {
-            // TODO: improve name mangling
-            decl.name.clone()
+            NameMangler::new(self.ctx.modules).mangle_func(mod_idx, idx)
         };
 
         let func_id = if !decl.is_virt {
@@ -409,11 +410,11 @@ impl BinaryCodegen<'_> {
         }
 
         if let Some((func_id, func)) = mem::replace(&mut self.entry_func, None) {
-            self.emit_function("_start", func_id, func);
+            self.emit_function(&b::Name::from_ident("_start", None), func_id, func);
         }
     }
 
-    fn emit_function(&mut self, name: &str, func_id: cl::FuncId, func: cl::Function) {
+    fn emit_function(&mut self, name: &b::Name, func_id: cl::FuncId, func: cl::Function) {
         self.module_ctx.func = func;
         match self
             .ctx
