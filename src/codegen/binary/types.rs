@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
 use cranelift_shim as cl;
-use derive_more::{Display, From};
 use derive_ctor::ctor;
+use derive_more::{Display, From};
 use itertools::Itertools;
 
 use crate::bytecode as b;
@@ -265,15 +265,15 @@ pub struct Slice {
 #[derive(Debug, Display, Clone, PartialEq, Eq, Hash, ctor)]
 #[display("func {ptr} {proto} <- {env}")]
 pub struct FuncAsValue {
-    pub ptr:   cl::Value,
-    pub env:   cl::Value,
+    pub ptr: cl::Value,
+    pub env: cl::Value,
     pub proto: FuncPrototype,
 }
 
 #[derive(Debug, Display, Copy, Clone, PartialEq, Eq, Hash, ctor)]
 #[display("dyn {vtable} <- {src}")]
 pub struct DynDispatched {
-    pub src:    cl::Value,
+    pub src: cl::Value,
     pub vtable: cl::Value,
 }
 
@@ -508,7 +508,7 @@ impl ReturnPolicy {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Display, ctor)]
 #[display("{signature} {ret_policy}")]
 pub struct FuncPrototype {
-    pub signature:  cl::Signature,
+    pub signature: cl::Signature,
     pub ret_policy: ReturnPolicy,
 }
 impl FuncPrototype {
@@ -618,5 +618,5 @@ impl VTableDesc {
 #[derive(ctor, Hash, PartialEq, Eq, Clone, Copy, Debug)]
 pub struct VTableRef {
     pub iface: (usize, usize),
-    pub ty:    (usize, usize),
+    pub ty: (usize, usize),
 }

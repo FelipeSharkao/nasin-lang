@@ -227,7 +227,11 @@ impl Name {
 
     /// Resolves the name to a path. Uses the base paths to resolve relative paths.
     /// Assumes that all paths are absolute and canonicalized.
-    pub fn from_path(path: &Path, base_paths: &[PathBuf]) -> Self {
+    pub fn from_path<I>(path: &Path, base_paths: I) -> Self
+    where
+        I: IntoIterator,
+        I::Item: AsRef<Path>,
+    {
         let mut relative_path = None;
         for base_path in base_paths {
             if let Ok(path) = path.strip_prefix(base_path) {

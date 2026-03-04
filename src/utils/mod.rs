@@ -3,6 +3,7 @@
 mod cmd;
 mod enumerate;
 mod idented;
+mod paths;
 mod replace_with;
 mod scope_stack;
 mod sorted_map;
@@ -13,6 +14,7 @@ mod traits;
 pub use cmd::*;
 pub use enumerate::*;
 pub use idented::*;
+pub use paths::*;
 pub use replace_with::*;
 pub use scope_stack::*;
 pub use sorted_map::*;

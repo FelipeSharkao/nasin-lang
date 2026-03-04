@@ -3,15 +3,13 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use derivative::Derivative;
-use derive_ctor::ctor;
 use itertools::Itertools;
 use lazy_init::LazyTransform;
 
 use crate::{bytecode as b, errors};
 
-#[derive(Default, Debug, ctor)]
+#[derive(Default, Debug)]
 pub struct SourceManager {
-    #[ctor(default)]
     pub sources: Vec<Source>,
 }
 impl SourceManager {
@@ -44,13 +42,22 @@ pub struct Source {
 }
 impl Source {
     pub fn open(path: PathBuf) -> Result<Self, errors::Error> {
+        let path = match path.canonicalize() {
+            Ok(path) => path,
+            Err(err) => {
+                return Err(errors::Error::new(
+                    errors::ReadError::new(path, err.kind()).into(),
+                    None,
+                ));
+            }
+        };
         let file = match File::open(&path) {
             Ok(file) => file,
             Err(err) => {
                 return Err(errors::Error::new(
                     errors::ReadError::new(path, err.kind()).into(),
                     None,
-                ))
+                ));
             }
         };
         Ok(Self {

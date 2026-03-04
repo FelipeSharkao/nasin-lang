@@ -13,15 +13,15 @@ use std::mem;
 
 use cranelift_shim::settings::Configurable;
 use cranelift_shim::{self as cl, InstBuilder, Module};
-use gimli::write::Writer;
 use itertools::Itertools;
 use target_lexicon::Triple;
 
 use self::context::{CodegenContext, FuncBinding};
+use self::debug::{DebugData, DebugFunction};
 use self::func::{Callee, FuncCodegen};
 use self::name_mangling::NameMangler;
 use self::types::{ResultPolicy, ReturnPolicy};
-use crate::{bytecode as b, cmd, config, utils};
+use crate::{bytecode as b, cmd, config, sources, utils};
 
 utils::number_enum!(pub FuncNS: u32 {
     User = 0,
@@ -47,6 +47,7 @@ impl<'a> BinaryCodegen<'a> {
         modules: &'a [b::Module],
         rt_start: Option<(usize, usize)>,
         cfg: &'a config::BuildConfig,
+        source_manager: &'a sources::SourceManager,
     ) -> Self {
         let triple = Triple::host();
 
@@ -70,7 +71,12 @@ impl<'a> BinaryCodegen<'a> {
         let module_ctx = cl_module.make_context();
 
         BinaryCodegen {
-            ctx: CodegenContext::new(modules, cfg, cl_module),
+            ctx: CodegenContext::new(
+                modules,
+                cfg,
+                cl_module,
+                DebugData::new(cfg, source_manager),
+            ),
             module_ctx,
             declared_funcs: HashMap::new(),
             entry_func: None,
@@ -175,6 +181,15 @@ impl BinaryCodegen<'_> {
                 proto,
             },
         );
+
+        if decl.extrn.is_none() && !decl.is_virt {
+            let binding = self.ctx.funcs.get(&(mod_idx, idx)).unwrap();
+            self.ctx.debug.add_func(DebugFunction::new(
+                decl.name.clone(),
+                binding.symbol_name.clone(),
+                decl.loc,
+            ));
+        }
         self.declared_funcs.insert((mod_idx, idx), func);
     }
 
@@ -345,6 +360,15 @@ impl BinaryCodegen<'_> {
             let ret = func_builder.inst_results(call_ins).to_vec();
             func_builder.ins().return_(&ret);
         }
+
+        for ((mod_idx, func_idx), binding) in &self.ctx.funcs_closures {
+            let func = &self.ctx.modules[*mod_idx].funcs[*func_idx];
+            self.ctx.debug.add_func(DebugFunction::new(
+                func.name.with("call", None),
+                binding.symbol_name.clone(),
+                func.loc,
+            ));
+        }
     }
 
     fn dump_clif(&mut self) {
@@ -429,25 +453,10 @@ impl BinaryCodegen<'_> {
         self.ctx.cl_module.clear_context(&mut self.module_ctx)
     }
 
-    fn write_to_file(self) {
+    fn write_to_file(mut self) {
         let mut obj_product = self.ctx.cl_module.finish();
 
-        debug::struct_sections()
-            .for_each(|section_id, data| -> Result<(), ()> {
-                if data.len() == 0 {
-                    return Ok(());
-                }
-                let sec = obj_product.object.add_section(
-                    vec![],
-                    section_id.name().into(),
-                    cl::object::object::SectionKind::Debug,
-                );
-                obj_product
-                    .object
-                    .append_section_data(sec, data.slice(), 16);
-                Ok(())
-            })
-            .expect("should be able to write debug info");
+        self.ctx.debug.write_debug_sections(&mut obj_product.object);
 
         let obj_path = format!("{}.o", self.ctx.cfg.out.to_string_lossy());
         let out_file = File::create(&obj_path).expect("Failed to create object file");
