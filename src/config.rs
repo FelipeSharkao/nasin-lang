@@ -3,8 +3,12 @@ use std::path::PathBuf;
 /// Stores the configurations for a compilation
 #[derive(Debug, Clone, Default)]
 pub struct BuildConfig {
+    /// Name of the compilation unit
+    pub name: String,
     /// Path where to place the output file
     pub out: PathBuf,
+    /// Base directory for the source files
+    pub base_dir: PathBuf,
     /// Paths to lookup for libraries
     pub lib_dirs: Vec<PathBuf>,
     /// Omit all messages

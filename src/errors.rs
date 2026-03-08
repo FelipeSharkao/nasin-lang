@@ -2,8 +2,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::{fmt, io};
 
-use derive_more::{Display, From};
 use derive_ctor::ctor;
+use derive_more::{Display, From};
 use thiserror::Error;
 
 use crate::{bytecode as b, sources, utils};
@@ -16,18 +16,13 @@ pub struct Error {
 
 #[derive(Debug, Clone, Error, ctor)]
 pub struct CompilerError {
-    source_manager: Arc<sources::SourceManager>,
+    source_manager: Option<Arc<sources::SourceManager>>,
     errors: Vec<Error>,
 }
 impl fmt::Display for CompilerError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let CompilerError {
-            source_manager,
-            errors,
-        } = self;
-
-        for err in errors {
-            if let Some(loc) = &err.loc {
+        for err in &self.errors {
+            if let (Some(source_manager), Some(loc)) = (&self.source_manager, &err.loc) {
                 let idx = loc.source_idx;
                 let src = source_manager.source(idx);
 

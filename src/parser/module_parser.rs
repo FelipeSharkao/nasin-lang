@@ -89,11 +89,20 @@ impl<'a, 't> ModuleParser<'a, 't> {
 
         for sym_node in node.iter_children() {
             let name_node = sym_node.required_field("name").of_kind("ident");
+
+            let name_kind = match sym_node.kind() {
+                "global_decl" => b::NameIdentKind::Value,
+                "func_decl" => b::NameIdentKind::Func,
+                "type_decl" => b::NameIdentKind::Type,
+                _ => panic!("Unexpected symbol kind: {}", sym_node.kind()),
+            };
+
             let name = {
                 self.ctx.lock_modules()[self.mod_idx].name.with(
                     name_node.get_text(
                         &self.ctx.source_manager.source(self.src_idx).content().text,
                     ),
+                    name_kind,
                     Some(b::Loc::from_node(self.src_idx, &name_node)),
                 )
             };
@@ -126,6 +135,7 @@ impl<'a, 't> ModuleParser<'a, 't> {
                             let func_idx = self.add_func(
                                 name.with(
                                     method_name,
+                                    b::NameIdentKind::Func,
                                     Some(b::Loc::from_node(
                                         self.src_idx,
                                         &method_name_node,

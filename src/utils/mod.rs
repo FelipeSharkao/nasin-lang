@@ -2,23 +2,25 @@
 
 mod cmd;
 mod enumerate;
-mod idented;
+mod paths;
 mod replace_with;
 mod scope_stack;
 mod sorted_map;
+mod str;
 mod string_lit;
 mod to_radix;
 mod traits;
 
-pub use cmd::*;
-pub use enumerate::*;
-pub use idented::*;
-pub use replace_with::*;
-pub use scope_stack::*;
-pub use sorted_map::*;
-pub use string_lit::*;
-pub use to_radix::*;
-pub use traits::*;
+pub use self::cmd::*;
+pub use self::enumerate::*;
+pub use self::paths::*;
+pub use self::replace_with::*;
+pub use self::scope_stack::*;
+pub use self::sorted_map::*;
+pub use self::str::*;
+pub use self::string_lit::*;
+pub use self::to_radix::*;
+pub use self::traits::*;
 
 macro_rules! unordered {
     ($a:pat, $b:pat $(,)?) => {

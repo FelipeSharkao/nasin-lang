@@ -2,10 +2,9 @@
 
 use std::os::unix::process::ExitStatusExt;
 use std::path::PathBuf;
-use std::{fs, process};
+use std::{fs, io, process};
 
 use clap::Args;
-use itertools::Itertools;
 
 use self::config::BuildConfig;
 use self::errors::CompilerError;
@@ -56,19 +55,55 @@ pub fn build_maybe_run(
     out: Option<PathBuf>,
     run: bool,
 ) -> Result<(), CompilerError> {
+    let mut path_erros = vec![];
+
     let lib_dirs = option_env!("LIB_DIR")
         .iter()
         .flat_map(|s| s.split(':'))
-        .map(PathBuf::from)
-        .collect_vec();
+        .filter_map(|x| match PathBuf::from(x).canonicalize() {
+            Ok(path) => Some(path),
+            Err(err) => {
+                path_erros.push(errors::Error::new(
+                    errors::ReadError::new(x.into(), err.kind()).into(),
+                    None,
+                ));
+                None
+            }
+        })
+        .collect();
+
+    if !path_erros.is_empty() {
+        return Err(CompilerError::new(None, path_erros));
+    }
+
+    let file = match emit.file.canonicalize() {
+        Ok(file) => file,
+        Err(err) => {
+            path_erros.push(errors::Error::new(
+                errors::ReadError::new(emit.file.clone(), err.kind()).into(),
+                None,
+            ));
+            return Err(CompilerError::new(None, path_erros));
+        }
+    };
+
+    let base_dir = match file.parent() {
+        Some(parent) => parent.to_owned(),
+        None => {
+            path_erros.push(errors::Error::new(
+                errors::ReadError::new(file.clone(), io::ErrorKind::IsADirectory).into(),
+                None,
+            ));
+            return Err(CompilerError::new(None, path_erros));
+        }
+    };
+
+    let name = file.file_stem().unwrap();
 
     let mut ctx = context::BuildContext::new(BuildConfig {
-        out: out.unwrap_or_else(|| {
-            emit.file
-                .parent()
-                .unwrap()
-                .join(emit.file.file_stem().unwrap())
-        }),
+        name: name.to_string_lossy().to_string(),
+        out: out.unwrap_or_else(|| base_dir.join(name)),
+        base_dir,
         lib_dirs,
         silent: emit.silent,
         dump_ast: emit.dump_ast,
@@ -77,13 +112,13 @@ pub fn build_maybe_run(
         run,
     });
 
+    let Ok(src_idx) = ctx.preload(file) else {
+        return Err(ctx.into_compile_error());
+    };
+
     if !ctx.parse_library() {
         return Err(ctx.into_compile_error());
     }
-
-    let Ok(src_idx) = ctx.preload(emit.file) else {
-        return Err(ctx.into_compile_error());
-    };
 
     ctx.parse(src_idx, true);
     if ctx.has_errors() {

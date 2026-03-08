@@ -54,19 +54,19 @@ impl<K: Ord, V> SortedMap<K, V> {
     {
         self.index_for(&key).is_ok()
     }
-    pub fn iter(&self) -> impl Iterator<Item = &(K, V)> {
+    pub fn iter(&self) -> impl Iterator<Item = &(K, V)> + Clone {
         self.items.iter()
     }
     pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut (K, V)> {
         self.items.iter_mut()
     }
-    pub fn keys(&self) -> impl Iterator<Item = &K> {
+    pub fn keys(&self) -> impl Iterator<Item = &K> + Clone {
         self.items.iter().map(|item| &item.0)
     }
     pub fn keys_mut(&mut self) -> impl Iterator<Item = &mut K> {
         self.items.iter_mut().map(|item| &mut item.0)
     }
-    pub fn values(&self) -> impl Iterator<Item = &V> {
+    pub fn values(&self) -> impl Iterator<Item = &V> + Clone {
         self.items.iter().map(|item| &item.1)
     }
     pub fn values_mut(&mut self) -> impl Iterator<Item = &mut V> {

@@ -1,8 +1,8 @@
 use std::fmt::{self, Display};
 
-use derive_more::derive::Debug;
 use derive_ctor::ctor;
-use itertools::{enumerate, Itertools};
+use derive_more::derive::Debug;
+use itertools::enumerate;
 
 use super::{Loc, Type, ValueIdx};
 use crate::utils;
@@ -267,11 +267,7 @@ impl Instr {
 impl Display for Instr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if self.results.len() > 0 {
-            write!(
-                f,
-                "{} = ",
-                self.results.iter().map(|n| format!("v{n}")).join(", ")
-            )?;
+            write!(f, "{} = ", utils::join(", ", &self.results))?;
         }
         for (i, line) in enumerate(self.body.to_string().split('\n')) {
             if i != 0 {

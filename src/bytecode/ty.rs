@@ -2,10 +2,10 @@ use std::borrow::Cow;
 use std::fmt;
 use std::hash::Hash;
 
-use derive_more::{Display, From};
 use derive_ctor::ctor;
+use derive_more::{Display, From};
 use derive_setters::Setters;
-use itertools::{chain, izip, Itertools};
+use itertools::{Itertools, chain, izip};
 
 use super::{Loc, Module, TypeDef, TypeDefBody};
 use crate::utils::{self, unordered};
@@ -86,7 +86,7 @@ impl Display for TypeBody {
                 }
             }
             TypeBody::Func(func) => {
-                write!(f, "func {}: {}", func.params.iter().join(", "), &func.ret)?
+                write!(f, "func {}: {}", utils::join(", ", &func.params), &func.ret)?
             }
             TypeBody::TypeRef(ty_ref) => write!(
                 f,
@@ -602,7 +602,7 @@ impl InferredType {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Display, ctor)]
-#[display("func({}): {ret}", params.iter().join(", "))]
+#[display("func({}): {ret}", utils::join(", ", params))]
 pub struct FuncType {
     pub params: Vec<Type>,
     pub ret:    Type,

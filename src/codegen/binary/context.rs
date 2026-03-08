@@ -5,6 +5,7 @@ use cranelift_shim::{self as cl, Module};
 use derive_ctor::ctor;
 use itertools::{Itertools, repeat_n};
 
+use super::debug::DebugData;
 use super::func::FuncCodegen;
 use super::name_mangling::NameMangler;
 use super::types::ReturnPolicy;
@@ -48,6 +49,7 @@ pub struct CodegenContext<'a> {
     pub modules: &'a [b::Module],
     pub cfg: &'a config::BuildConfig,
     pub cl_module: cl::ObjectModule,
+    pub debug: DebugData<'a>,
     #[ctor(default)]
     pub funcs: HashMap<(usize, usize), FuncBinding>,
     #[ctor(default)]
@@ -263,8 +265,10 @@ impl<'a> CodegenContext<'a> {
                 .collect_vec();
             let void_ptr = b::Type::new(b::TypeBody::Ptr(None), None);
             params.insert(0, &void_ptr);
-            NameMangler::new(self.modules)
-                .mangle(&func_decl.name.with("call", None), params)
+            NameMangler::new(self.modules).mangle(
+                &func_decl.name.with("closure", b::NameIdentKind::Func, None),
+                params,
+            )
         };
 
         let func_id = self

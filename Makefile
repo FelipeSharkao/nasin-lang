@@ -1,30 +1,22 @@
-SHARE_DIR = $(HOME)/.local/share/nasin
-LIB_DIR = $(SHARE_DIR)/library
+LIB_DIR = $(CURDIR)/library
 
 .PHONY: all
-all: bin/nasin $(LIB_DIR)
+all: bin/nasin
 
 .PHONY: clean
 clean:
 	rm -rf bin
 	rm -f tree-sitter-nasin/src/parser.c
 	rm -f tree-sitter-nasin/nasin.so
-	rm -rf $(LIB_DIR)
 	cargo clean
 
 .PHONY: test
-test: bin/nasin $(LIB_DIR)
+test: bin/nasin
 	./rere.py replay tests/_test.list
 
 .PHONY: record-test
 record-test: bin/nasin
 	./rere.py record tests/_test.list
-
-LIB_SRC = $(shell find library/ -type f -name '*.nsn')
-$(LIB_DIR): $(LIB_SRC)
-	mkdir -p $(basename $(LIB_DIR)) \
-	&& rm -rf $(LIB_DIR)            \
-	&& cp -r library $(LIB_DIR)
 
 RUST_SRC = $(shell find src/ -type f -name '*.rs')
 bin/nasin: Cargo.toml $(RUST_SRC) tree-sitter-nasin/src/parser.c

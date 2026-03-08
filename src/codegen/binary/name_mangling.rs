@@ -43,7 +43,14 @@ impl<'a> NameMangler<'a> {
 
     fn write_name(&mut self, s: &mut String, name: &b::Name) {
         let mut nodes = name.nodes.clone();
-        nodes.insert(0, b::NameNode::Ident(PFX.into()));
+        nodes.insert(
+            0,
+            b::NameIdent {
+                ident: PFX.into(),
+                kind:  b::NameIdentKind::Module,
+            }
+            .into(),
+        );
         let mut i = nodes
             .iter()
             .position(|node| !matches!(node, b::NameNode::Ident(_)))
@@ -68,11 +75,11 @@ impl<'a> NameMangler<'a> {
         for (j, node) in nodes[i..].iter().enumerate() {
             match node {
                 b::NameNode::Ident(ident) => {
-                    write!(s, "{}{ident}", ident.len()).unwrap();
+                    write!(s, "{}{}", ident.ident, ident.ident.len()).unwrap();
                 }
                 b::NameNode::TypeParams(params) => {
                     write!(s, "I").unwrap();
-                    for param in params {
+                    for param in &params.params {
                         self.write_type(s, param);
                     }
                     write!(s, "E").unwrap();
@@ -97,12 +104,16 @@ impl<'a> NameMangler<'a> {
             b::TypeBody::U16 => write!(s, "t").unwrap(),
             b::TypeBody::U32 => write!(s, "j").unwrap(),
             b::TypeBody::U64 => write!(s, "y").unwrap(),
-            b::TypeBody::USize => self.write_name(s, &b::Name::from_ident("usize", None)),
+            b::TypeBody::USize => self.write_name(
+                s,
+                &b::Name::from_ident("usize", b::NameIdentKind::Type, None),
+            ),
             b::TypeBody::F32 => write!(s, "f").unwrap(),
             b::TypeBody::F64 => write!(s, "d").unwrap(),
-            b::TypeBody::String => self.write_name(s, &b::Name::from_ident("str", None)),
+            b::TypeBody::String => self
+                .write_name(s, &b::Name::from_ident("str", b::NameIdentKind::Type, None)),
             b::TypeBody::Array(ty) => {
-                let name = b::Name::from_ident("array", None)
+                let name = b::Name::from_ident("array", b::NameIdentKind::Type, None)
                     .with_type_params([ty.as_ref().clone()], None);
                 self.write_name(s, &name);
             }

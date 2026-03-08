@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, RwLock};
 
 use derive_ctor::ctor;
+use itertools::chain;
 use tree_sitter as ts;
 
 use self::runtime::RuntimeBuilder;
@@ -45,7 +46,7 @@ impl BuildContext {
     pub fn into_compile_error(self) -> errors::CompilerError {
         let source_manager = Arc::new(self.source_manager);
         let errors = self.errors.into_inner().unwrap();
-        errors::CompilerError::new(source_manager, errors)
+        errors::CompilerError::new(Some(source_manager), errors)
     }
 
     pub fn parse(&self, src_idx: usize, is_entry: bool) -> usize {
@@ -64,7 +65,7 @@ impl BuildContext {
 
         let name = b::Name::from_path(
             &self.source_manager.source(src_idx).path,
-            &self.cfg.lib_dirs,
+            chain!([&self.cfg.base_dir], &self.cfg.lib_dirs),
         );
 
         let mod_idx = {
@@ -134,7 +135,12 @@ impl BuildContext {
             }
         }
 
-        let codegen = codegen::BinaryCodegen::new(&modules, rt_entry, &self.cfg);
+        let codegen = codegen::BinaryCodegen::new(
+            &modules,
+            rt_entry,
+            &self.cfg,
+            &self.source_manager,
+        );
 
         fs::create_dir_all(self.cfg.out.parent().unwrap()).unwrap();
         codegen.write();

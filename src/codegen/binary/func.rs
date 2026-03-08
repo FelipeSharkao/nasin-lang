@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use cl::InstBuilder;
 use cranelift_shim::{self as cl, Module};
 use derive_ctor::ctor;
-use itertools::{Itertools, izip};
+use itertools::{izip, Itertools};
 
 use super::context::CodegenContext;
 use super::name_mangling::NameMangler;
