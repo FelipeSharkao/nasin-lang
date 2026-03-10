@@ -93,6 +93,9 @@ impl BinaryCodegen<'_> {
             }
 
             for idx in 0..self.ctx.modules[mod_idx].funcs.len() {
+                if !self.ctx.modules[mod_idx].funcs[idx].generics.is_empty() {
+                    continue;
+                }
                 self.insert_function(mod_idx, idx);
             }
 
@@ -107,6 +110,9 @@ impl BinaryCodegen<'_> {
             for idx in 0..self.ctx.modules[mod_idx].funcs.len() {
                 let func = &self.ctx.modules[mod_idx].funcs[idx];
                 if func.extrn.is_some() || func.is_virt {
+                    continue;
+                }
+                if !func.generics.is_empty() {
                     continue;
                 }
                 self.build_function(mod_idx, idx);

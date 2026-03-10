@@ -1,6 +1,7 @@
 #![allow(unused_imports)]
 
 mod cmd;
+mod deadlock_guard;
 mod enumerate;
 mod paths;
 mod replace_with;
@@ -12,6 +13,7 @@ mod to_radix;
 mod traits;
 
 pub use self::cmd::*;
+pub use self::deadlock_guard::*;
 pub use self::enumerate::*;
 pub use self::paths::*;
 pub use self::replace_with::*;

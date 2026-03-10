@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::{mem, usize};
 
 use derive_ctor::ctor;
-use itertools::{enumerate, Itertools};
+use itertools::{Itertools, enumerate};
 use tree_sitter as ts;
 
 use super::module_parser::ModuleParser;
@@ -633,6 +633,19 @@ impl<'a, 't> ExprParser<'a, 't> {
                     Some(loc),
                 ));
                 ValueRef::new(ValueRefBody::Void, Some(loc))
+            }
+            "type_name" => {
+                check_args!(1);
+
+                let source = self.add_expr_node(args[0], false);
+                let source_v = self.use_value_ref(&source);
+
+                let v = self.add_instr_with_result(b::Instr::type_name(
+                    source_v,
+                    0,
+                    Some(loc),
+                ));
+                ValueRef::new(ValueRefBody::Value(v), Some(loc))
             }
             _ => {
                 panic!("unhandled macro: `{name}`")

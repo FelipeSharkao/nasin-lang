@@ -41,6 +41,7 @@ pub enum TypeBody {
     Ptr(Option<Box<Type>>),
     Func(Box<FuncType>),
     TypeRef(TypeRef),
+    TypeVar(TypeVar),
 }
 impl Display for TypeBody {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -95,6 +96,9 @@ impl Display for TypeBody {
                 ty_ref.mod_idx,
                 ty_ref.idx,
             )?,
+            TypeBody::TypeVar(tv) => {
+                write!(f, "typevar {}-{}", tv.mod_idx, tv.typevar_idx)?
+            }
         }
         Ok(())
     }
@@ -106,12 +110,14 @@ impl TypeBody {
             properties: utils::SortedMap::new(),
         })
     }
+
     pub fn is_unknown(&self) -> bool {
         if let TypeBody::Inferred(i) = self {
             return i.members.is_empty() && i.properties.is_empty();
         }
         false
     }
+
     pub fn is_not_final(&self) -> bool {
         if matches!(
             self,
@@ -437,6 +443,10 @@ impl Type {
                     .is_self(a.is_self || b.is_self)
                     .into()
             }
+            // TODO: when we add constraints to generics, we will have to intersect with
+            // that. Since we don't have that yet, all typevars are blanket, they don't
+            // change the type at all
+            unordered!(body!(TypeBody::TypeVar(_)), body!(a)) => a.clone(),
             _ => return None,
         };
         let loc = match (&self.loc, &other.loc) {
@@ -545,6 +555,19 @@ impl Type {
         };
         Some(Type::new(body, loc))
     }
+
+    pub fn contains_typevar(&self) -> bool {
+        match &self.body {
+            TypeBody::TypeVar(_) => true,
+            TypeBody::Func(func_ty) => {
+                func_ty.ret.contains_typevar()
+                    || func_ty.params.iter().any(Type::contains_typevar)
+            }
+            TypeBody::Array(elem_ty) => elem_ty.contains_typevar(),
+            TypeBody::Ptr(Some(elem_ty)) => elem_ty.contains_typevar(),
+            _ => false,
+        }
+    }
 }
 impl PartialEq for Type {
     fn eq(&self, other: &Self) -> bool {
@@ -579,6 +602,12 @@ impl TypeRef {
     pub fn is_same_of(&self, other: &TypeRef) -> bool {
         (self.mod_idx, self.idx) == (other.mod_idx, other.idx)
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, ctor)]
+pub struct TypeVar {
+    pub mod_idx:     usize,
+    pub typevar_idx: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

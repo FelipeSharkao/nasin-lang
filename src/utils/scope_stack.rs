@@ -1,8 +1,8 @@
 use std::cmp::min;
 use std::fmt::Debug;
 
-use derive_more::{Deref, DerefMut, IntoIterator};
 use derive_ctor::ctor;
+use derive_more::{Deref, DerefMut, IntoIterator};
 
 #[derive(Debug, Clone, PartialEq, Eq, IntoIterator)]
 pub struct ScopeStack<T: ScopePayload> {

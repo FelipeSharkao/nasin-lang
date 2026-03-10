@@ -4,7 +4,7 @@ use std::str::FromStr;
 use std::{env, fs, io, process};
 
 use clap::{Parser, Subcommand};
-use nasin::{build, build_run, EmitArgs};
+use nasin::{EmitArgs, build, build_run};
 use tracing::level_filters::LevelFilter;
 use tracing_subscriber::filter::filter_fn;
 use tracing_subscriber::layer::SubscriberExt;

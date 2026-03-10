@@ -13,6 +13,8 @@ pub struct TypeParser<'a, 't> {
     pub typedefs: Vec<DeclaredTypeDef<'a, 't>>,
     #[ctor(expr(default_idents()))]
     pub idents: HashMap<String, b::TypeBody>,
+    #[ctor(default)]
+    pub typevar_count: usize,
     ctx: &'a context::BuildContext,
     src_idx: usize,
     mod_idx: usize,
@@ -231,9 +233,9 @@ impl<'a, 't> TypeParser<'a, 't> {
 }
 
 pub struct DeclaredTypeDef<'a, 't> {
-    pub typedef:    b::TypeDef,
-    type_decl_node: Option<ts::Node<'t>>,
-    methods_idx:    HashMap<&'a str, (usize, usize)>,
+    pub typedef: b::TypeDef,
+    pub type_decl_node: Option<ts::Node<'t>>,
+    pub methods_idx: HashMap<&'a str, (usize, usize)>,
 }
 
 fn default_idents() -> HashMap<String, b::TypeBody> {

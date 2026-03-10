@@ -10,7 +10,7 @@ use itertools::chain;
 use tree_sitter as ts;
 
 use self::runtime::RuntimeBuilder;
-use crate::{bytecode as b, codegen, config, errors, parser, sources, typecheck};
+use crate::{bytecode as b, codegen, config, errors, parser, sources, typecheck, utils};
 
 #[derive(Debug, ctor)]
 pub struct BuildContext {
@@ -28,11 +28,11 @@ pub struct BuildContext {
 }
 impl BuildContext {
     pub fn lock_modules(&self) -> impl Deref<Target = Vec<b::Module>> + '_ {
-        self.modules.read().unwrap()
+        utils::DeadlockGuard::new(self.modules.read().unwrap())
     }
 
     pub fn lock_modules_mut(&self) -> impl DerefMut<Target = Vec<b::Module>> + '_ {
-        self.modules.write().unwrap()
+        utils::DeadlockGuard::new(self.modules.write().unwrap())
     }
 
     pub fn push_error(&self, value: errors::Error) {
@@ -90,10 +90,6 @@ impl BuildContext {
         module_parser.finish();
 
         typecheck::TypeChecker::new(self, mod_idx).check();
-
-        if self.cfg.dump_bytecode {
-            println!("{}", &self.lock_modules()[mod_idx]);
-        }
 
         mod_idx
     }

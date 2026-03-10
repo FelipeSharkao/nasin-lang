@@ -29,6 +29,7 @@ impl<'a> RuntimeBuilder<'a> {
             funcs: self.funcs,
             globals: vec![],
             typedefs: vec![],
+            typevars: vec![],
             sources: HashSet::new(),
         });
 
@@ -77,6 +78,8 @@ impl<'a> RuntimeBuilder<'a> {
             is_entry: true,
             is_virt: false,
             loc: None,
+            generics: vec![],
+            generic_instantiations: std::collections::HashMap::new(),
         });
 
         self.entry_func_idx = Some(entry_idx);

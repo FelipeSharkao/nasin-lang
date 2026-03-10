@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use cl::InstBuilder;
 use cranelift_shim::{self as cl, Module};
 use derive_ctor::ctor;
-use itertools::{izip, Itertools};
+use itertools::{Itertools, izip};
 
 use super::context::CodegenContext;
 use super::name_mangling::NameMangler;
@@ -970,6 +970,9 @@ impl<'a> FuncCodegen<'a, '_> {
             b::InstrBody::Type(..) => {}
             b::InstrBody::GetProperty(..) | b::InstrBody::CompileError => {
                 panic!("never should try to compile '{}'", &instr)
+            }
+            b::InstrBody::TypeName(..) => {
+                unreachable!("TypeName should have been replaced by transform phase");
             }
             b::InstrBody::CreateNumber(..)
             | b::InstrBody::CreateBool(..)

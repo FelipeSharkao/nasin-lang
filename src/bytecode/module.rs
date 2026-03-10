@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::{cmp, fmt};
 
@@ -20,6 +20,8 @@ pub struct Module {
     pub values:   Vec<Value>,
     #[ctor(default)]
     pub typedefs: Vec<TypeDef>,
+    #[ctor(default)]
+    pub typevars: Vec<TypeVarDef>,
     #[ctor(default)]
     pub globals:  Vec<Global>,
     #[ctor(default)]
@@ -85,6 +87,10 @@ impl Display for Module {
                     }
                 }
             }
+        }
+
+        for (i, typevar) in self.typevars.iter().enumerate() {
+            write!(f, "\n    typevar {i} {} {}", &typevar.name, &typevar.loc)?;
         }
 
         for (i, global) in self.globals.iter().enumerate() {
@@ -163,15 +169,19 @@ pub struct Global {
 
 #[derive(Debug, Clone)]
 pub struct Func {
-    pub name:     Name,
-    pub params:   Vec<ValueIdx>,
-    pub ret:      ValueIdx,
-    pub body:     Vec<Instr>,
-    pub method:   Option<(usize, usize, String)>,
-    pub extrn:    Option<Extern>,
+    pub name: Name,
+    pub params: Vec<ValueIdx>,
+    pub ret: ValueIdx,
+    pub body: Vec<Instr>,
+    pub method: Option<(usize, usize, String)>,
+    pub extrn: Option<Extern>,
     pub is_entry: bool,
-    pub is_virt:  bool,
-    pub loc:      Option<Loc>,
+    pub is_virt: bool,
+    pub loc: Option<Loc>,
+    pub generics: Vec<TypeVarIdx>,
+    /// Maps generic substitutions to the index of the instantiated func. Used to
+    /// deduplicate generic instantiations
+    pub generic_instantiations: HashMap<Vec<TypeBody>, usize>,
 }
 
 #[derive(Debug, Clone, From)]
@@ -179,6 +189,14 @@ pub enum TypeDefBody {
     Record(RecordType),
     Interface(InterfaceType),
 }
+
+#[derive(Debug, Clone)]
+pub struct TypeVarDef {
+    pub name: Name,
+    pub loc:  Loc,
+}
+
+pub type TypeVarIdx = usize;
 
 #[derive(Debug, Clone)]
 pub struct RecordType {

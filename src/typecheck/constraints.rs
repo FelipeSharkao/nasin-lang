@@ -1,7 +1,7 @@
 use derive_ctor::ctor;
 
 use crate::bytecode as b;
-use crate::utils::{number_enum, SortedMap};
+use crate::utils::{SortedMap, number_enum};
 
 number_enum!(pub ConstraintPriority: u8 {
     NoType = 0,

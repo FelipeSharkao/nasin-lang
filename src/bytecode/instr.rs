@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fmt::{self, Display};
 
 use derive_ctor::ctor;
@@ -61,8 +62,113 @@ pub enum InstrBody {
     Type(ValueIdx, Type),
     Dispatch(ValueIdx, usize, usize),
 
+    TypeName(ValueIdx),
+
     CompileError,
 }
+
+impl InstrBody {
+    pub fn remap_values(&mut self, remap: &HashMap<ValueIdx, ValueIdx>) {
+        let replace = |v: &mut ValueIdx| {
+            if let Some(&new) = remap.get(v) {
+                *v = new;
+            }
+        };
+        match self {
+            InstrBody::Call(_, _, args) => {
+                for v in args {
+                    replace(v);
+                }
+            }
+            InstrBody::IndirectCall(func, args) => {
+                replace(func);
+                for v in args {
+                    replace(v);
+                }
+            }
+            InstrBody::TypeName(v) => replace(v),
+            InstrBody::Break(Some(v)) => replace(v),
+            InstrBody::Break(None) => {}
+            InstrBody::Continue(vs) => {
+                for v in vs {
+                    replace(v);
+                }
+            }
+            InstrBody::Not(v) => replace(v),
+            InstrBody::Add(a, b)
+            | InstrBody::Sub(a, b)
+            | InstrBody::Mul(a, b)
+            | InstrBody::Div(a, b)
+            | InstrBody::Mod(a, b) => {
+                replace(a);
+                replace(b);
+            }
+            InstrBody::Eq(a, b)
+            | InstrBody::Neq(a, b)
+            | InstrBody::Lt(a, b)
+            | InstrBody::Lte(a, b)
+            | InstrBody::Gt(a, b)
+            | InstrBody::Gte(a, b) => {
+                replace(a);
+                replace(b);
+            }
+            InstrBody::StrPtr(v) | InstrBody::StrLen(v) | InstrBody::ArrayLen(v) => {
+                replace(v);
+            }
+            InstrBody::StrFromPtr(a, b)
+            | InstrBody::PtrOffset(a, b)
+            | InstrBody::PtrSet(a, b)
+            | InstrBody::ArrayIndex(a, b) => {
+                replace(a);
+                replace(b);
+            }
+            InstrBody::StrCopy(src, dst, offset) => {
+                replace(src);
+                replace(dst);
+                if let Some(v) = offset {
+                    replace(v);
+                }
+            }
+            InstrBody::CreateUninitializedString(v) => replace(v),
+            InstrBody::GetField(v, _)
+            | InstrBody::GetProperty(v, _)
+            | InstrBody::GetMethod(v, _)
+            | InstrBody::Dispatch(v, _, _)
+            | InstrBody::Type(v, _) => replace(v),
+            InstrBody::GetFunc(..)
+            | InstrBody::CreateNumber(_)
+            | InstrBody::CreateBool(_)
+            | InstrBody::CreateString(_)
+            | InstrBody::CreateRecord(_)
+            | InstrBody::GetGlobal(..)
+            | InstrBody::CompileError => {}
+            InstrBody::If(cond, then_body, else_body) => {
+                replace(cond);
+                for instr in then_body {
+                    instr.body.remap_values(remap);
+                }
+                for instr in else_body {
+                    instr.body.remap_values(remap);
+                }
+            }
+            InstrBody::Loop(inits, body) => {
+                for (loop_var, init_val) in inits {
+                    replace(loop_var);
+                    replace(init_val);
+                }
+                for instr in body {
+                    instr.body.remap_values(remap);
+                }
+            }
+            InstrBody::CreateArray(values) => {
+                for v in values {
+                    replace(v);
+                }
+            }
+        }
+    }
+}
+
 impl Display for InstrBody {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -166,6 +272,7 @@ impl Display for InstrBody {
             InstrBody::Dispatch(v, mod_idx, ty_idx) => {
                 write!(f, "dispatch v{v} {mod_idx}-{ty_idx}")?
             }
+            InstrBody::TypeName(v) => write!(f, "type_name v{v}")?,
             InstrBody::CompileError => write!(f, "compile_error")?,
         }
         Ok(())
@@ -257,6 +364,10 @@ impl Instr {
         loc: Option<Loc>,
     ) -> Self {
         Self::new(InstrBody::ArrayIndex(v, idx), loc).with_results([res])
+    }
+
+    pub fn type_name(v: ValueIdx, res: ValueIdx, loc: Option<Loc>) -> Self {
+        Self::new(InstrBody::TypeName(v), loc).with_results([res])
     }
 
     pub fn with_results(mut self, results: impl IntoIterator<Item = ValueIdx>) -> Self {

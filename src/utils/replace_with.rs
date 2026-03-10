@@ -2,9 +2,9 @@ use std::ptr;
 
 /// Temporarily takes ownership of a value at a mutable location, and replace it with a
 /// new value based on the old one.
-pub fn replace_with<T, U, R: ReplaceResult<T, U>>(
+pub fn replace_with<'a, T, U, R: ReplaceResult<T, U>>(
     dest: &mut T,
-    f: impl FnOnce(T) -> R,
+    f: impl (FnOnce(T) -> R) + 'a,
 ) -> U {
     unsafe {
         let old = ptr::read(dest);

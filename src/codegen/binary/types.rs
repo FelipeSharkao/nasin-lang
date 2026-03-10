@@ -265,15 +265,15 @@ pub struct Slice {
 #[derive(Debug, Display, Clone, PartialEq, Eq, Hash, ctor)]
 #[display("func {ptr} {proto} <- {env}")]
 pub struct FuncAsValue {
-    pub ptr: cl::Value,
-    pub env: cl::Value,
+    pub ptr:   cl::Value,
+    pub env:   cl::Value,
     pub proto: FuncPrototype,
 }
 
 #[derive(Debug, Display, Copy, Clone, PartialEq, Eq, Hash, ctor)]
 #[display("dyn {vtable} <- {src}")]
 pub struct DynDispatched {
-    pub src: cl::Value,
+    pub src:    cl::Value,
     pub vtable: cl::Value,
 }
 
@@ -412,6 +412,9 @@ pub fn get_type_by_type(
         | b::TypeBody::Inferred(_) => panic!("Type must be resolved before codegen"),
         b::TypeBody::Never => panic!("never type cannot be used directly"),
         b::TypeBody::AnyOpaque => panic!("anyopaque type cannot be used directly"),
+        b::TypeBody::TypeVar(_) => {
+            panic!("TypeVar should have been instantiated by transform phase")
+        }
     }
 }
 
@@ -454,6 +457,9 @@ pub fn get_size(ty: &b::Type, modules: &[b::Module], cl_module: &impl cl::Module
         | b::TypeBody::Inferred(_) => panic!("Type must be resolved before codegen"),
         b::TypeBody::AnyOpaque => panic!("anyopaque cannot be used directly"),
         b::TypeBody::Func(_) => todo!("first-class functions are not supported yet"),
+        b::TypeBody::TypeVar(_) => {
+            panic!("TypeVar should have been instantiated by transform phase")
+        }
     }
 }
 
@@ -508,7 +514,7 @@ impl ReturnPolicy {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Display, ctor)]
 #[display("{signature} {ret_policy}")]
 pub struct FuncPrototype {
-    pub signature: cl::Signature,
+    pub signature:  cl::Signature,
     pub ret_policy: ReturnPolicy,
 }
 impl FuncPrototype {
@@ -618,5 +624,5 @@ impl VTableDesc {
 #[derive(ctor, Hash, PartialEq, Eq, Clone, Copy, Debug)]
 pub struct VTableRef {
     pub iface: (usize, usize),
-    pub ty: (usize, usize),
+    pub ty:    (usize, usize),
 }

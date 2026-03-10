@@ -5,7 +5,7 @@ use std::fmt::Debug;
 use std::mem;
 
 use derive_ctor::ctor;
-use itertools::{enumerate, izip, Itertools};
+use itertools::{Itertools, enumerate, izip};
 
 use self::constraints::{Constraint, ConstraintKind};
 use crate::utils::SortedMap;
@@ -88,17 +88,6 @@ impl<'a> TypeChecker<'a> {
         }
 
         self.validate();
-
-        for i in 0..globals_len {
-            self.finish_body(&|module| &module.globals[i].body, &|module| {
-                &mut module.globals[i].body
-            });
-        }
-        for i in 0..funcs_len {
-            self.finish_body(&|module| &module.funcs[i].body, &|module| {
-                &mut module.funcs[i].body
-            });
-        }
     }
 
     #[tracing::instrument(level = "trace", skip(self))]
@@ -345,50 +334,35 @@ impl<'a> TypeChecker<'a> {
             b::InstrBody::Call(mod_idx, idx, args) => {
                 let v = instr.results[0];
 
-                if *mod_idx == self.mod_idx {
-                    let func = self.ctx.lock_modules()[self.mod_idx].funcs[*idx].clone();
+                let module = &self.ctx.lock_modules()[*mod_idx];
+                let func = module.funcs[*idx].clone();
 
-                    if func_idx.is_some_and(|i| i == *idx) {
-                        self.merge_types([&func.ret, &v]);
-                        for (arg, param) in izip!(args, func.params) {
-                            self.merge_types([&param, arg]);
-                        }
-                    } else {
-                        for (arg, param) in izip!(args, func.params) {
-                            self.add_constraint(
-                                *arg,
-                                Constraint::new(ConstraintKind::TypeOf(param), instr.loc),
-                            );
-                        }
-                        self.add_constraint(
-                            v,
-                            Constraint::new(ConstraintKind::TypeOf(func.ret), instr.loc),
-                        );
+                if *mod_idx == self.mod_idx && func_idx.is_some_and(|i| i == *idx) {
+                    self.merge_types([&func.ret, &v]);
+                    for (arg, param) in izip!(args, func.params) {
+                        self.merge_types([&param, arg]);
                     }
-                } else {
-                    let (params_tys, ret_ty) = {
-                        let module = &self.ctx.lock_modules()[*mod_idx];
-                        let func = &module.funcs[*idx];
-                        (
-                            func.params
-                                .iter()
-                                .map(|param| module.values[*param].ty.clone())
-                                .collect_vec(),
-                            module.values[func.ret].ty.clone(),
-                        )
-                    };
-
-                    for (arg, param_ty) in izip!(args, params_tys) {
-                        self.add_constraint(
-                            *arg,
-                            Constraint::new(ConstraintKind::Is(param_ty), instr.loc),
-                        );
-                    }
-                    self.add_constraint(
-                        v,
-                        Constraint::new(ConstraintKind::Is(ret_ty), instr.loc),
-                    )
+                    return;
                 }
+
+                for (arg, param) in izip!(args, func.params) {
+                    let param_ty = &module.values[param].ty;
+                    let kind = if *mod_idx == self.mod_idx && !param_ty.contains_typevar()
+                    {
+                        ConstraintKind::TypeOf(param)
+                    } else {
+                        ConstraintKind::Is(param_ty.clone())
+                    };
+                    self.add_constraint(*arg, Constraint::new(kind, instr.loc));
+                }
+
+                let ret_ty = &module.values[func.ret].ty;
+                let kind = if *mod_idx == self.mod_idx && !ret_ty.contains_typevar() {
+                    ConstraintKind::TypeOf(func.ret)
+                } else {
+                    ConstraintKind::Is(ret_ty.clone())
+                };
+                self.add_constraint(v, Constraint::new(kind, instr.loc));
             }
             b::InstrBody::IndirectCall(func, args) => {
                 let v = instr.results[0];
@@ -628,6 +602,14 @@ impl<'a> TypeChecker<'a> {
                 self.add_constraint(
                     *v,
                     Constraint::new(ConstraintKind::Is(ty), instr.loc),
+                );
+            }
+            b::InstrBody::TypeName(_) => {
+                let v = instr.results[0];
+                let ty = b::Type::new(b::TypeBody::String, None);
+                self.add_constraint(
+                    v,
+                    Constraint::new(ConstraintKind::Is(ty.clone()), instr.loc),
                 );
             }
             b::InstrBody::Break(_) | b::InstrBody::CompileError => {}
@@ -1157,145 +1139,6 @@ impl<'a> TypeChecker<'a> {
         let module = &modules[self.mod_idx];
         let parent = &module.values[v].ty;
         return parent.property(key, modules).map(|ty| ty.into_owned());
-    }
-
-    #[tracing::instrument(level = "trace", skip_all)]
-    fn finish_body(
-        &self,
-        get_body: &impl for<'m> Fn(&'m b::Module) -> &'m Vec<b::Instr>,
-        get_body_mut: &impl for<'m> Fn(&'m mut b::Module) -> &'m mut Vec<b::Instr>,
-    ) {
-        let len = {
-            let module = &self.ctx.lock_modules()[self.mod_idx];
-            get_body(module).len()
-        };
-        let mut i = 0;
-        while i < len {
-            self.finish_get_property_instr(i, &get_body, &get_body_mut);
-            i += self.finish_dispatch_instr(i, &get_body, &get_body_mut);
-            i += 1;
-        }
-    }
-
-    fn finish_get_property_instr(
-        &self,
-        idx: usize,
-        get_body: &impl for<'m> Fn(&'m b::Module) -> &'m Vec<b::Instr>,
-        get_body_mut: &impl for<'m> Fn(&'m mut b::Module) -> &'m mut Vec<b::Instr>,
-    ) {
-        let (source_v, key) = {
-            let modules = &self.ctx.lock_modules()[self.mod_idx];
-            let instr = &get_body(modules)[idx];
-            match &instr.body {
-                b::InstrBody::GetProperty(v, key) => (*v, key.clone()),
-                _ => return,
-            }
-        };
-
-        let (is_field, is_method) = {
-            let modules = &self.ctx.lock_modules();
-            let parent_ty = &modules[self.mod_idx].values[source_v].ty;
-            (
-                parent_ty.field(&key, &modules).is_some(),
-                parent_ty.method(&key, &modules).is_some(),
-            )
-        };
-
-        {
-            let modules = &mut self.ctx.lock_modules_mut();
-            let instr = &mut get_body_mut(&mut modules[self.mod_idx])[idx];
-            if is_field {
-                instr.body = b::InstrBody::GetField(source_v, key.clone());
-            } else if is_method {
-                instr.body = b::InstrBody::GetMethod(source_v, key.clone());
-            }
-        }
-    }
-
-    fn finish_dispatch_instr(
-        &self,
-        idx: usize,
-        get_body: &impl for<'m> Fn(&'m b::Module) -> &'m Vec<b::Instr>,
-        get_body_mut: &impl for<'m> Fn(&'m mut b::Module) -> &'m mut Vec<b::Instr>,
-    ) -> usize {
-        let (params, loc) = {
-            let modules = &self.ctx.lock_modules();
-            let instr = &get_body(&modules[self.mod_idx])[idx];
-            let params = match &instr.body {
-                b::InstrBody::Call(mod_idx, func_idx, args) => {
-                    let args_types =
-                        args.iter().map(|v| &modules[self.mod_idx].values[*v].ty);
-                    let params_types = modules[*mod_idx].funcs[*func_idx]
-                        .params
-                        .iter()
-                        .map(|v| &modules[*mod_idx].values[*v].ty);
-                    izip!(args, args_types, params_types).collect_vec()
-                }
-                b::InstrBody::IndirectCall(v, args) => {
-                    let b::TypeBody::Func(func) =
-                        &modules[self.mod_idx].values[*v].ty.body
-                    else {
-                        return 0;
-                    };
-                    let args_types =
-                        args.iter().map(|v| &modules[self.mod_idx].values[*v].ty);
-                    izip!(args, args_types, &func.params).collect_vec()
-                }
-                _ => return 0,
-            };
-            let params = params
-                .into_iter()
-                .enumerate()
-                .filter_map(|(i, (v, arg_ty, param_ty))| {
-                    if arg_ty.body == param_ty.body {
-                        return None;
-                    }
-                    let b::TypeBody::TypeRef(param_ty_ref) = &param_ty.body else {
-                        return None;
-                    };
-                    let param_ty_def =
-                        &modules[param_ty_ref.mod_idx].typedefs[param_ty_ref.idx];
-                    if matches!(&param_ty_def.body, b::TypeDefBody::Interface(_)) {
-                        Some((i, *v, (param_ty_ref.mod_idx, param_ty_ref.idx)))
-                    } else {
-                        None
-                    }
-                })
-                .collect_vec();
-            (params, instr.loc)
-        };
-
-        let count = params.len();
-
-        {
-            let module = &mut self.ctx.lock_modules_mut()[self.mod_idx];
-
-            let value_start = module.values.len();
-            module.values.extend(params.iter().map(|(_, _, iface)| {
-                let ty = b::Type::new(b::TypeRef::new(iface.0, iface.1).into(), None);
-                b::Value::new(ty, loc)
-            }));
-
-            let body = get_body_mut(module);
-            match &mut body[idx].body {
-                b::InstrBody::Call(_, _, args) | b::InstrBody::IndirectCall(_, args) => {
-                    for (i, (n, ..)) in params.iter().enumerate() {
-                        args[*n] = value_start + i;
-                    }
-                }
-                _ => {}
-            };
-
-            body.splice(
-                idx..idx,
-                params.into_iter().enumerate().map(|(i, (_, v, iface))| {
-                    b::Instr::new(b::InstrBody::Dispatch(v, iface.0, iface.1), loc)
-                        .with_results([value_start + i])
-                }),
-            );
-        }
-
-        count
     }
 }
 

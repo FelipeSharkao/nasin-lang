@@ -18,18 +18,20 @@ const SELF_INDENT: &str = "Self";
 #[derive(ctor)]
 pub struct ModuleParser<'a, 't> {
     #[ctor(expr(TypeParser::new(ctx, src_idx, mod_idx)))]
-    pub types:    TypeParser<'a, 't>,
+    pub types: TypeParser<'a, 't>,
     #[ctor(default)]
-    pub globals:  Vec<DeclaredGlobal<'t>>,
+    pub globals: Vec<DeclaredGlobal<'t>>,
     #[ctor(default)]
-    pub funcs:    Vec<DeclaredFunc<'t>>,
+    pub funcs: Vec<DeclaredFunc<'t>>,
     #[ctor(default)]
-    pub values:   Vec<b::Value>,
+    pub values: Vec<b::Value>,
     #[ctor(default)]
-    pub idents:   HashMap<String, ValueRef>,
-    pub ctx:      &'a context::BuildContext,
-    pub src_idx:  usize,
-    pub mod_idx:  usize,
+    pub idents: HashMap<String, ValueRef>,
+    #[ctor(default)]
+    pub typevar_defs: Vec<b::TypeVarDef>,
+    pub ctx: &'a context::BuildContext,
+    pub src_idx: usize,
+    pub mod_idx: usize,
     pub is_entry: bool,
 }
 
@@ -79,6 +81,7 @@ impl<'a, 't> ModuleParser<'a, 't> {
 
         let module = &mut self.ctx.lock_modules_mut()[self.mod_idx];
         module.typedefs = typedefs;
+        module.typevars = self.typevar_defs;
         module.globals = self.globals.into_iter().map(|x| x.global).collect();
         module.funcs = self.funcs.into_iter().map(|x| x.func).collect();
         module.values = self.values;
@@ -93,7 +96,7 @@ impl<'a, 't> ModuleParser<'a, 't> {
             let name_kind = match sym_node.kind() {
                 "global_decl" => b::NameIdentKind::Value,
                 "func_decl" => b::NameIdentKind::Func,
-                "type_decl" => b::NameIdentKind::Type,
+                "type_decl" | "typevar_decl" => b::NameIdentKind::Type,
                 _ => panic!("Unexpected symbol kind: {}", sym_node.kind()),
             };
 
@@ -158,6 +161,19 @@ impl<'a, 't> ModuleParser<'a, 't> {
                     } else {
                         self.types.idents.remove(SELF_INDENT);
                     }
+                }
+                "typevar_decl" => {
+                    let typevar_idx = self.types.typevar_count;
+                    self.types.typevar_count += 1;
+                    let typevar_def = b::TypeVarDef {
+                        name: name.clone(),
+                        loc:  b::Loc::from_node(self.src_idx, &sym_node),
+                    };
+                    self.typevar_defs.push(typevar_def);
+                    self.types.idents.insert(
+                        name.last_ident().to_string(),
+                        b::TypeVar::new(self.mod_idx, typevar_idx).into(),
+                    );
                 }
                 "func_decl" => {
                     self.add_func(name, sym_node, None, false);
@@ -269,6 +285,13 @@ impl<'a, 't> ModuleParser<'a, 't> {
             }
         }
 
+        let mut generics = self.collect_generics(&ret_ty);
+        for &param_idx in &params {
+            let param_ty = &self.values[param_idx].ty;
+            generics.extend(self.collect_generics(param_ty));
+        }
+        let generics: Vec<b::TypeVarIdx> = generics.into_iter().collect();
+
         let loc = b::Loc::from_node(self.src_idx, &node);
         let func = b::Func {
             name,
@@ -280,6 +303,8 @@ impl<'a, 't> ModuleParser<'a, 't> {
             is_virt,
             body: vec![],
             loc: Some(loc),
+            generics,
+            generic_instantiations: HashMap::new(),
         };
         let func_idx = self.funcs.len();
         self.idents.insert(
@@ -328,6 +353,35 @@ impl<'a, 't> ModuleParser<'a, 't> {
         if is_main {
             let mut main = self.ctx.main.write().unwrap();
             *main = Some((self.mod_idx, self.globals.len() - 1));
+        }
+    }
+
+    fn collect_generics(&self, ty: &b::Type) -> Vec<b::TypeVarIdx> {
+        let mut generics = Vec::new();
+        self.collect_generics_rec(ty, &mut generics);
+        generics
+    }
+
+    fn collect_generics_rec(&self, ty: &b::Type, generics: &mut Vec<b::TypeVarIdx>) {
+        match &ty.body {
+            b::TypeBody::TypeVar(tv) => {
+                if !generics.contains(&tv.typevar_idx) {
+                    generics.push(tv.typevar_idx);
+                }
+            }
+            b::TypeBody::Func(func_ty) => {
+                self.collect_generics_rec(&func_ty.ret, generics);
+                for param in &func_ty.params {
+                    self.collect_generics_rec(param, generics);
+                }
+            }
+            b::TypeBody::Array(elem_ty) => {
+                self.collect_generics_rec(elem_ty, generics);
+            }
+            b::TypeBody::Ptr(Some(elem_ty)) => {
+                self.collect_generics_rec(elem_ty, generics);
+            }
+            _ => {}
         }
     }
 }

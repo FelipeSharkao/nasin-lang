@@ -66,7 +66,7 @@ impl<'t> Iterator for TreeSitterChildren<'t> {
                 (true, Some(field))
                     if self.cursor.field_name().is_some_and(|f| f == field) =>
                 {
-                    break
+                    break;
                 }
                 (true, None) => break,
                 _ => {

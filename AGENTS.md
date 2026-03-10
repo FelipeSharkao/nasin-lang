@@ -77,7 +77,64 @@ gdb -batch -ex "info functions" <binary>
 
 ## Formatting
 
-- Keep the rust code formatted with `cargo fmt` and the JS code with `prettier`.
+- Keep the rust code formatted with `cargo +nightly fmt` and the JS code with `prettier`.
 - Avoid adding small comments to explain what the code does. Code should be
   self-explanatory. Keep comments restricted to function/method documentation and complex
   or non-obvious code.
+- The codebase uses column-aligned struct fields (padded with spaces). Match the existing
+  alignment style when editing structs so that the formatter doesn't introduce unnecessary
+  diffs.
+
+## Lock Discipline
+
+- `BuildContext` uses `RwLock` for `modules`. Access via `ctx.lock_modules()` (read) and
+  `ctx.lock_modules_mut()` (write).
+- There is a `DeadlockGuard` wrapper (`utils::DeadlockGuard`) that panics if a lock is
+  held too long (debug builds only). It is already applied to `lock_modules` /
+  `lock_modules_mut`. You can wrap any lock with it: `utils::DeadlockGuard::new(lock)`.
+- **Never use `drop(modules)` to release a lock acquired with `&`** — that drops the
+  reference, not the guard. Use scoped blocks `{ let modules = ...; ... }` to control lock
+  lifetimes.
+
+## Compiler Pipeline
+
+The compilation pipeline runs in this order:
+
+1. **Parse** — tree-sitter grammar → bytecode (`src/parser/`)
+2. **Typecheck** — constraint-based type inference (`src/typecheck/`)
+3. **Dump bytecode** — `--dump-bytecode` prints here, _before_ transforms
+4. **Transform** — code transformations (`src/transform/`), runs as ordered steps:
+    - `InstantiateGenericFuncsStep` — monomorphizes generic functions
+    - `LowerTypeNameStep` — replaces `TypeName(v)` with `CreateString("<type>")`
+    - `FinishGetPropertyStep` — resolves property accesses
+    - `FinishDispatchStep` — resolves interface dispatch
+5. **Codegen** — cranelift IR → native binary (`src/codegen/binary/`)
+
+When adding new features, be aware that `--dump-bytecode` output reflects the state
+_after_ typecheck but _before_ transforms. `--dump-transformed-bytecode` reflects the
+state after transformations.
+
+## Generics Implementation Notes
+
+- `typevar T` declares a type variable as a `TypeDef` with `TypeDefBody::TypeVar`.
+- Generic functions have `typevars: Vec<usize>` pointing into the module's typedefs.
+- Typecheck skips `TypeOf` constraints for parameters whose type contains a typevar.
+- `InstantiateGenericFuncsStep` creates concrete copies of generic functions per unique
+  set of type substitutions. It clones all values (params, ret, body results) into new
+  value slots so each instantiation is independent.
+- `Func::generic_instantiations` (`HashMap<Vec<(usize, TypeBody)>, usize>`) caches
+  instantiations on the template func to avoid duplicates.
+- Codegen skips template functions (non-empty `typevars`) and TypeVar typedefs — only
+  the instantiated copies get compiled.
+- Compiler directives use `snake_case` (e.g. `@type_name`, not `@typename`).
+
+## Testing New Features
+
+For features not yet in the snapshot test list, test manually:
+
+```bash
+make && RUST_BACKTRACE=1 bin/nasin run tests/<test>.nsn --dump-bytecode --dump-clif
+```
+
+Use `make test` to check for regressions on existing tests. Only add to
+`tests/_test.list` and run `make record-test` when the feature is stable.

@@ -75,7 +75,7 @@ impl<'a> NameMangler<'a> {
         for (j, node) in nodes[i..].iter().enumerate() {
             match node {
                 b::NameNode::Ident(ident) => {
-                    write!(s, "{}{}", ident.ident, ident.ident.len()).unwrap();
+                    write!(s, "{}{}", ident.ident.len(), ident.ident).unwrap();
                 }
                 b::NameNode::TypeParams(params) => {
                     write!(s, "I").unwrap();
@@ -138,7 +138,8 @@ impl<'a> NameMangler<'a> {
             | b::TypeBody::AnyNumber
             | b::TypeBody::AnySignedNumber
             | b::TypeBody::AnyFloat
-            | b::TypeBody::Inferred(_) => panic!("cannot mangle type `{ty}`"),
+            | b::TypeBody::Inferred(_)
+            | b::TypeBody::TypeVar(_) => panic!("cannot mangle type `{ty}`"),
         }
     }
 

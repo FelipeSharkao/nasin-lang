@@ -17,6 +17,7 @@ pub mod context;
 pub mod errors;
 pub mod parser;
 pub mod sources;
+pub mod transform;
 pub mod typecheck;
 mod utils;
 
@@ -33,6 +34,10 @@ pub struct EmitArgs {
     #[arg(long)]
     /// Whether to dump the parsed bytecode of the source file
     dump_bytecode: bool,
+    #[arg(long)]
+    /// Whether to dump the parsed bytecode of the source file after transformations (e.g.
+    /// monomorphization)
+    dump_transformed_bytecode: bool,
     #[arg(long)]
     /// Whether to dump the parsed CLIF of the source file, if using Cranelift
     dump_clif: bool,
@@ -108,6 +113,7 @@ pub fn build_maybe_run(
         silent: emit.silent,
         dump_ast: emit.dump_ast,
         dump_bytecode: emit.dump_bytecode,
+        dump_transformed_bytecode: emit.dump_transformed_bytecode,
         dump_clif: emit.dump_clif,
         run,
     });
@@ -122,7 +128,31 @@ pub fn build_maybe_run(
 
     ctx.parse(src_idx, true);
     if ctx.has_errors() {
+        if ctx.cfg.dump_bytecode {
+            for module in &*ctx.lock_modules() {
+                println!("{module}");
+            }
+        }
+
         return Err(ctx.into_compile_error());
+    }
+
+    if ctx.cfg.dump_bytecode {
+        for module in &*ctx.lock_modules() {
+            println!("{module}");
+        }
+    }
+
+    let code_transform = transform::CodeTransform::new(&ctx);
+    code_transform.apply(transform::InstantiateGenericFuncsStep::new(&ctx));
+    code_transform.apply(transform::LowerTypeNameStep::new(&ctx));
+    code_transform.apply(transform::FinishGetPropertyStep::new(&ctx));
+    code_transform.apply(transform::FinishDispatchStep::new(&ctx));
+
+    if ctx.cfg.dump_transformed_bytecode {
+        for module in &*ctx.lock_modules() {
+            println!("{module}");
+        }
     }
 
     ctx.compile();

@@ -17,6 +17,8 @@ pub struct BuildConfig {
     pub dump_ast: bool,
     /// Whether to dump the bytecode of the source file
     pub dump_bytecode: bool,
+    /// Whether to dump the bytecode of the source file after transformations
+    pub dump_transformed_bytecode: bool,
     /// Whether to dump the CLIF of the source file, if using Cranelift
     pub dump_clif: bool,
     /// Run the program after compilation

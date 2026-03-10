@@ -1,4 +1,4 @@
-:i count 15
+:i count 16
 :b shell 29
 ./bin/nasin r tests/hello.nsn
 :i returncode 0
@@ -141,6 +141,17 @@ LinesA
 Hello direct
 LinesA
 Hello indirect
+
+:b stderr 0
+
+:b shell 36
+./bin/nasin r tests/generic_func.nsn
+:i returncode 0
+:b stdout 15
+u8
+u8
+str
+bool
 
 :b stderr 0
 

@@ -1,0 +1,10 @@
+main = [
+    get_type_name(1:u8),
+    get_type_name(10:u8),
+    get_type_name("hello"),
+    get_type_name(true),
+]
+
+typevar T
+get_type_name(x: T) =
+    @type_name(x)
