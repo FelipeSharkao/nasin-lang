@@ -158,7 +158,7 @@ impl BinaryCodegen<'_> {
 
         let func_id = if !decl.is_virt {
             let linkage = if decl.extrn.is_some() {
-                if decl.body.is_empty() {
+                if module.blocks[decl.body].body.is_empty() {
                     cl::Linkage::Import
                 } else {
                     cl::Linkage::Export
@@ -265,8 +265,8 @@ impl BinaryCodegen<'_> {
                     .values
                     .insert((i, gv), types::RuntimeValue::new((*data_id).into(), i, gv));
 
-                codegen.add_body(
-                    &codegen.ctx.modules[i].globals[j].body,
+                codegen.add_block(
+                    codegen.ctx.modules[i].globals[j].body,
                     i,
                     ResultPolicy::Global,
                 );
@@ -327,7 +327,7 @@ impl BinaryCodegen<'_> {
                 mod_idx,
             );
 
-            codegen.add_body(&decl.body, mod_idx, ResultPolicy::Return(ret_policy));
+            codegen.add_block(decl.body, mod_idx, ResultPolicy::Return(ret_policy));
 
             this.ctx = codegen.finish();
             this

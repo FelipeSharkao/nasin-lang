@@ -22,12 +22,8 @@ impl SourceManager {
     }
 
     pub fn open(&mut self, path: PathBuf) -> Result<usize, errors::Error> {
+        let idx = self.sources.len();
         self.sources.push(Source::open(path)?);
-        Ok(self.sources.len() - 1)
-    }
-
-    pub fn preload(&mut self, path: PathBuf) -> Result<usize, errors::Error> {
-        let idx = self.open(path)?;
         self.source(idx).content();
         Ok(idx)
     }

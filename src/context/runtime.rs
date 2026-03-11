@@ -13,6 +13,8 @@ pub struct RuntimeBuilder<'a> {
     #[ctor(default)]
     funcs: Vec<b::Func>,
     #[ctor(default)]
+    blocks: Vec<b::Block>,
+    #[ctor(default)]
     entry_func_idx: Option<usize>,
 }
 impl<'a> RuntimeBuilder<'a> {
@@ -27,6 +29,7 @@ impl<'a> RuntimeBuilder<'a> {
             idx,
             values: self.values,
             funcs: self.funcs,
+            blocks: self.blocks,
             globals: vec![],
             typedefs: vec![],
             typevars: vec![],
@@ -67,10 +70,11 @@ impl<'a> RuntimeBuilder<'a> {
 
         body.push(b::Instr::break_(None, None));
 
+        let body_block = self.add_block(body);
         let entry_idx = self.funcs.len();
         self.funcs.push(b::Func {
             name: b::Name::from_ident("entry", b::NameIdentKind::Func, None),
-            body,
+            body: body_block,
             params: vec![],
             ret: entry_v,
             method: None,
@@ -120,8 +124,9 @@ impl<'a> RuntimeBuilder<'a> {
 
         Err(errors::Error::new(
             errors::UnexpectedType::new(
-                vec![str_ty.clone(), array_ty.clone(), array_2d_ty.clone()],
-                main_ty.clone(),
+                vec![&str_ty, &array_ty, &array_2d_ty],
+                main_ty,
+                &modules,
             )
             .into(),
             Some(main_global_def.loc),
@@ -181,13 +186,17 @@ impl<'a> RuntimeBuilder<'a> {
         then_body.push(b::Instr::add(idx_v, one_v, new_idx_v, None));
         then_body.push(b::Instr::continue_(vec![new_idx_v], None));
 
+        let then_block = self.add_block(then_body);
+        let else_block = self.add_block([]);
+        let loop_body = vec![
+            b::Instr::lt(idx_v, len_v, cond_v, None),
+            b::Instr::if_(cond_v, then_block, else_block, None, None),
+            b::Instr::break_(None, None),
+        ];
+        let loop_block = self.add_block(loop_body);
         body.push(b::Instr::loop_(
             vec![(idx_v, zero_v)],
-            vec![
-                b::Instr::lt(idx_v, len_v, cond_v, None),
-                b::Instr::if_(cond_v, then_body, vec![], None, None),
-                b::Instr::break_(None, None),
-            ],
+            loop_block,
             None,
             None,
         ));
@@ -224,22 +233,30 @@ impl<'a> RuntimeBuilder<'a> {
         then_body.push(b::Instr::add(idx_v, one_v, new_idx_v, None));
         then_body.push(b::Instr::continue_(vec![new_idx_v], None));
 
+        let then_block = self.add_block(then_body);
+        let else_block = self.add_block([]);
+        let loop_body = vec![
+            b::Instr::lt(idx_v, len_v, cond_v, None),
+            b::Instr::if_(cond_v, then_block, else_block, None, None),
+            b::Instr::break_(None, None),
+        ];
+        let loop_block = self.add_block(loop_body);
         body.push(b::Instr::loop_(
             vec![(idx_v, zero_v)],
-            vec![
-                b::Instr::lt(idx_v, len_v, cond_v, None),
-                b::Instr::if_(cond_v, then_body, vec![], None, None),
-                b::Instr::break_(None, None),
-            ],
+            loop_block,
             None,
             None,
         ));
     }
 
+    fn add_block(&mut self, body: impl IntoIterator<Item = b::Instr>) -> b::BlockIdx {
+        self.blocks.push(b::Block::new(body.into_iter().collect()));
+        self.blocks.len() - 1
+    }
+
     pub fn add_value(&mut self, ty: b::TypeBody) -> b::ValueIdx {
-        let v = self.values.len();
         self.values
             .push(b::Value::new(b::Type::new(ty, None), None));
-        v
+        self.values.len() - 1
     }
 }

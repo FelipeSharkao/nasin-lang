@@ -10,7 +10,14 @@ use super::instr::*;
 use super::name::*;
 use super::ty::*;
 use super::value::*;
-use crate::utils::{self, SortedMap};
+use crate::utils::SortedMap;
+
+pub type BlockIdx = usize;
+
+#[derive(Debug, Clone, ctor)]
+pub struct Block {
+    pub body: Vec<Instr>,
+}
 
 #[derive(Debug, Clone, ctor)]
 pub struct Module {
@@ -26,6 +33,8 @@ pub struct Module {
     pub globals:  Vec<Global>,
     #[ctor(default)]
     pub funcs:    Vec<Func>,
+    #[ctor(default)]
+    pub blocks:   Vec<Block>,
     pub sources:  HashSet<Source>,
 }
 
@@ -36,104 +45,73 @@ impl Module {
             .enumerate()
             .find(|(_, f)| f.name.last_ident() == name)
     }
+
+    pub fn add_func(&mut self, func: Func) -> usize {
+        self.funcs.push(func);
+        self.funcs.len() - 1
+    }
+
+    pub fn add_value(&mut self, val: Value) -> ValueIdx {
+        self.values.push(val);
+        self.values.len() - 1
+    }
+
+    pub fn add_block(&mut self, body: Vec<Instr>) -> BlockIdx {
+        self.blocks.push(Block::new(body));
+        self.blocks.len() - 1
+    }
+
+    /// Deep-clone a block and all transitively referenced sub-blocks, applying
+    /// a transformer to remap value indices and modify instructions. Returns
+    /// the `BlockIdx` of the newly created root block.
+    pub fn clone_block_tree(
+        &mut self,
+        block_idx: BlockIdx,
+        transformer: &mut impl BlockTransformer,
+    ) -> BlockIdx {
+        let mut new_body = self.blocks[block_idx].body.clone();
+
+        for instr in &mut new_body {
+            match &instr.body {
+                InstrBody::If(cond, then_block, else_block) => {
+                    let new_then = self.clone_block_tree(*then_block, transformer);
+                    let new_else = self.clone_block_tree(*else_block, transformer);
+                    instr.body = InstrBody::If(*cond, new_then, new_else);
+                }
+                InstrBody::Loop(_, body_block) => {
+                    let new_body_block = self.clone_block_tree(*body_block, transformer);
+                    match &mut instr.body {
+                        InstrBody::Loop(_, block) => *block = new_body_block,
+                        _ => unreachable!(),
+                    }
+                }
+                _ => {}
+            }
+
+            transformer.remap_instr(self, instr);
+        }
+
+        self.add_block(new_body)
+    }
 }
 
+pub trait BlockTransformer {
+    fn remap_instr(&mut self, module: &mut Module, instr: &mut Instr);
+}
+
+/// Minimal flat-reference format for quick debugging. The primary display path
+/// is `printer::ModulePrinter` which inlines blocks and resolves type names.
 impl Display for Module {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "module {}:", self.idx)?;
-
-        for (i, value) in self.values.iter().enumerate() {
-            write!(f, "\n    v{i}: {}", &value.ty)?;
-            if let Some(redirects_to) = &value.redirects_to {
-                write!(f, " = v{redirects_to}")?;
-            } else if value.same_type_of.len() > 0 {
-                write!(
-                    f,
-                    ", type of {}",
-                    utils::join(
-                        " | ",
-                        value.same_type_of.iter().map(|v| format!("v{v}"))
-                    )
-                )?;
-            }
-            if let Some(loc) = &value.loc {
-                write!(f, " {}", loc)?;
-            }
-        }
-
-        for (i, typedef) in self.typedefs.iter().enumerate() {
-            write!(f, "\n    type {i} {} {}", &typedef.name, &typedef.loc)?;
-
-            match &typedef.body {
-                TypeDefBody::Record(v) => {
-                    write!(f, " record:")?;
-                    if v.ifaces.len() > 0 {
-                        write!(f, "\n        implements")?;
-                        for iface in &v.ifaces {
-                            write!(f, " ({}-{})", iface.0, iface.1)?;
-                        }
-                    }
-                    for (name, field) in &v.fields {
-                        write!(f, "\n        {name}: {field}")?;
-                    }
-                    for (name, method) in &v.methods {
-                        write!(f, "\n        {name}(): {method}")?;
-                    }
-                }
-                TypeDefBody::Interface(v) => {
-                    write!(f, " interface:")?;
-                    for (name, method) in &v.methods {
-                        write!(f, "\n        {name}(): {method}")?;
-                    }
-                }
-            }
-        }
-
-        for (i, typevar) in self.typevars.iter().enumerate() {
-            write!(f, "\n    typevar {i} {} {}", &typevar.name, &typevar.loc)?;
-        }
-
-        for (i, global) in self.globals.iter().enumerate() {
-            write!(
-                f,
-                "\n    global {i} {} {} -> v{}",
-                &global.name, global.loc, global.value
-            )?;
-            if global.body.len() > 0 {
-                write!(f, ":\n{}", utils::indented(8, &global.body))?;
-            }
-        }
-
-        for (i, func) in self.funcs.iter().enumerate() {
-            write!(f, "\n    func {i} {}", &func.name)?;
-            if let Some(loc) = &func.loc {
-                write!(f, " {}", loc)?;
-            }
-
-            if func.params.len() > 0 {
-                write!(f, " (params")?;
-                for v in &func.params {
-                    write!(f, " v{v}")?;
-                }
-                write!(f, ")")?;
-            }
-
-            write!(f, " -> v{}", &func.ret)?;
-
-            if let Some((mod_idx, ty_idx, name)) = &func.method {
-                write!(f, " (method {mod_idx}-{ty_idx} .{name})")?;
-            }
-
-            if let Some(Extern { name }) = &func.extrn {
-                write!(f, " (extern {})", utils::encode_string_lit(name))?;
-            }
-
-            if func.body.len() > 0 {
-                write!(f, ":\n{}", utils::indented(8, &func.body))?;
-            }
-        }
-
-        Ok(())
+        write!(
+            f,
+            "module {} ({} values, {} globals, {} funcs, {} blocks)",
+            self.idx,
+            self.values.len(),
+            self.globals.len(),
+            self.funcs.len(),
+            self.blocks.len(),
+        )
     }
 }
 
@@ -163,7 +141,7 @@ impl TypeDef {
 pub struct Global {
     pub name:  Name,
     pub value: ValueIdx,
-    pub body:  Vec<Instr>,
+    pub body:  BlockIdx,
     pub loc:   Loc,
 }
 
@@ -172,7 +150,7 @@ pub struct Func {
     pub name: Name,
     pub params: Vec<ValueIdx>,
     pub ret: ValueIdx,
-    pub body: Vec<Instr>,
+    pub body: BlockIdx,
     pub method: Option<(usize, usize, String)>,
     pub extrn: Option<Extern>,
     pub is_entry: bool,

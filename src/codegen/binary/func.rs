@@ -99,13 +99,14 @@ impl<'a> FuncCodegen<'a, '_> {
     }
 
     #[tracing::instrument(skip_all)]
-    pub fn add_body(
+    pub fn add_block(
         &mut self,
-        body: impl IntoIterator<Item = &'a b::Instr>,
+        block_idx: b::BlockIdx,
         mod_idx: usize,
         result_policy: ResultPolicy,
     ) {
-        for instr in body {
+        let body = self.ctx.modules[mod_idx].blocks[block_idx].body.to_vec();
+        for instr in &body {
             self.add_instr(instr, mod_idx, result_policy);
             if self.scopes.last().is_never()
                 || matches!(&instr.body, b::InstrBody::Break(..))
@@ -118,7 +119,7 @@ impl<'a> FuncCodegen<'a, '_> {
     #[tracing::instrument(skip(self))]
     pub fn add_instr(
         &mut self,
-        instr: &'a b::Instr,
+        instr: &b::Instr,
         mod_idx: usize,
         result_policy: ResultPolicy,
     ) {
@@ -269,10 +270,16 @@ impl<'a> FuncCodegen<'a, '_> {
                     ),
                 );
             }
-            b::InstrBody::If(cond, then_, else_) => {
-                if then_.len() == 0 && else_.len() == 0 {
+            b::InstrBody::If(cond, then_block_idx, else_block_idx) => {
+                let then_body = &self.ctx.modules[mod_idx].blocks[*then_block_idx].body;
+                let else_body = &self.ctx.modules[mod_idx].blocks[*else_block_idx].body;
+
+                if then_body.len() == 0 && else_body.len() == 0 {
                     return;
                 }
+
+                let then_not_empty = then_body.len() > 0;
+                let else_not_empty = else_body.len() > 0;
 
                 let cond = self.use_value_by_value(mod_idx, *cond);
                 assert!(cond.len() == 1);
@@ -280,12 +287,12 @@ impl<'a> FuncCodegen<'a, '_> {
 
                 let builder = expect_builder!(self);
 
-                let then_block = if then_.len() > 0 {
+                let then_block = if then_not_empty {
                     Some(builder.create_block())
                 } else {
                     None
                 };
-                let else_block = if else_.len() > 0 {
+                let else_block = if else_not_empty {
                     Some(builder.create_block())
                 } else {
                     None
@@ -329,7 +336,7 @@ impl<'a> FuncCodegen<'a, '_> {
 
                 if let Some(then_block) = then_block {
                     expect_builder!(self).switch_to_block(then_block);
-                    self.add_body(then_, mod_idx, ResultPolicy::Normal);
+                    self.add_block(*then_block_idx, mod_idx, ResultPolicy::Normal);
                 }
 
                 self.scopes.branch();
@@ -337,7 +344,7 @@ impl<'a> FuncCodegen<'a, '_> {
 
                 if let Some(else_block) = else_block {
                     expect_builder!(self).switch_to_block(else_block);
-                    self.add_body(else_, mod_idx, ResultPolicy::Normal);
+                    self.add_block(*else_block_idx, mod_idx, ResultPolicy::Normal);
                 }
 
                 let (scope, _) = self.scopes.end();
@@ -346,7 +353,7 @@ impl<'a> FuncCodegen<'a, '_> {
                     expect_builder!(self).switch_to_block(next_block);
                 }
             }
-            b::InstrBody::Loop(inputs, body) => {
+            b::InstrBody::Loop(inputs, body_block_idx) => {
                 let loop_block = {
                     let builder = expect_builder!(self);
                     builder.create_block()
@@ -409,7 +416,7 @@ impl<'a> FuncCodegen<'a, '_> {
                 scope.is_loop = true;
 
                 builder.switch_to_block(loop_block);
-                self.add_body(body, mod_idx, ResultPolicy::Normal);
+                self.add_block(*body_block_idx, mod_idx, ResultPolicy::Normal);
 
                 let (scope, _) = self.scopes.end();
 
@@ -985,7 +992,7 @@ impl<'a> FuncCodegen<'a, '_> {
 
     pub fn value_from_instr(
         &mut self,
-        instr: &'a b::Instr,
+        instr: &b::Instr,
         mod_idx: usize,
     ) -> Option<types::RuntimeValue> {
         utils::replace_with(self, |mut this| {
@@ -1164,7 +1171,7 @@ impl<'a> FuncCodegen<'a, '_> {
     fn create_array_inst(
         &mut self,
         mod_idx: usize,
-        instr: &'a b::Instr,
+        instr: &b::Instr,
         vs: &Vec<usize>,
     ) -> Option<types::RuntimeValue> {
         let data = self.ctx.data_for_tuple(
@@ -1430,7 +1437,7 @@ impl<'a> FuncCodegen<'a, '_> {
     fn create_number_inst(
         &mut self,
         mod_idx: usize,
-        instr: &'a b::Instr,
+        instr: &b::Instr,
         n: &String,
     ) -> types::RuntimeValue {
         let module = &self.ctx.modules[mod_idx];

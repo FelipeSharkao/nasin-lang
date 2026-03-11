@@ -78,13 +78,14 @@ impl<'a> CodegenContext<'a> {
         let module = &self.modules[mod_idx];
         let global = &module.globals[idx];
         let global_value = &module.values[global.value];
+        let body = module.blocks[global.body].body.to_vec();
 
         let symbol_name = NameMangler::new(self.modules).mangle(&global.name, []);
 
         let (value, is_const) = utils::replace_with(self, |s| {
             let mut codegen = FuncCodegen::new(s, None, true);
 
-            for instr in &global.body {
+            for instr in &body {
                 if let b::InstrBody::Break(v) = &instr.body {
                     if let Some(v) = v {
                         codegen.values.insert(

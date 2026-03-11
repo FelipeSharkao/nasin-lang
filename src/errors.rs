@@ -86,10 +86,22 @@ pub struct TypeNotFound {
     pub ident: String,
 }
 
-#[derive(Debug, Clone, ctor)]
+#[derive(Debug, Clone)]
 pub struct UnexpectedType {
-    pub expected: Vec<b::Type>,
-    pub actual:   b::Type,
+    pub expected: Vec<String>,
+    pub actual:   String,
+}
+
+impl UnexpectedType {
+    pub fn new(expected: Vec<&b::Type>, actual: &b::Type, modules: &[b::Module]) -> Self {
+        Self {
+            expected: expected
+                .iter()
+                .map(|t| b::printer::format_type_body(&t.body, modules))
+                .collect(),
+            actual:   b::printer::format_type_body(&actual.body, modules),
+        }
+    }
 }
 
 impl Display for UnexpectedType {
@@ -98,36 +110,63 @@ impl Display for UnexpectedType {
             write!(
                 f,
                 "Expected type {}, but found {} instead",
-                &self.expected[0].body, &self.actual.body,
+                &self.expected[0], &self.actual,
             )?;
         } else {
             write!(
                 f,
                 "Unexpected type {}. Expected one of:\n{}",
-                &self.actual.body,
-                utils::indented(
-                    2,
-                    self.expected.iter().map(|t| format!("- {}", &t.body))
-                ),
+                &self.actual,
+                utils::indented(2, self.expected.iter().map(|t| format!("- {t}"))),
             )?;
         }
         Ok(())
     }
 }
 
-#[derive(Debug, Clone, Display, ctor)]
-#[display(
-    "All results of the expression should have the same type\n{}",
-    utils::indented(2, types.iter().map(|t| format!("- found {t}"))),
-)]
+#[derive(Debug, Clone)]
 pub struct TypeMisatch {
-    pub types: Vec<b::Type>,
+    pub types: Vec<String>,
 }
 
-#[derive(Debug, Clone, Display, ctor)]
-#[display("`{ty}` is not an interface type")]
+impl TypeMisatch {
+    pub fn new(types: Vec<&b::Type>, modules: &[b::Module]) -> Self {
+        Self {
+            types: types
+                .iter()
+                .map(|t| b::printer::format_type_body(&t.body, modules))
+                .collect(),
+        }
+    }
+}
+
+impl Display for TypeMisatch {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "All results of the expression should have the same type\n{}",
+            utils::indented(2, self.types.iter().map(|t| format!("- found {t}"))),
+        )
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct TypeNotInterface {
-    pub ty: b::Type,
+    pub ty: String,
+}
+
+impl TypeNotInterface {
+    pub fn new(ty: &b::Type, modules: &[b::Module]) -> Self {
+        Self {
+            ty: b::printer::format_type_body(&ty.body, modules),
+        }
+    }
+}
+
+impl Display for TypeNotInterface {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "`{}` is not an interface type", &self.ty)
+    }
 }
 
 #[derive(Debug, Clone, Display, ctor)]

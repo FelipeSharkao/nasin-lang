@@ -10,15 +10,15 @@ use self::config::BuildConfig;
 use self::errors::CompilerError;
 use self::utils::cmd;
 
-pub mod bytecode;
-pub mod codegen;
-pub mod config;
-pub mod context;
-pub mod errors;
-pub mod parser;
-pub mod sources;
-pub mod transform;
-pub mod typecheck;
+mod bytecode;
+mod codegen;
+mod config;
+mod context;
+mod errors;
+mod parser;
+mod sources;
+mod transform;
+mod typecheck;
 mod utils;
 
 #[derive(Args, Debug)]
@@ -118,7 +118,7 @@ pub fn build_maybe_run(
         run,
     });
 
-    let Ok(src_idx) = ctx.preload(file) else {
+    let Ok(src_idx) = ctx.open(file) else {
         return Err(ctx.into_compile_error());
     };
 
@@ -126,21 +126,17 @@ pub fn build_maybe_run(
         return Err(ctx.into_compile_error());
     }
 
-    ctx.parse(src_idx, true);
+    ctx.parse(src_idx);
     if ctx.has_errors() {
         if ctx.cfg.dump_bytecode {
-            for module in &*ctx.lock_modules() {
-                println!("{module}");
-            }
+            bytecode::printer::print_modules(&ctx.lock_modules());
         }
 
         return Err(ctx.into_compile_error());
     }
 
     if ctx.cfg.dump_bytecode {
-        for module in &*ctx.lock_modules() {
-            println!("{module}");
-        }
+        bytecode::printer::print_modules(&ctx.lock_modules());
     }
 
     let code_transform = transform::CodeTransform::new(&ctx);
@@ -150,9 +146,7 @@ pub fn build_maybe_run(
     code_transform.apply(transform::FinishDispatchStep::new(&ctx));
 
     if ctx.cfg.dump_transformed_bytecode {
-        for module in &*ctx.lock_modules() {
-            println!("{module}");
-        }
+        bytecode::printer::print_modules(&ctx.lock_modules());
     }
 
     ctx.compile();

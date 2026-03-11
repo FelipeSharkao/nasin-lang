@@ -1,13 +1,16 @@
 use std::borrow::Cow;
+use std::collections::HashMap;
 use std::fmt;
 use std::hash::Hash;
 
 use derive_ctor::ctor;
 use derive_more::{Display, From};
 use derive_setters::Setters;
+use genawaiter::rc::r#gen as rc_gen;
+use genawaiter::yield_;
 use itertools::{Itertools, chain, izip};
 
-use super::{Loc, Module, TypeDef, TypeDefBody};
+use super::{Loc, Module, TypeDef, TypeDefBody, TypeVarIdx};
 use crate::utils::{self, unordered};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, From)]
@@ -567,6 +570,48 @@ impl Type {
             TypeBody::Ptr(Some(elem_ty)) => elem_ty.contains_typevar(),
             _ => false,
         }
+    }
+
+    pub fn substitute_typevar<'m>(
+        &self,
+        substitutions: &'m HashMap<TypeVarIdx, Type>,
+    ) -> Option<Type> {
+        let TypeBody::TypeVar(typevar) = &self.body else {
+            return None;
+        };
+        substitutions.get(&typevar.typevar_idx).cloned()
+    }
+
+    pub fn typevars(&self) -> impl Iterator<Item = TypeVarIdx> {
+        rc_gen!({
+            match &self.body {
+                TypeBody::TypeVar(typevar) => yield_!(typevar.typevar_idx),
+                TypeBody::Func(func_ty) => {
+                    for typevar in func_ty.ret.typevars() {
+                        yield_!(typevar);
+                    }
+                    for param in func_ty.params.iter() {
+                        for typevar in param.typevars() {
+                            yield_!(typevar);
+                        }
+                    }
+                }
+                TypeBody::Array(elem_ty) => {
+                    for typevar in elem_ty.typevars() {
+                        yield_!(typevar);
+                    }
+                }
+                TypeBody::Ptr(elem_ty) => {
+                    if let Some(elem_ty) = elem_ty {
+                        for typevar in elem_ty.typevars() {
+                            yield_!(typevar);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        })
+        .into_iter()
     }
 }
 impl PartialEq for Type {

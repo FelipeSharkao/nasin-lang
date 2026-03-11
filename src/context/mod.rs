@@ -49,7 +49,7 @@ impl BuildContext {
         errors::CompilerError::new(Some(source_manager), errors)
     }
 
-    pub fn parse(&self, src_idx: usize, is_entry: bool) -> usize {
+    pub fn parse(&self, src_idx: usize) -> usize {
         let mut ts_parser = ts::Parser::new();
         ts_parser
             .set_language(&tree_sitter_nasin::LANGUAGE.into())
@@ -81,8 +81,7 @@ impl BuildContext {
             mod_idx
         };
 
-        let mut module_parser =
-            parser::ModuleParser::new(self, src_idx, mod_idx, is_entry);
+        let mut module_parser = parser::ModuleParser::new(self, src_idx, mod_idx);
         if let Some(core_mod_idx) = self.core_mod_idx {
             module_parser.open_module(core_mod_idx);
         }
@@ -108,11 +107,11 @@ impl BuildContext {
             return false;
         };
 
-        let Ok(core_src_idx) = self.preload(core) else {
+        let Ok(core_src_idx) = self.open(core) else {
             return false;
         };
 
-        self.core_mod_idx = Some(self.parse(core_src_idx, false));
+        self.core_mod_idx = Some(self.parse(core_src_idx));
         true
     }
 
@@ -127,7 +126,7 @@ impl BuildContext {
 
         if self.cfg.dump_bytecode {
             if let Some((mod_idx, _)) = rt_entry {
-                println!("{}", &modules[mod_idx]);
+                b::printer::print_module(&modules[mod_idx], &modules);
             }
         }
 
@@ -148,16 +147,6 @@ impl BuildContext {
 
     pub fn open(&mut self, path: PathBuf) -> Result<usize, ()> {
         match self.source_manager.open(path) {
-            Ok(idx) => Ok(idx),
-            Err(err) => {
-                self.push_error(err);
-                Err(())
-            }
-        }
-    }
-
-    pub fn preload(&mut self, path: PathBuf) -> Result<usize, ()> {
-        match self.source_manager.preload(path) {
             Ok(idx) => Ok(idx),
             Err(err) => {
                 self.push_error(err);

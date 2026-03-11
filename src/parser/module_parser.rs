@@ -26,13 +26,14 @@ pub struct ModuleParser<'a, 't> {
     #[ctor(default)]
     pub values: Vec<b::Value>,
     #[ctor(default)]
+    pub blocks: Vec<b::Block>,
+    #[ctor(default)]
     pub idents: HashMap<String, ValueRef>,
     #[ctor(default)]
     pub typevar_defs: Vec<b::TypeVarDef>,
     pub ctx: &'a context::BuildContext,
     pub src_idx: usize,
     pub mod_idx: usize,
-    pub is_entry: bool,
 }
 
 impl<'a, 't> ModuleParser<'a, 't> {
@@ -45,7 +46,9 @@ impl<'a, 't> ModuleParser<'a, 't> {
             let value_ref = value_parser.add_expr_node(value_node, true);
             let result = value_parser.use_value_ref(&value_ref);
 
-            (self, self.globals[i].global.body) = value_parser.finish(result);
+            let body_instrs;
+            (self, body_instrs) = value_parser.finish(result);
+            self.globals[i].global.body = self.add_block(body_instrs);
             let global = &self.globals[i];
             if global.global.value == UNDEF_VALUE {
                 let ty = global.ty.clone();
@@ -66,7 +69,9 @@ impl<'a, 't> ModuleParser<'a, 't> {
                 let value_ref = value_parser.add_expr_node(value_node, true);
                 let result = value_parser.use_value_ref(&value_ref);
 
-                (self, self.funcs[i].func.body) = value_parser.finish(result);
+                let body_instrs;
+                (self, body_instrs) = value_parser.finish(result);
+                self.funcs[i].func.body = self.add_block(body_instrs);
             };
 
             let func = &self.funcs[i];
@@ -84,6 +89,7 @@ impl<'a, 't> ModuleParser<'a, 't> {
         module.typevars = self.typevar_defs;
         module.globals = self.globals.into_iter().map(|x| x.global).collect();
         module.funcs = self.funcs.into_iter().map(|x| x.func).collect();
+        module.blocks = self.blocks;
         module.values = self.values;
     }
 
@@ -205,8 +211,9 @@ impl<'a, 't> ModuleParser<'a, 't> {
         for (i, item) in enumerate(&module.globals) {
             let mut value =
                 ValueRef::new(ValueRefBody::Global(mod_idx, i), Some(item.loc));
-            if item.body.len() == 1 {
-                match &item.body[0].body {
+            let body = &module.blocks[item.body].body;
+            if body.len() == 1 {
+                match &body[0].body {
                     b::InstrBody::CreateNumber(v) => {
                         value.body = ValueRefBody::Number(v.clone());
                     }
@@ -224,6 +231,11 @@ impl<'a, 't> ModuleParser<'a, 't> {
     pub fn create_value(&mut self, ty: b::Type, loc: Option<b::Loc>) -> b::ValueIdx {
         self.values.push(b::Value::new(ty, loc));
         self.values.len() - 1
+    }
+
+    pub fn add_block(&mut self, body: impl IntoIterator<Item = b::Instr>) -> b::BlockIdx {
+        self.blocks.push(b::Block::new(body.into_iter().collect()));
+        self.blocks.len() - 1
     }
 
     fn add_func(
@@ -285,12 +297,11 @@ impl<'a, 't> ModuleParser<'a, 't> {
             }
         }
 
-        let mut generics = self.collect_generics(&ret_ty);
+        let mut generics = ret_ty.typevars().collect_vec();
         for &param_idx in &params {
             let param_ty = &self.values[param_idx].ty;
-            generics.extend(self.collect_generics(param_ty));
+            generics.extend(param_ty.typevars());
         }
-        let generics: Vec<b::TypeVarIdx> = generics.into_iter().collect();
 
         let loc = b::Loc::from_node(self.src_idx, &node);
         let func = b::Func {
@@ -301,7 +312,7 @@ impl<'a, 't> ModuleParser<'a, 't> {
             extrn,
             is_entry: false,
             is_virt,
-            body: vec![],
+            body: self.add_block([]),
             loc: Some(loc),
             generics,
             generic_instantiations: HashMap::new(),
@@ -334,7 +345,7 @@ impl<'a, 't> ModuleParser<'a, 't> {
         let global = b::Global {
             name,
             value: UNDEF_VALUE,
-            body: vec![],
+            body: self.add_block([]),
             loc: b::Loc::from_node(self.src_idx, &node),
         };
         self.idents.insert(
@@ -353,35 +364,6 @@ impl<'a, 't> ModuleParser<'a, 't> {
         if is_main {
             let mut main = self.ctx.main.write().unwrap();
             *main = Some((self.mod_idx, self.globals.len() - 1));
-        }
-    }
-
-    fn collect_generics(&self, ty: &b::Type) -> Vec<b::TypeVarIdx> {
-        let mut generics = Vec::new();
-        self.collect_generics_rec(ty, &mut generics);
-        generics
-    }
-
-    fn collect_generics_rec(&self, ty: &b::Type, generics: &mut Vec<b::TypeVarIdx>) {
-        match &ty.body {
-            b::TypeBody::TypeVar(tv) => {
-                if !generics.contains(&tv.typevar_idx) {
-                    generics.push(tv.typevar_idx);
-                }
-            }
-            b::TypeBody::Func(func_ty) => {
-                self.collect_generics_rec(&func_ty.ret, generics);
-                for param in &func_ty.params {
-                    self.collect_generics_rec(param, generics);
-                }
-            }
-            b::TypeBody::Array(elem_ty) => {
-                self.collect_generics_rec(elem_ty, generics);
-            }
-            b::TypeBody::Ptr(Some(elem_ty)) => {
-                self.collect_generics_rec(elem_ty, generics);
-            }
-            _ => {}
         }
     }
 }

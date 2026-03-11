@@ -74,10 +74,30 @@ impl Name {
         Self { nodes, loc: None }
     }
 
-    /// Create a new name by appending a new type parameter list to the end. If the last
-    /// node is a type parameter, it will inserted at the end of the list instead of
-    /// creating a new type parameter list.
+    /// Creates a new name by appending a new type parameter list to the end. If the last
+    /// node is a type parameter, it will be replaced instead of creating a new type
+    /// parameter list.
     pub fn with_type_params(
+        &self,
+        tys: impl IntoIterator<Item = Type>,
+        loc: Option<Loc>,
+    ) -> Self {
+        let mut nodes = self.nodes.clone();
+        if let Some(NameNode::TypeParams(params)) = nodes.last_mut() {
+            params.params.splice(0..params.params.len(), tys);
+        } else {
+            nodes.push(NameTypeParams::new(tys.into_iter().collect()).into());
+        }
+        Self {
+            nodes,
+            loc: loc.or(self.loc),
+        }
+    }
+
+    /// Create a new name by appending a new type parameter list to the end. If the last
+    /// node is a type parameter, it will be inserted at the end of the list instead of
+    /// creating a new type parameter list.
+    pub fn with_new_type_params(
         &self,
         tys: impl IntoIterator<Item = Type>,
         loc: Option<Loc>,

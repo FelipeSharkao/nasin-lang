@@ -5,7 +5,7 @@ use derive_ctor::ctor;
 use derive_more::derive::Debug;
 use itertools::enumerate;
 
-use super::{Loc, Type, ValueIdx};
+use super::{BlockIdx, Loc, Type, ValueIdx};
 use crate::utils;
 
 #[derive(Debug, Clone)]
@@ -39,12 +39,8 @@ pub enum InstrBody {
     Call(usize, usize, Vec<ValueIdx>),
     IndirectCall(ValueIdx, Vec<ValueIdx>),
 
-    If(
-        ValueIdx,
-        #[debug("...")] Vec<Instr>,
-        #[debug("...")] Vec<Instr>,
-    ),
-    Loop(Vec<(ValueIdx, ValueIdx)>, #[debug("...")] Vec<Instr>),
+    If(ValueIdx, BlockIdx, BlockIdx),
+    Loop(Vec<(ValueIdx, ValueIdx)>, BlockIdx),
     Break(Option<ValueIdx>),
     Continue(Vec<ValueIdx>),
 
@@ -142,22 +138,13 @@ impl InstrBody {
             | InstrBody::CreateRecord(_)
             | InstrBody::GetGlobal(..)
             | InstrBody::CompileError => {}
-            InstrBody::If(cond, then_body, else_body) => {
+            InstrBody::If(cond, _, _) => {
                 replace(cond);
-                for instr in then_body {
-                    instr.body.remap_values(remap);
-                }
-                for instr in else_body {
-                    instr.body.remap_values(remap);
-                }
             }
-            InstrBody::Loop(inits, body) => {
+            InstrBody::Loop(inits, _) => {
                 for (loop_var, init_val) in inits {
                     replace(loop_var);
                     replace(init_val);
-                }
-                for instr in body {
-                    instr.body.remap_values(remap);
                 }
             }
             InstrBody::CreateArray(values) => {
@@ -225,21 +212,15 @@ impl Display for InstrBody {
                     write!(f, " v{arg}")?;
                 }
             }
-            InstrBody::If(v, then_, else_) => {
-                write!(f, "if v{v}")?;
-                if then_.len() > 0 {
-                    write!(f, " then\n{}", utils::indented(4, then_))?;
-                }
-                if else_.len() > 0 {
-                    write!(f, "\nelse\n{}", utils::indented(4, else_))?;
-                }
+            InstrBody::If(v, then_block, else_block) => {
+                write!(f, "if v{v} then block:{then_block} else block:{else_block}")?;
             }
-            InstrBody::Loop(inputs, body) => {
+            InstrBody::Loop(inputs, body_block) => {
                 write!(f, "loop")?;
                 for (v, initial_v) in inputs {
                     write!(f, " v{v}=v{initial_v}")?;
                 }
-                write!(f, " where\n{}", utils::indented(4, body))?;
+                write!(f, " block:{body_block}")?;
             }
             InstrBody::Break(v) => {
                 write!(f, "break")?;
@@ -328,21 +309,21 @@ impl Instr {
 
     pub fn if_(
         cond: ValueIdx,
-        then_body: Vec<Instr>,
-        else_body: Vec<Instr>,
+        then_block: BlockIdx,
+        else_block: BlockIdx,
         res: Option<ValueIdx>,
         loc: Option<Loc>,
     ) -> Self {
-        Self::new(InstrBody::If(cond, then_body, else_body), loc).with_results(res)
+        Self::new(InstrBody::If(cond, then_block, else_block), loc).with_results(res)
     }
 
     pub fn loop_(
         inputs: Vec<(ValueIdx, ValueIdx)>,
-        body: Vec<Instr>,
+        body_block: BlockIdx,
         res: Option<ValueIdx>,
         loc: Option<Loc>,
     ) -> Self {
-        Self::new(InstrBody::Loop(inputs, body), loc).with_results(res)
+        Self::new(InstrBody::Loop(inputs, body_block), loc).with_results(res)
     }
 
     pub fn break_(v: Option<ValueIdx>, loc: Option<Loc>) -> Self {

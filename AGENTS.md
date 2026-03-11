@@ -84,6 +84,8 @@ gdb -batch -ex "info functions" <binary>
 - The codebase uses column-aligned struct fields (padded with spaces). Match the existing
   alignment style when editing structs so that the formatter doesn't introduce unnecessary
   diffs.
+- Avoid one-line wrapper functions/methods. Prefer inlining the expression at call sites
+  unless the one-liner hides genuinely confusing logic.
 
 ## Lock Discipline
 
