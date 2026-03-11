@@ -71,10 +71,9 @@ impl<'a, 't> ExprParser<'a, 't> {
                 .collect();
 
             let loc = instrs[0].loc;
-            let loop_instr = b::Instr::new(
-                b::InstrBody::Loop(loop_inputs, mem::replace(&mut instrs, vec![])),
-                loc,
-            );
+            let body_block = self.module.add_block(mem::replace(&mut instrs, vec![]));
+            let loop_instr =
+                b::Instr::new(b::InstrBody::Loop(loop_inputs, body_block), loc);
 
             if !scope.is_never() {
                 let loop_res = self.module.create_value(b::Type::unknown(None), loc);
@@ -291,8 +290,11 @@ impl<'a, 't> ExprParser<'a, 't> {
 
                 let (scope, else_instrs) = self.scopes.end();
 
+                let then_block = self.module.add_block(then_instrs);
+                let else_block = self.module.add_block(else_instrs);
+
                 let instr = b::Instr::new(
-                    b::InstrBody::If(cond_v, then_instrs, else_instrs),
+                    b::InstrBody::If(cond_v, then_block, else_block),
                     Some(loc),
                 );
 

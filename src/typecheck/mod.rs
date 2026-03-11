@@ -76,13 +76,13 @@ impl<'a> TypeChecker<'a> {
 
         for i in 0..globals_len {
             tracing::trace!(i, "adding global");
-            let (body, value) = {
+            let (block_idx, value) = {
                 let module = &self.ctx.lock_modules()[self.mod_idx];
                 let global = &module.globals[i];
-                (global.body.clone(), global.value)
+                (global.body, global.value)
             };
             let mut scopes = utils::ScopeStack::new(ScopePayload::new());
-            if let Some(result) = self.add_body(body, &mut scopes, None) {
+            if let Some(result) = self.add_block(block_idx, &mut scopes, None) {
                 self.merge_types([&value, &result]);
             }
         }
@@ -92,7 +92,7 @@ impl<'a> TypeChecker<'a> {
 
     #[tracing::instrument(level = "trace", skip(self))]
     fn add_func(&mut self, idx: usize) {
-        let (body, ret) = {
+        let (block_idx, ret) = {
             let modules = &self.ctx.lock_modules();
             let func = &modules[self.mod_idx].funcs[idx];
 
@@ -130,21 +130,26 @@ impl<'a> TypeChecker<'a> {
                 }
             }
 
-            (func.body.clone(), func.ret)
+            (func.body, func.ret)
         };
         let mut scopes = utils::ScopeStack::new(ScopePayload::new());
-        if let Some(result) = self.add_body(body, &mut scopes, Some(idx)) {
+        if let Some(result) = self.add_block(block_idx, &mut scopes, Some(idx)) {
             self.merge_types([&ret, &result]);
         }
     }
 
     #[tracing::instrument(level = "trace", skip_all)]
-    fn add_body(
+    fn add_block(
         &mut self,
-        body: Vec<b::Instr>,
+        block_idx: b::BlockIdx,
         scopes: &mut utils::ScopeStack<ScopePayload>,
         func_idx: Option<usize>,
     ) -> Option<b::ValueIdx> {
+        let body = {
+            let modules = &self.ctx.lock_modules();
+            modules[self.mod_idx].block(block_idx).to_vec()
+        };
+
         if body.len() == 0 {
             return None;
         }
@@ -410,7 +415,8 @@ impl<'a> TypeChecker<'a> {
                     Constraint::new(ConstraintKind::ReturnOf(*func), instr.loc),
                 );
             }
-            b::InstrBody::If(cond_v, then_, else_) => {
+            b::InstrBody::If(cond_v, then_block, else_block) => {
+                let (then_block, else_block) = (*then_block, *else_block);
                 self.add_constraint(
                     *cond_v,
                     Constraint::new(
@@ -420,22 +426,19 @@ impl<'a> TypeChecker<'a> {
                 );
 
                 scopes.begin(ScopePayload::new());
-                if let Some(then_v) =
-                    self.add_body(std::mem::replace(then_, vec![]), scopes, func_idx)
-                {
+                if let Some(then_v) = self.add_block(then_block, scopes, func_idx) {
                     self.merge_types([&then_v, &instr.results[0]]);
                 }
 
                 scopes.branch();
-                if let Some(else_v) =
-                    self.add_body(std::mem::replace(else_, vec![]), scopes, func_idx)
-                {
+                if let Some(else_v) = self.add_block(else_block, scopes, func_idx) {
                     self.merge_types([&else_v, &instr.results[0]]);
                 }
 
                 scopes.end();
             }
-            b::InstrBody::Loop(inputs, body) => {
+            b::InstrBody::Loop(inputs, body_block) => {
+                let body_block = *body_block;
                 let scope = scopes.begin(ScopePayload::new());
                 scope.is_loop = true;
                 for (loop_v, initial_v) in &*inputs {
@@ -443,9 +446,7 @@ impl<'a> TypeChecker<'a> {
                     scope.loop_args.push(*loop_v);
                 }
 
-                if let Some(result) =
-                    self.add_body(std::mem::replace(body, vec![]), scopes, func_idx)
-                {
+                if let Some(result) = self.add_block(body_block, scopes, func_idx) {
                     self.merge_types([&result, &instr.results[0]]);
                 }
 
@@ -812,9 +813,10 @@ impl<'a> TypeChecker<'a> {
 
             if !union_success {
                 success = false;
+                let modules = self.ctx.lock_modules();
                 self.ctx.push_error(errors::Error::new(
-                    errors::TypeMisatch::new(tys).into(),
-                    self.ctx.lock_modules()[self.mod_idx].values[idx].loc,
+                    errors::TypeMisatch::new(tys.iter().collect(), &modules).into(),
+                    modules[self.mod_idx].values[idx].loc,
                 ));
             }
         } else {
@@ -1033,11 +1035,12 @@ impl<'a> TypeChecker<'a> {
                     }
                 })
                 .collect_vec();
-            for (merge_with, loc) in error_tys {
+            for (merge_with, loc) in &error_tys {
+                let modules = self.ctx.lock_modules();
                 self.ctx.push_error(errors::Error::new(
-                    errors::UnexpectedType::new(vec![merge_with], result_ty.clone())
+                    errors::UnexpectedType::new(vec![merge_with], &result_ty, &modules)
                         .into(),
-                    loc,
+                    *loc,
                 ));
             }
         }

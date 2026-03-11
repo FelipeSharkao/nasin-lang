@@ -1,7 +1,7 @@
 use derive_ctor::ctor;
 use itertools::{Itertools, enumerate, izip};
 
-use super::{CodeTransformCursor, CodeTransformStep};
+use super::CodeTransformStep;
 use crate::bytecode as b;
 use crate::context::BuildContext;
 
@@ -12,10 +12,10 @@ pub struct FinishDispatchStep<'a> {
 
 impl<'a> CodeTransformStep for FinishDispatchStep<'a> {
     #[tracing::instrument(skip(self))]
-    fn transform(&mut self, mod_idx: usize, cursor: &mut dyn CodeTransformCursor) {
+    fn transform(&mut self, mod_idx: usize, cursor: &mut b::BlockCursor) {
         let (params, loc) = {
             let modules = &self.ctx.lock_modules();
-            let instr = cursor.get_instr(&modules);
+            let instr = cursor.instr(&modules[mod_idx]);
             let params = match &instr.body {
                 b::InstrBody::Call(call_mod_idx, func_idx, args) => {
                     let args_types = args.iter().map(|v| &modules[mod_idx].values[*v].ty);
@@ -67,7 +67,7 @@ impl<'a> CodeTransformStep for FinishDispatchStep<'a> {
                 b::Value::new(ty, loc)
             }));
 
-            match &mut cursor.get_instr_mut(modules).body {
+            match &mut cursor.instr_mut(&mut modules[mod_idx]).body {
                 b::InstrBody::Call(_, _, args) | b::InstrBody::IndirectCall(_, args) => {
                     for (i, (n, ..)) in params.iter().enumerate() {
                         args[*n] = value_start + i;
@@ -78,7 +78,7 @@ impl<'a> CodeTransformStep for FinishDispatchStep<'a> {
 
             for (i, (_, v, iface)) in enumerate(params) {
                 cursor.insert_instr(
-                    modules,
+                    &mut modules[mod_idx],
                     b::Instr::new(b::InstrBody::Dispatch(v, iface.0, iface.1), loc)
                         .with_results([value_start + i]),
                 );

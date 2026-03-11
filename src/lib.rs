@@ -129,18 +129,14 @@ pub fn build_maybe_run(
     ctx.parse(src_idx, true);
     if ctx.has_errors() {
         if ctx.cfg.dump_bytecode {
-            for module in &*ctx.lock_modules() {
-                println!("{module}");
-            }
+            bytecode::printer::print_modules(&ctx.lock_modules());
         }
 
         return Err(ctx.into_compile_error());
     }
 
     if ctx.cfg.dump_bytecode {
-        for module in &*ctx.lock_modules() {
-            println!("{module}");
-        }
+        bytecode::printer::print_modules(&ctx.lock_modules());
     }
 
     let code_transform = transform::CodeTransform::new(&ctx);
@@ -150,9 +146,7 @@ pub fn build_maybe_run(
     code_transform.apply(transform::FinishDispatchStep::new(&ctx));
 
     if ctx.cfg.dump_transformed_bytecode {
-        for module in &*ctx.lock_modules() {
-            println!("{module}");
-        }
+        bytecode::printer::print_modules(&ctx.lock_modules());
     }
 
     ctx.compile();

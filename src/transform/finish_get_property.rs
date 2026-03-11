@@ -1,6 +1,6 @@
 use derive_ctor::ctor;
 
-use super::{CodeTransformCursor, CodeTransformStep};
+use super::CodeTransformStep;
 use crate::bytecode as b;
 use crate::context::BuildContext;
 
@@ -11,10 +11,10 @@ pub struct FinishGetPropertyStep<'a> {
 
 impl<'a> CodeTransformStep for FinishGetPropertyStep<'a> {
     #[tracing::instrument(skip(self))]
-    fn transform(&mut self, mod_idx: usize, cursor: &mut dyn CodeTransformCursor) {
+    fn transform(&mut self, mod_idx: usize, cursor: &mut b::BlockCursor) {
         let (source_v, key) = {
             let modules = &self.ctx.lock_modules();
-            let instr = cursor.get_instr(modules);
+            let instr = cursor.instr(&modules[mod_idx]);
             match &instr.body {
                 b::InstrBody::GetProperty(v, key) => (*v, key.clone()),
                 _ => return,
@@ -32,7 +32,7 @@ impl<'a> CodeTransformStep for FinishGetPropertyStep<'a> {
 
         {
             let modules = &mut self.ctx.lock_modules_mut();
-            let instr = cursor.get_instr_mut(modules);
+            let instr = cursor.instr_mut(&mut modules[mod_idx]);
             if is_field {
                 instr.body = b::InstrBody::GetField(source_v, key.clone());
             } else if is_method {

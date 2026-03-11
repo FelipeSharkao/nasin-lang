@@ -175,7 +175,11 @@ impl<'a, 't> TypeParser<'a, 't> {
                             b::TypeBody::TypeRef(t) => Some((t.mod_idx, t.idx)),
                             _ => {
                                 self.ctx.push_error(errors::Error::new(
-                                    errors::TypeNotInterface::new(ty).into(),
+                                    errors::TypeNotInterface::new(
+                                        &ty,
+                                        &self.ctx.lock_modules(),
+                                    )
+                                    .into(),
                                     Some(b::Loc::from_node(self.src_idx, &node)),
                                 ));
                                 None

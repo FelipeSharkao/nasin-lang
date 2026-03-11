@@ -127,7 +127,7 @@ impl BuildContext {
 
         if self.cfg.dump_bytecode {
             if let Some((mod_idx, _)) = rt_entry {
-                println!("{}", &modules[mod_idx]);
+                b::printer::print_module(&modules[mod_idx], &modules);
             }
         }
 

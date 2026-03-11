@@ -1,6 +1,6 @@
 use derive_ctor::ctor;
 
-use super::{CodeTransformCursor, CodeTransformStep};
+use super::CodeTransformStep;
 use crate::bytecode as b;
 use crate::context::BuildContext;
 
@@ -10,10 +10,10 @@ pub struct LowerTypeNameStep<'a> {
 }
 
 impl<'a> CodeTransformStep for LowerTypeNameStep<'a> {
-    fn transform(&mut self, mod_idx: usize, cursor: &mut dyn CodeTransformCursor) {
+    fn transform(&mut self, mod_idx: usize, cursor: &mut b::BlockCursor) {
         let (value_idx, _loc) = {
             let modules = &self.ctx.lock_modules();
-            let instr = cursor.get_instr(modules);
+            let instr = cursor.instr(&modules[mod_idx]);
             let b::InstrBody::TypeName(v) = &instr.body else {
                 return;
             };
@@ -27,7 +27,7 @@ impl<'a> CodeTransformStep for LowerTypeNameStep<'a> {
         };
 
         let modules = &mut self.ctx.lock_modules_mut();
-        let instr = cursor.get_instr_mut(modules);
+        let instr = cursor.instr_mut(&mut modules[mod_idx]);
         instr.body = b::InstrBody::CreateString(type_name);
     }
 }

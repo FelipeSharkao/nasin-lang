@@ -26,6 +26,8 @@ pub struct ModuleParser<'a, 't> {
     #[ctor(default)]
     pub values: Vec<b::Value>,
     #[ctor(default)]
+    pub blocks: Vec<b::Block>,
+    #[ctor(default)]
     pub idents: HashMap<String, ValueRef>,
     #[ctor(default)]
     pub typevar_defs: Vec<b::TypeVarDef>,
@@ -45,7 +47,9 @@ impl<'a, 't> ModuleParser<'a, 't> {
             let value_ref = value_parser.add_expr_node(value_node, true);
             let result = value_parser.use_value_ref(&value_ref);
 
-            (self, self.globals[i].global.body) = value_parser.finish(result);
+            let body_instrs;
+            (self, body_instrs) = value_parser.finish(result);
+            self.globals[i].global.body = self.add_block(body_instrs);
             let global = &self.globals[i];
             if global.global.value == UNDEF_VALUE {
                 let ty = global.ty.clone();
@@ -66,7 +70,9 @@ impl<'a, 't> ModuleParser<'a, 't> {
                 let value_ref = value_parser.add_expr_node(value_node, true);
                 let result = value_parser.use_value_ref(&value_ref);
 
-                (self, self.funcs[i].func.body) = value_parser.finish(result);
+                let body_instrs;
+                (self, body_instrs) = value_parser.finish(result);
+                self.funcs[i].func.body = self.add_block(body_instrs);
             };
 
             let func = &self.funcs[i];
@@ -84,6 +90,7 @@ impl<'a, 't> ModuleParser<'a, 't> {
         module.typevars = self.typevar_defs;
         module.globals = self.globals.into_iter().map(|x| x.global).collect();
         module.funcs = self.funcs.into_iter().map(|x| x.func).collect();
+        module.blocks = self.blocks;
         module.values = self.values;
     }
 
@@ -205,8 +212,9 @@ impl<'a, 't> ModuleParser<'a, 't> {
         for (i, item) in enumerate(&module.globals) {
             let mut value =
                 ValueRef::new(ValueRefBody::Global(mod_idx, i), Some(item.loc));
-            if item.body.len() == 1 {
-                match &item.body[0].body {
+            let body = module.block(item.body);
+            if body.len() == 1 {
+                match &body[0].body {
                     b::InstrBody::CreateNumber(v) => {
                         value.body = ValueRefBody::Number(v.clone());
                     }
@@ -224,6 +232,12 @@ impl<'a, 't> ModuleParser<'a, 't> {
     pub fn create_value(&mut self, ty: b::Type, loc: Option<b::Loc>) -> b::ValueIdx {
         self.values.push(b::Value::new(ty, loc));
         self.values.len() - 1
+    }
+
+    pub fn add_block(&mut self, body: Vec<b::Instr>) -> b::BlockIdx {
+        let idx = self.blocks.len();
+        self.blocks.push(b::Block { body });
+        idx
     }
 
     fn add_func(
@@ -293,6 +307,7 @@ impl<'a, 't> ModuleParser<'a, 't> {
         let generics: Vec<b::TypeVarIdx> = generics.into_iter().collect();
 
         let loc = b::Loc::from_node(self.src_idx, &node);
+        let empty_body = self.add_block(vec![]);
         let func = b::Func {
             name,
             params: params.clone(),
@@ -301,7 +316,7 @@ impl<'a, 't> ModuleParser<'a, 't> {
             extrn,
             is_entry: false,
             is_virt,
-            body: vec![],
+            body: empty_body,
             loc: Some(loc),
             generics,
             generic_instantiations: HashMap::new(),
@@ -331,10 +346,11 @@ impl<'a, 't> ModuleParser<'a, 't> {
 
         let is_main = name.last_ident() == "main";
 
+        let empty_body = self.add_block(vec![]);
         let global = b::Global {
             name,
             value: UNDEF_VALUE,
-            body: vec![],
+            body: empty_body,
             loc: b::Loc::from_node(self.src_idx, &node),
         };
         self.idents.insert(
