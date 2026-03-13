@@ -130,7 +130,7 @@ impl<'a> GenericInstantiationTransformer<'a> {
     }
 }
 
-impl b::BlockCloneTransformer for GenericInstantiationTransformer<'_> {
+impl b::BlockTransformer for GenericInstantiationTransformer<'_> {
     fn remap_result(&mut self, module: &mut b::Module, old: b::ValueIdx) -> b::ValueIdx {
         *self.value_remap.entry(old).or_insert_with(|| {
             let mut val = module.values[old].clone();

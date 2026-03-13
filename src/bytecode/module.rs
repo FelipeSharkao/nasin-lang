@@ -63,29 +63,25 @@ impl Module {
     /// Deep-clone a block and all transitively referenced sub-blocks, applying
     /// a transformer to remap value indices and modify instructions. Returns
     /// the `BlockIdx` of the newly created root block.
-    pub fn clone_block_tree<T: BlockCloneTransformer>(
+    pub fn clone_block_tree(
         &mut self,
         block_idx: BlockIdx,
-        transformer: &mut T,
+        transformer: &mut impl BlockTransformer,
     ) -> BlockIdx {
-        let body = self.blocks[block_idx].body.clone();
-        let mut new_body = Vec::with_capacity(body.len());
+        let mut new_body = self.blocks[block_idx].body.clone();
 
-        for mut instr in body {
+        for instr in &mut new_body {
             instr.results = instr
                 .results
                 .iter()
                 .map(|&res| transformer.remap_result(self, res))
                 .collect();
 
-            transformer.remap_instr_values(&mut instr.body);
-
             match &instr.body {
                 InstrBody::If(cond, then_block, else_block) => {
                     let new_then = self.clone_block_tree(*then_block, transformer);
                     let new_else = self.clone_block_tree(*else_block, transformer);
                     instr.body = InstrBody::If(*cond, new_then, new_else);
-                    transformer.remap_instr_values(&mut instr.body);
                 }
                 InstrBody::Loop(_, body_block) => {
                     let new_body_block = self.clone_block_tree(*body_block, transformer);
@@ -97,16 +93,14 @@ impl Module {
                 _ => {}
             }
 
-            new_body.push(instr);
+            transformer.remap_instr_values(&mut instr.body);
         }
 
         self.add_block(new_body)
     }
 }
 
-/// Trait for transforming values during `clone_block_tree`. Statically
-/// dispatched to avoid dynamic dispatch overhead during monomorphization.
-pub trait BlockCloneTransformer {
+pub trait BlockTransformer {
     /// Remap or copy a result value index. Called for each result in a cloned
     /// instruction. Implementations typically create a new value slot in the
     /// module (possibly with type substitution) and record the mapping.
