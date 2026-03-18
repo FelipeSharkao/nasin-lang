@@ -669,13 +669,13 @@ impl<'a> TypeChecker<'a> {
         f: impl Fn(&Constraint) -> bool,
     ) -> Vec<Constraint> {
         let mut constraints = vec![];
-        self.get_contraints_with_and_write(&mut constraints, idx, &f);
+        self.write_constraints_with(&mut constraints, idx, &f);
         constraints
     }
 
-    fn get_contraints_with_and_write<'w>(
+    fn write_constraints_with<'w>(
         &self,
-        constraints: &'w mut Vec<Constraint>,
+        target: &'w mut Vec<Constraint>,
         idx: b::ValueIdx,
         f: impl Fn(&Constraint) -> bool + Clone,
     ) {
@@ -685,12 +685,12 @@ impl<'a> TypeChecker<'a> {
         };
         if same_of.len() > 0 {
             for i in same_of {
-                self.get_contraints_with_and_write(constraints, i, f.clone());
+                self.write_constraints_with(target, i, f.clone());
             }
         } else {
             for c in &self.nodes[idx].constraints {
                 if f(c) {
-                    constraints.push(c.clone());
+                    target.push(c.clone());
                 }
             }
         }
