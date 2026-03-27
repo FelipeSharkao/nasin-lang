@@ -55,7 +55,7 @@ impl Display for TypeBody {
             TypeBody::AnyNumber => write!(f, "AnyNumber")?,
             TypeBody::AnySignedNumber => write!(f, "AnySignedNumber")?,
             TypeBody::AnyFloat => write!(f, "AnyFloat")?,
-            TypeBody::AnyOpaque => write!(f, "anyopaque")?,
+            TypeBody::AnyOpaque => write!(f, "AnyOpaque")?,
             TypeBody::I8 => write!(f, "i8")?,
             TypeBody::I16 => write!(f, "i16")?,
             TypeBody::I32 => write!(f, "i32")?,
@@ -67,8 +67,9 @@ impl Display for TypeBody {
             TypeBody::USize => write!(f, "usize")?,
             TypeBody::F32 => write!(f, "f32")?,
             TypeBody::F64 => write!(f, "f64")?,
+            TypeBody::String => write!(f, "str")?,
             TypeBody::Inferred(v) => {
-                write!(f, "infered {{")?;
+                write!(f, "{{")?;
                 for (name, t) in &v.members {
                     write!(f, " {name}: {t}")?;
                 }
@@ -77,21 +78,19 @@ impl Display for TypeBody {
                 }
                 write!(f, " }}")?;
             }
-            TypeBody::String => {
-                write!(f, "string")?;
-            }
-            TypeBody::Array(v) => {
-                write!(f, "array {}", v)?;
-            }
+            TypeBody::Array(v) => write!(f, "[{v}]")?,
             TypeBody::Ptr(ty) => {
-                write!(f, "ptr")?;
+                write!(f, "Ptr")?;
                 if let Some(ty) = ty {
-                    write!(f, " {ty}")?;
+                    write!(f, "({ty})")?;
                 }
             }
-            TypeBody::Func(func) => {
-                write!(f, "func {}: {}", utils::join(", ", &func.params), &func.ret)?
-            }
+            TypeBody::Func(func) => write!(
+                f,
+                "Func({}): {}",
+                utils::join(", ", &func.params),
+                &func.ret
+            )?,
             TypeBody::TypeRef(ty_ref) => write!(
                 f,
                 "{} {}-{}",
@@ -106,6 +105,7 @@ impl Display for TypeBody {
         Ok(())
     }
 }
+
 impl TypeBody {
     pub fn unknown() -> Self {
         TypeBody::Inferred(InferredType {
@@ -149,7 +149,8 @@ impl TypeBody {
     }
 }
 
-#[derive(Debug, Clone, ctor)]
+#[derive(Debug, Display, Clone, ctor)]
+#[display("{body}")]
 pub struct Type {
     pub body: TypeBody,
     pub loc:  Option<Loc>,
@@ -170,6 +171,7 @@ macro_rules! body {
         }
     };
 }
+
 impl Type {
     pub fn unknown(loc: Option<Loc>) -> Self {
         Type::new(TypeBody::unknown(), loc)
@@ -614,25 +616,17 @@ impl Type {
         .into_iter()
     }
 }
+
 impl PartialEq for Type {
     fn eq(&self, other: &Self) -> bool {
         &self.body == &other.body
     }
 }
+
 impl Eq for Type {}
 impl Hash for Type {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.body.hash(state)
-    }
-}
-impl Display for Type {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "({}", &self.body)?;
-        if let Some(loc) = &self.loc {
-            write!(f, " {loc}")?;
-        }
-        write!(f, ")")?;
-        Ok(())
     }
 }
 

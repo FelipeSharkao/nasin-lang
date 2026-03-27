@@ -6,6 +6,7 @@ use derive_ctor::ctor;
 use derive_more::{Display, From};
 use thiserror::Error;
 
+use crate::config::BuildConfig;
 use crate::{bytecode as b, sources, utils};
 
 #[derive(Debug, Clone, ctor)]
@@ -93,13 +94,23 @@ pub struct UnexpectedType {
 }
 
 impl UnexpectedType {
-    pub fn new(expected: Vec<&b::Type>, actual: &b::Type, modules: &[b::Module]) -> Self {
+    pub fn new(
+        expected: Vec<&b::Type>,
+        actual: &b::Type,
+        modules: &[b::Module],
+        cfg: &BuildConfig,
+    ) -> Self {
+        let fmt_ty = |ty: &b::TypeBody| {
+            let mut s = String::new();
+            b::Printer::new(modules, cfg)
+                .reconstruct(true)
+                .write_type_expr(&mut s, ty)
+                .unwrap();
+            s
+        };
         Self {
-            expected: expected
-                .iter()
-                .map(|t| b::printer::format_type_body(&t.body, modules))
-                .collect(),
-            actual:   b::printer::format_type_body(&actual.body, modules),
+            expected: expected.iter().map(|t| fmt_ty(&t.body)).collect(),
+            actual:   fmt_ty(&actual.body),
         }
     }
 }
@@ -130,11 +141,18 @@ pub struct TypeMisatch {
 }
 
 impl TypeMisatch {
-    pub fn new(types: Vec<&b::Type>, modules: &[b::Module]) -> Self {
+    pub fn new(types: Vec<&b::Type>, modules: &[b::Module], cfg: &BuildConfig) -> Self {
         Self {
             types: types
                 .iter()
-                .map(|t| b::printer::format_type_body(&t.body, modules))
+                .map(|t| {
+                    let mut s = String::new();
+                    b::Printer::new(modules, cfg)
+                        .reconstruct(true)
+                        .write_type_expr(&mut s, &t.body)
+                        .unwrap();
+                    s
+                })
                 .collect(),
         }
     }
@@ -156,10 +174,13 @@ pub struct TypeNotInterface {
 }
 
 impl TypeNotInterface {
-    pub fn new(ty: &b::Type, modules: &[b::Module]) -> Self {
-        Self {
-            ty: b::printer::format_type_body(&ty.body, modules),
-        }
+    pub fn new(ty: &b::Type, modules: &[b::Module], cfg: &BuildConfig) -> Self {
+        let mut s = String::new();
+        b::Printer::new(modules, cfg)
+            .reconstruct(true)
+            .write_type_expr(&mut s, &ty.body)
+            .unwrap();
+        Self { ty: s }
     }
 }
 

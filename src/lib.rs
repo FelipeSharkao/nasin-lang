@@ -6,10 +6,6 @@ use std::{fs, io, process};
 
 use clap::Args;
 
-use self::config::BuildConfig;
-use self::errors::CompilerError;
-use self::utils::cmd;
-
 mod bytecode;
 mod codegen;
 mod config;
@@ -20,6 +16,11 @@ mod sources;
 mod transform;
 mod typecheck;
 mod utils;
+
+use self::bytecode as b;
+use self::config::BuildConfig;
+use self::errors::CompilerError;
+use self::utils::cmd;
 
 #[derive(Args, Debug)]
 pub struct EmitArgs {
@@ -129,14 +130,20 @@ pub fn build_maybe_run(
     ctx.parse(src_idx);
     if ctx.has_errors() {
         if ctx.cfg.dump_bytecode {
-            bytecode::printer::print_modules(&ctx.lock_modules());
+            b::Printer::new(&ctx.lock_modules(), &ctx.cfg)
+                .show_ids(true)
+                .source_manager(&ctx.source_manager)
+                .print_all();
         }
 
         return Err(ctx.into_compile_error());
     }
 
     if ctx.cfg.dump_bytecode {
-        bytecode::printer::print_modules(&ctx.lock_modules());
+        b::Printer::new(&ctx.lock_modules(), &ctx.cfg)
+            .show_ids(true)
+            .source_manager(&ctx.source_manager)
+            .print_all();
     }
 
     let code_transform = transform::CodeTransform::new(&ctx);
@@ -146,7 +153,10 @@ pub fn build_maybe_run(
     code_transform.apply(transform::FinishDispatchStep::new(&ctx));
 
     if ctx.cfg.dump_transformed_bytecode {
-        bytecode::printer::print_modules(&ctx.lock_modules());
+        b::Printer::new(&ctx.lock_modules(), &ctx.cfg)
+            .show_ids(true)
+            .source_manager(&ctx.source_manager)
+            .print_all();
     }
 
     ctx.compile();

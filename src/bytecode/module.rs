@@ -1,6 +1,6 @@
+use std::cmp;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::{cmp, fmt};
 
 use derive_ctor::ctor;
 use derive_more::{Debug, Display, From};
@@ -17,6 +17,25 @@ pub type BlockIdx = usize;
 #[derive(Debug, Clone, ctor)]
 pub struct Block {
     pub body: Vec<Instr>,
+    pub loc:  Option<Loc>,
+}
+
+impl FromIterator<Instr> for Block {
+    fn from_iter<T: IntoIterator<Item = Instr>>(iter: T) -> Self {
+        let mut loc = None;
+        let body = iter
+            .into_iter()
+            .map(|instr| {
+                match (loc, instr.loc) {
+                    (None, Some(new_loc)) => loc = Some(new_loc),
+                    (Some(old_loc), Some(new_loc)) => loc = Some(old_loc.merge(&new_loc)),
+                    _ => {}
+                }
+                instr
+            })
+            .collect();
+        Block::new(body, loc)
+    }
 }
 
 #[derive(Debug, Clone, ctor)]
@@ -56,8 +75,8 @@ impl Module {
         self.values.len() - 1
     }
 
-    pub fn add_block(&mut self, body: Vec<Instr>) -> BlockIdx {
-        self.blocks.push(Block::new(body));
+    pub fn add_block(&mut self, body: impl IntoIterator<Item = Instr>) -> BlockIdx {
+        self.blocks.push(Block::from_iter(body));
         self.blocks.len() - 1
     }
 
@@ -97,22 +116,6 @@ impl Module {
 
 pub trait BlockTransformer {
     fn remap_instr(&mut self, module: &mut Module, instr: &mut Instr);
-}
-
-/// Minimal flat-reference format for quick debugging. The primary display path
-/// is `printer::ModulePrinter` which inlines blocks and resolves type names.
-impl Display for Module {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(
-            f,
-            "module {} ({} values, {} globals, {} funcs, {} blocks)",
-            self.idx,
-            self.values.len(),
-            self.globals.len(),
-            self.funcs.len(),
-            self.blocks.len(),
-        )
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -188,16 +191,14 @@ pub struct InterfaceType {
     pub methods: SortedMap<String, Method>,
 }
 
-#[derive(Debug, Clone, Display, ctor)]
-#[display("{ty} {loc}")]
+#[derive(Debug, Clone, ctor)]
 pub struct RecordField {
     pub name: String,
     pub ty:   Type,
     pub loc:  Loc,
 }
 
-#[derive(Debug, Clone, Display, ctor)]
-#[display("({}, {}) {loc}", func_ref.0, func_ref.1)]
+#[derive(Debug, Clone, ctor)]
 pub struct Method {
     pub name:     String,
     pub func_ref: (usize, usize),

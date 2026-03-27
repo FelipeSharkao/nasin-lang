@@ -976,7 +976,7 @@ impl<'a> FuncCodegen<'a, '_> {
             }
             b::InstrBody::Type(..) => {}
             b::InstrBody::GetProperty(..) | b::InstrBody::CompileError => {
-                panic!("never should try to compile '{}'", &instr)
+                panic!("never should try to compile '{instr:?}'")
             }
             b::InstrBody::TypeName(..) => {
                 unreachable!("TypeName should have been replaced by transform phase");

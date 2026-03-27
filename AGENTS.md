@@ -81,6 +81,8 @@ gdb -batch -ex "info functions" <binary>
 - Avoid adding small comments to explain what the code does. Code should be
   self-explanatory. Keep comments restricted to function/method documentation and complex
   or non-obvious code.
+- Avoid comments that only means to separate chunks of code. Keep comments restricted to
+  meaningful explanations of hard-to-understand code.
 - The codebase uses column-aligned struct fields (padded with spaces). Match the existing
   alignment style when editing structs so that the formatter doesn't introduce unnecessary
   diffs.

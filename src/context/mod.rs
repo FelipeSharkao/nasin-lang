@@ -6,7 +6,6 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, RwLock};
 
 use derive_ctor::ctor;
-use itertools::chain;
 use tree_sitter as ts;
 
 use self::runtime::RuntimeBuilder;
@@ -63,10 +62,8 @@ impl BuildContext {
             println!("{}", root_node.to_sexp());
         }
 
-        let name = b::Name::from_path(
-            &self.source_manager.source(src_idx).path,
-            chain!([&self.cfg.base_dir], &self.cfg.lib_dirs),
-        );
+        let name =
+            b::Name::from_path(&self.source_manager.source(src_idx).path, &self.cfg);
 
         let mod_idx = {
             let mut modules = self.lock_modules_mut();
@@ -126,7 +123,10 @@ impl BuildContext {
 
         if self.cfg.dump_bytecode {
             if let Some((mod_idx, _)) = rt_entry {
-                b::printer::print_module(&modules[mod_idx], &modules);
+                b::Printer::new(&modules, &self.cfg)
+                    .show_ids(true)
+                    .source_manager(&self.source_manager)
+                    .print_module(mod_idx);
             }
         }
 

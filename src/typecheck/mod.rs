@@ -815,7 +815,12 @@ impl<'a> TypeChecker<'a> {
                 success = false;
                 let modules = self.ctx.lock_modules();
                 self.ctx.push_error(errors::Error::new(
-                    errors::TypeMisatch::new(tys.iter().collect(), &modules).into(),
+                    errors::TypeMisatch::new(
+                        tys.iter().collect(),
+                        &modules,
+                        &self.ctx.cfg,
+                    )
+                    .into(),
                     modules[self.mod_idx].values[idx].loc,
                 ));
             }
@@ -1038,8 +1043,13 @@ impl<'a> TypeChecker<'a> {
             for (merge_with, loc) in &error_tys {
                 let modules = self.ctx.lock_modules();
                 self.ctx.push_error(errors::Error::new(
-                    errors::UnexpectedType::new(vec![merge_with], &result_ty, &modules)
-                        .into(),
+                    errors::UnexpectedType::new(
+                        vec![merge_with],
+                        &result_ty,
+                        &modules,
+                        &self.ctx.cfg,
+                    )
+                    .into(),
                     *loc,
                 ));
             }

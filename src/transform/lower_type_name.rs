@@ -18,7 +18,14 @@ impl<'a> CodeTransformStep for LowerTypeNameStep<'a> {
         };
 
         let ty = &modules[mod_idx].values[value_idx].ty;
-        let type_name = b::printer::format_type_body(&ty.body, &modules);
+        let type_name = {
+            let mut s = String::new();
+            b::Printer::new(&modules, &self.ctx.cfg)
+                .reconstruct(true)
+                .write_type_expr(&mut s, &ty.body)
+                .unwrap();
+            s
+        };
 
         let instr = cursor.instr_mut(&mut modules[mod_idx]).unwrap();
         instr.body = b::InstrBody::CreateString(type_name);

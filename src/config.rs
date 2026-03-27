@@ -1,4 +1,6 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+use itertools::chain;
 
 /// Stores the configurations for a compilation
 #[derive(Debug, Clone, Default)]
@@ -23,4 +25,19 @@ pub struct BuildConfig {
     pub dump_clif: bool,
     /// Run the program after compilation
     pub run: bool,
+}
+
+impl BuildConfig {
+    pub fn base_paths(&self) -> impl IntoIterator<Item = impl AsRef<Path> + '_> + '_ {
+        chain!([&self.base_dir], &self.lib_dirs)
+    }
+
+    pub fn strip_base_paths<'a>(&'a self, path: &'a Path) -> &'a Path {
+        for base_path in self.base_paths() {
+            if let Ok(relative_path) = path.strip_prefix(base_path) {
+                return relative_path;
+            }
+        }
+        path
+    }
 }

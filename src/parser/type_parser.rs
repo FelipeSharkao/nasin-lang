@@ -178,6 +178,7 @@ impl<'a, 't> TypeParser<'a, 't> {
                                     errors::TypeNotInterface::new(
                                         &ty,
                                         &self.ctx.lock_modules(),
+                                        &self.ctx.cfg,
                                     )
                                     .into(),
                                     Some(b::Loc::from_node(self.src_idx, &node)),

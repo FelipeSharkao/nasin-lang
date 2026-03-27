@@ -1,9 +1,7 @@
 use std::collections::HashMap;
-use std::fmt::{self, Display};
 
 use derive_ctor::ctor;
 use derive_more::derive::Debug;
-use itertools::enumerate;
 
 use super::{BlockIdx, Loc, Type, ValueIdx};
 use crate::utils;
@@ -156,110 +154,6 @@ impl InstrBody {
     }
 }
 
-impl Display for InstrBody {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            InstrBody::GetGlobal(mod_idx, global_idx) => {
-                write!(f, "get_global {mod_idx}-{global_idx}")?
-            }
-            InstrBody::GetFunc(mod_idx, func_idx) => {
-                write!(f, "get_func {mod_idx}-{func_idx}")?
-            }
-            InstrBody::GetProperty(v, prop) => write!(f, "get_property v{v} .{prop}")?,
-            InstrBody::GetField(v, field) => write!(f, "get_field v{v} .{field}")?,
-            InstrBody::GetMethod(v, field) => write!(f, "get_method v{v} .{field}")?,
-            InstrBody::CreateBool(v) => write!(f, "create_bool {v}")?,
-            InstrBody::CreateNumber(v) => write!(f, "create_number {v}")?,
-            InstrBody::CreateString(v) => {
-                write!(f, "create_string {}", utils::encode_string_lit(v))?
-            }
-            InstrBody::CreateUninitializedString(len) => {
-                write!(f, "create_uninitialized_string {len}")?
-            }
-            InstrBody::CreateArray(vs) => {
-                write!(f, "create_array")?;
-                for v in vs {
-                    write!(f, " v{v}")?;
-                }
-            }
-            InstrBody::CreateRecord(fields) => {
-                write!(f, "create_record")?;
-                for (name, v) in fields {
-                    write!(f, " .{name}=v{v}")?;
-                }
-            }
-            InstrBody::Add(a, b) => write!(f, "add v{a} v{b}")?,
-            InstrBody::Sub(a, b) => write!(f, "sub v{a} v{b}")?,
-            InstrBody::Mul(a, b) => write!(f, "mul v{a} v{b}")?,
-            InstrBody::Div(a, b) => write!(f, "div v{a} v{b}")?,
-            InstrBody::Mod(a, b) => write!(f, "mod v{a} v{b}")?,
-            InstrBody::Eq(a, b) => write!(f, "eq v{a} v{b}")?,
-            InstrBody::Neq(a, b) => write!(f, "neq v{a} v{b}")?,
-            InstrBody::Gt(a, b) => write!(f, "gt v{a} v{b}")?,
-            InstrBody::Gte(a, b) => write!(f, "gte v{a} v{b}")?,
-            InstrBody::Lt(a, b) => write!(f, "lt v{a} v{b}")?,
-            InstrBody::Lte(a, b) => write!(f, "lte v{a} v{b}")?,
-            InstrBody::Not(v) => write!(f, "not v{v}")?,
-            InstrBody::Call(mod_idx, func_idx, args) => {
-                write!(f, "call {mod_idx}-{func_idx}")?;
-                for arg in args {
-                    write!(f, " v{arg}")?;
-                }
-            }
-            InstrBody::IndirectCall(v, args) => {
-                write!(f, "indirect_call v{v}")?;
-                for arg in args {
-                    write!(f, " v{arg}")?;
-                }
-            }
-            InstrBody::If(v, then_block, else_block) => {
-                write!(f, "if v{v} then block:{then_block} else block:{else_block}")?;
-            }
-            InstrBody::Loop(inputs, body_block) => {
-                write!(f, "loop")?;
-                for (v, initial_v) in inputs {
-                    write!(f, " v{v}=v{initial_v}")?;
-                }
-                write!(f, " block:{body_block}")?;
-            }
-            InstrBody::Break(v) => {
-                write!(f, "break")?;
-                if let Some(v) = v {
-                    write!(f, " v{v}")?;
-                }
-            }
-            InstrBody::Continue(vs) => {
-                write!(f, "continue")?;
-                for v in vs {
-                    write!(f, " v{v}")?;
-                }
-            }
-            InstrBody::StrLen(v) => write!(f, "str_len v{v}")?,
-            InstrBody::StrPtr(v) => write!(f, "str_ptr v{v}")?,
-            InstrBody::StrFromPtr(ptr, len) => write!(f, "str_from_ptr v{ptr} v{len}")?,
-            InstrBody::StrCopy(src, dst, offset) => {
-                write!(f, "str_copy v{src} v{dst}")?;
-                if let Some(offset) = offset {
-                    write!(f, "+v{offset}")?;
-                }
-            }
-            InstrBody::ArrayLen(v) => write!(f, "array_len v{v}")?,
-            InstrBody::ArrayIndex(v, idx) => write!(f, "array_index v{v} v{idx}")?,
-            InstrBody::PtrOffset(ptr, offset) => {
-                write!(f, "ptr_offset v{ptr} v{offset}")?
-            }
-            InstrBody::PtrSet(ptr, value) => write!(f, "ptr_set v{ptr} v{value}")?,
-            InstrBody::Type(v, ty) => write!(f, "type v{v} {ty}")?,
-            InstrBody::Dispatch(v, mod_idx, ty_idx) => {
-                write!(f, "dispatch v{v} {mod_idx}-{ty_idx}")?
-            }
-            InstrBody::TypeName(v) => write!(f, "type_name v{v}")?,
-            InstrBody::CompileError => write!(f, "compile_error")?,
-        }
-        Ok(())
-    }
-}
-
 #[derive(Debug, Clone, ctor)]
 pub struct Instr {
     pub body:    InstrBody,
@@ -267,6 +161,7 @@ pub struct Instr {
     #[ctor(default)]
     pub results: Vec<ValueIdx>,
 }
+
 impl Instr {
     pub fn get_global(
         mod_idx: usize,
@@ -354,24 +249,5 @@ impl Instr {
     pub fn with_results(mut self, results: impl IntoIterator<Item = ValueIdx>) -> Self {
         self.results = results.into_iter().collect();
         self
-    }
-}
-impl Display for Instr {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if self.results.len() > 0 {
-            write!(f, "{} = ", utils::join(", ", &self.results))?;
-        }
-        for (i, line) in enumerate(self.body.to_string().split('\n')) {
-            if i != 0 {
-                write!(f, "\n")?;
-            }
-            write!(f, "{line}")?;
-            if i == 0 {
-                if let Some(loc) = &self.loc {
-                    write!(f, " {}", &loc)?;
-                }
-            }
-        }
-        Ok(())
     }
 }

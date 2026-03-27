@@ -127,6 +127,7 @@ impl<'a> RuntimeBuilder<'a> {
                 vec![&str_ty, &array_ty, &array_2d_ty],
                 main_ty,
                 &modules,
+                &self.ctx.cfg,
             )
             .into(),
             Some(main_global_def.loc),
@@ -250,7 +251,7 @@ impl<'a> RuntimeBuilder<'a> {
     }
 
     fn add_block(&mut self, body: impl IntoIterator<Item = b::Instr>) -> b::BlockIdx {
-        self.blocks.push(b::Block::new(body.into_iter().collect()));
+        self.blocks.push(b::Block::from_iter(body));
         self.blocks.len() - 1
     }
 
