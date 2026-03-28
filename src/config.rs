@@ -21,6 +21,8 @@ pub struct BuildConfig {
     pub dump_bytecode: bool,
     /// Whether to dump the bytecode of the source file after transformations
     pub dump_transformed_bytecode: bool,
+    /// Whether to dump the parsed bytecode of the source file before type checking
+    pub dump_untyped_bytecode: bool,
     /// Whether to dump the CLIF of the source file, if using Cranelift
     pub dump_clif: bool,
     /// Run the program after compilation

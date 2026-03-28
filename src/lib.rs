@@ -40,6 +40,10 @@ pub struct EmitArgs {
     /// monomorphization)
     dump_transformed_bytecode: bool,
     #[arg(long)]
+    /// Whether to dump the parsed bytecode of the source file before type inference and
+    /// type checking is performed
+    dump_untyped_bytecode: bool,
+    #[arg(long)]
     /// Whether to dump the parsed CLIF of the source file, if using Cranelift
     dump_clif: bool,
 }
@@ -115,6 +119,7 @@ pub fn build_maybe_run(
         dump_ast: emit.dump_ast,
         dump_bytecode: emit.dump_bytecode,
         dump_transformed_bytecode: emit.dump_transformed_bytecode,
+        dump_untyped_bytecode: emit.dump_untyped_bytecode,
         dump_clif: emit.dump_clif,
         run,
     });

@@ -51,16 +51,9 @@ impl<'a> CodeTransform<'a> {
         block_idx: b::BlockIdx,
     ) {
         let mut cursor = b::BlockCursor::new(block_idx);
-        if cursor.is_done(&self.ctx.lock_modules()[mod_idx]) {
-            return;
-        }
-        loop {
+        while cursor.step(&self.ctx.lock_modules()[mod_idx]) {
             tracing::trace!("transforming instruction");
             step.transform(mod_idx, &mut cursor);
-
-            if !cursor.step(&self.ctx.lock_modules()[mod_idx]) {
-                break;
-            }
         }
     }
 }

@@ -85,6 +85,13 @@ impl BuildContext {
         module_parser.add_root(root_node);
         module_parser.finish();
 
+        if self.cfg.dump_untyped_bytecode {
+            b::Printer::new(&self.lock_modules(), &self.cfg)
+                .show_ids(true)
+                .source_manager(&self.source_manager)
+                .print_module(mod_idx);
+        }
+
         typecheck::TypeChecker::new(self, mod_idx).check();
 
         mod_idx
