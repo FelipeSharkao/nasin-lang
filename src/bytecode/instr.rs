@@ -39,8 +39,8 @@ pub enum InstrBody {
 
     If(ValueIdx, BlockIdx, BlockIdx),
     Loop(Vec<(ValueIdx, ValueIdx)>, BlockIdx),
-    Break(Option<ValueIdx>),
-    Continue(Vec<ValueIdx>),
+    Break(BlockIdx, Option<ValueIdx>),
+    Continue(BlockIdx, Vec<ValueIdx>),
 
     StrLen(ValueIdx),
     StrPtr(ValueIdx),
@@ -69,52 +69,54 @@ impl InstrBody {
             }
         };
         match self {
-            InstrBody::Call(_, _, args) => {
-                for v in args {
-                    replace(v);
-                }
-            }
-            InstrBody::IndirectCall(func, args) => {
-                replace(func);
-                for v in args {
-                    replace(v);
-                }
-            }
-            InstrBody::TypeName(v) => replace(v),
-            InstrBody::Break(Some(v)) => replace(v),
-            InstrBody::Break(None) => {}
-            InstrBody::Continue(vs) => {
-                for v in vs {
-                    replace(v);
-                }
-            }
-            InstrBody::Not(v) => replace(v),
+            InstrBody::GetProperty(v, _)
+            | InstrBody::GetField(v, _)
+            | InstrBody::GetMethod(v, _)
+            | InstrBody::CreateUninitializedString(v)
+            | InstrBody::Not(v)
+            | InstrBody::If(v, _, _)
+            | InstrBody::Break(_, Some(v))
+            | InstrBody::StrLen(v)
+            | InstrBody::StrPtr(v)
+            | InstrBody::ArrayLen(v)
+            | InstrBody::Type(v, _)
+            | InstrBody::Dispatch(v, _, _)
+            | InstrBody::TypeName(v) => replace(v),
             InstrBody::Add(a, b)
             | InstrBody::Sub(a, b)
             | InstrBody::Mul(a, b)
             | InstrBody::Div(a, b)
-            | InstrBody::Mod(a, b) => {
-                replace(a);
-                replace(b);
-            }
-            InstrBody::Eq(a, b)
+            | InstrBody::Mod(a, b)
+            | InstrBody::Eq(a, b)
             | InstrBody::Neq(a, b)
+            | InstrBody::Gt(a, b)
+            | InstrBody::Gte(a, b)
             | InstrBody::Lt(a, b)
             | InstrBody::Lte(a, b)
-            | InstrBody::Gt(a, b)
-            | InstrBody::Gte(a, b) => {
-                replace(a);
-                replace(b);
-            }
-            InstrBody::StrPtr(v) | InstrBody::StrLen(v) | InstrBody::ArrayLen(v) => {
-                replace(v);
-            }
-            InstrBody::StrFromPtr(a, b)
+            | InstrBody::StrFromPtr(a, b)
+            | InstrBody::ArrayIndex(a, b)
             | InstrBody::PtrOffset(a, b)
-            | InstrBody::PtrSet(a, b)
-            | InstrBody::ArrayIndex(a, b) => {
+            | InstrBody::PtrSet(a, b) => {
                 replace(a);
                 replace(b);
+            }
+            InstrBody::CreateArray(vs)
+            | InstrBody::Call(_, _, vs)
+            | InstrBody::Continue(_, vs) => {
+                for v in vs {
+                    replace(v);
+                }
+            }
+            InstrBody::CreateRecord(fields) => {
+                for (_, v) in fields {
+                    replace(v);
+                }
+            }
+            InstrBody::IndirectCall(v, vs) => {
+                replace(v);
+                for v in vs {
+                    replace(v);
+                }
             }
             InstrBody::StrCopy(src, dst, offset) => {
                 replace(src);
@@ -123,33 +125,19 @@ impl InstrBody {
                     replace(v);
                 }
             }
-            InstrBody::CreateUninitializedString(v) => replace(v),
-            InstrBody::GetField(v, _)
-            | InstrBody::GetProperty(v, _)
-            | InstrBody::GetMethod(v, _)
-            | InstrBody::Dispatch(v, _, _)
-            | InstrBody::Type(v, _) => replace(v),
-            InstrBody::GetFunc(..)
-            | InstrBody::CreateNumber(_)
-            | InstrBody::CreateBool(_)
-            | InstrBody::CreateString(_)
-            | InstrBody::CreateRecord(_)
-            | InstrBody::GetGlobal(..)
-            | InstrBody::CompileError => {}
-            InstrBody::If(cond, _, _) => {
-                replace(cond);
-            }
             InstrBody::Loop(inits, _) => {
                 for (loop_var, init_val) in inits {
                     replace(loop_var);
                     replace(init_val);
                 }
             }
-            InstrBody::CreateArray(values) => {
-                for v in values {
-                    replace(v);
-                }
-            }
+            InstrBody::GetGlobal(..)
+            | InstrBody::GetFunc(..)
+            | InstrBody::CreateBool(_)
+            | InstrBody::CreateNumber(_)
+            | InstrBody::CreateString(_)
+            | InstrBody::Break(_, None)
+            | InstrBody::CompileError => {}
         }
     }
 }
@@ -221,12 +209,12 @@ impl Instr {
         Self::new(InstrBody::Loop(inputs, body_block), loc).with_results(res)
     }
 
-    pub fn break_(v: Option<ValueIdx>, loc: Option<Loc>) -> Self {
-        Self::new(InstrBody::Break(v), loc)
+    pub fn break_(block_idx: BlockIdx, v: Option<ValueIdx>, loc: Option<Loc>) -> Self {
+        Self::new(InstrBody::Break(block_idx, v), loc)
     }
 
-    pub fn continue_(vs: Vec<ValueIdx>, loc: Option<Loc>) -> Self {
-        Self::new(InstrBody::Continue(vs), loc)
+    pub fn continue_(block_idx: BlockIdx, vs: Vec<ValueIdx>, loc: Option<Loc>) -> Self {
+        Self::new(InstrBody::Continue(block_idx, vs), loc)
     }
 
     pub fn array_len(v: ValueIdx, res: ValueIdx, loc: Option<Loc>) -> Self {

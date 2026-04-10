@@ -176,7 +176,8 @@ fn remap_func(
         new_func.ret
     };
 
-    new_func.body = module.clone_block_tree(new_func.body, &mut transformer);
+    new_func.body =
+        module.clone_block_tree(new_func.body, &mut transformer, &mut HashMap::new());
 
     module.add_func(new_func)
 }

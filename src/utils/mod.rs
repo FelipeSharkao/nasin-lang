@@ -39,8 +39,8 @@ macro_rules! unwrap {
     ($v:expr) => {
         $v.unwrap()
     };
-    ($v:expr, $msg:literal $(, $fmt:tt)* $(,)?) => {
-        $v.unwrap_or_else(|| panic!($msg, $($fmt),*))
+    ($v:expr, $($fmt:tt)*) => {
+        $v.unwrap_or_else(|| panic!($($fmt)*))
     };
 }
 pub(crate) use unwrap;

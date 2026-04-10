@@ -83,16 +83,17 @@ impl<'a> CodegenContext<'a> {
         let symbol_name = NameMangler::new(self.modules).mangle(&global.name, []);
 
         let (value, is_const) = utils::replace_with(self, |s| {
-            let mut codegen = FuncCodegen::new(s, None, true);
+            let mut codegen = FuncCodegen::new(s, None, ReturnPolicy::NoReturn);
+            codegen.is_global = true;
 
             for instr in &body {
-                if let b::InstrBody::Break(v) = &instr.body {
-                    if let Some(v) = v {
-                        codegen.values.insert(
-                            (mod_idx, global.value),
-                            codegen.values[&(mod_idx, *v)].clone(),
-                        );
-                    }
+                if let b::InstrBody::Break(block_idx, Some(v)) = &instr.body
+                    && *block_idx == global.body
+                {
+                    codegen.values.insert(
+                        (mod_idx, global.value),
+                        codegen.values[&(mod_idx, *v)].clone(),
+                    );
                     break;
                 }
 

@@ -80,11 +80,9 @@ impl<'a> TypeChecker<'a> {
             let global = &modules[self.mod_idx].globals[i];
             let value = global.value;
             let mut cursor = b::BlockCursor::new(global.body);
-            let mut scopes = utils::ScopeStack::new(ScopePayload::new());
-            if let Some(result) = self.add_block(&mut cursor, &mut scopes, None, modules)
-            {
-                self.merge_types([&value, &result], modules);
-            }
+            let mut scopes =
+                utils::ScopeStack::new(ScopePayload::new(Some(value)), global.body);
+            self.add_block(&mut cursor, &mut scopes, None, modules);
         }
 
         self.validate(modules);
@@ -145,11 +143,8 @@ impl<'a> TypeChecker<'a> {
         let ret = func.ret;
 
         let mut cursor = b::BlockCursor::new(func.body);
-        let mut scopes = utils::ScopeStack::new(ScopePayload::new());
-        if let Some(result) = self.add_block(&mut cursor, &mut scopes, Some(idx), modules)
-        {
-            self.merge_types([&ret, &result], modules);
-        }
+        let mut scopes = utils::ScopeStack::new(ScopePayload::new(Some(ret)), func.body);
+        self.add_block(&mut cursor, &mut scopes, Some(idx), modules);
     }
 
     #[tracing::instrument(level = "trace", skip(self, scopes, modules))]
@@ -160,19 +155,10 @@ impl<'a> TypeChecker<'a> {
         func_idx: Option<usize>,
         // FIXME: use per-module locks instead of locking the entire module list
         modules: &mut [b::Module],
-    ) -> Option<b::ValueIdx> {
-        let mut result = None;
+    ) {
         while cursor.step_over(&modules[self.mod_idx]) {
-            if let b::InstrBody::Break(v) =
-                &cursor.instr(&modules[self.mod_idx]).unwrap().body
-            {
-                result = result.or(*v);
-                continue;
-            }
             self.add_instr(cursor, scopes, func_idx, modules);
         }
-
-        return result;
     }
 
     #[tracing::instrument(level = "trace", skip(self, scopes, modules))]
@@ -443,8 +429,8 @@ impl<'a> TypeChecker<'a> {
                     modules,
                 );
             }
-            &b::InstrBody::If(cond_v, _then_block, _else_block) => {
-                let v = instr.results[0];
+            &b::InstrBody::If(cond_v, then_block, else_block) => {
+                let v = instr.results.get(0).cloned();
 
                 self.add_constraint(
                     cond_v,
@@ -455,43 +441,44 @@ impl<'a> TypeChecker<'a> {
                     modules,
                 );
 
-                scopes.begin(ScopePayload::new());
+                scopes.begin(ScopePayload::new(v), then_block);
                 cursor.step_in(&modules[self.mod_idx]);
-                if let Some(then_v) = self.add_block(cursor, scopes, func_idx, modules) {
-                    self.merge_types([&then_v, &v], modules);
-                }
+                self.add_block(cursor, scopes, func_idx, modules);
 
-                scopes.branch();
+                scopes.branch(else_block);
                 cursor.step_out(&modules[self.mod_idx]);
-                if let Some(else_v) = self.add_block(cursor, scopes, func_idx, modules) {
-                    self.merge_types([&else_v, &v], modules);
-                }
+                self.add_block(cursor, scopes, func_idx, modules);
 
                 scopes.end();
                 cursor.step_out(&modules[self.mod_idx]);
             }
-            &b::InstrBody::Loop(ref inputs, _body_block) => {
-                let v = instr.results[0];
+            &b::InstrBody::Loop(ref inputs, body_block) => {
+                let v = instr.results.get(0).cloned();
 
-                let scope = scopes.begin(ScopePayload::new());
-                scope.is_loop = true;
+                let scope = scopes.begin(ScopePayload::new(v), body_block);
                 for (loop_v, initial_v) in inputs.clone() {
                     self.merge_types([&initial_v, &loop_v], modules);
                     scope.loop_args.push(loop_v);
                 }
 
                 cursor.step_in(&modules[self.mod_idx]);
-                if let Some(result) = self.add_block(cursor, scopes, func_idx, modules) {
-                    self.merge_types([&result, &v], modules);
-                }
+                self.add_block(cursor, scopes, func_idx, modules);
 
                 scopes.end();
                 cursor.step_out(&modules[self.mod_idx]);
             }
-            b::InstrBody::Continue(vs) => {
+            &b::InstrBody::Break(block_idx, v) => {
+                let result = scopes
+                    .find_last(|x| x.block_idx == block_idx)
+                    .and_then(|x| x.result);
+                if let (Some(v), Some(result)) = (v, result) {
+                    self.merge_types([&result, &v], modules);
+                }
+            }
+            &b::InstrBody::Continue(block_idx, ref vs) => {
                 let loop_args = &scopes
-                    .last_loop()
-                    .expect("continue should be called inside a loop")
+                    .find_last(|x| x.block_idx == block_idx)
+                    .unwrap()
                     .loop_args;
                 for (v, loop_v) in izip!(vs.clone(), loop_args) {
                     if v != *loop_v {
@@ -671,7 +658,7 @@ impl<'a> TypeChecker<'a> {
                     modules,
                 );
             }
-            b::InstrBody::Break(_) | b::InstrBody::CompileError => {}
+            b::InstrBody::CompileError => {}
         }
     }
 
@@ -1221,7 +1208,15 @@ impl<'a> TypeChecker<'a> {
 
 #[derive(Debug, Clone, ctor)]
 struct ScopePayload {
+    result:    Option<b::ValueIdx>,
     #[ctor(default)]
     loop_args: Vec<b::ValueIdx>,
 }
-impl utils::SimpleScopePayload for ScopePayload {}
+
+impl utils::ScopePayload for ScopePayload {
+    type Result = ();
+
+    fn reset(&mut self, _prev: Option<&Self>) -> Self::Result {
+        ()
+    }
+}

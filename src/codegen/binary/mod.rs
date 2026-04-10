@@ -20,7 +20,7 @@ use self::context::{CodegenContext, FuncBinding};
 use self::debug::{DebugData, DebugFunction};
 use self::func::{Callee, FuncCodegen};
 use self::name_mangling::NameMangler;
-use self::types::{ResultPolicy, ReturnPolicy};
+use self::types::ReturnPolicy;
 use crate::{bytecode as b, cmd, config, sources, utils};
 
 utils::number_enum!(pub FuncNS: u32 {
@@ -229,8 +229,11 @@ impl BinaryCodegen<'_> {
         utils::replace_with(self, |mut this| {
             let mut func_ctx = cl::FunctionBuilderContext::new();
             let func_builder = cl::FunctionBuilder::new(&mut func, &mut func_ctx);
-            let mut codegen = FuncCodegen::new(this.ctx, Some(func_builder), true);
-            codegen.create_initial_block(&[], None, ResultPolicy::Normal, 0);
+            let mut codegen =
+                FuncCodegen::new(this.ctx, Some(func_builder), ReturnPolicy::Void);
+            codegen.is_global = true;
+
+            codegen.create_dummy_initial_block();
 
             for ((i, j), global) in codegen
                 .ctx
@@ -243,44 +246,47 @@ impl BinaryCodegen<'_> {
                     continue;
                 };
 
+                let decl = &codegen.ctx.modules[i].globals[j];
+
                 let types::ValueSource::Data(data_id) = &global.value.src else {
                     panic!("non const global should be a writable data");
                 };
 
-                let gv = codegen.ctx.modules[i].globals[j].value;
-                let ty = &codegen.ctx.modules[i].values[gv].ty;
+                let ty = &codegen.ctx.modules[i].values[decl.value].ty;
 
-                let start_block = codegen.scopes.last().block;
+                let block = codegen.scopes.last().block;
+                codegen.scopes.last_mut().block =
+                    codegen.create_block_with_result(Some(ty));
 
-                codegen.scopes.begin(func::ScopePayload {
-                    start_block,
-                    block: start_block,
-                    next_branches: vec![],
-                    result: Some(gv),
-                    ty: Some(Cow::Borrowed(ty)),
-                    declared_consts: HashMap::new(),
-                });
-
-                codegen
-                    .values
-                    .insert((i, gv), types::RuntimeValue::new((*data_id).into(), i, gv));
-
-                codegen.add_block(
-                    codegen.ctx.modules[i].globals[j].body,
-                    i,
-                    ResultPolicy::Global,
+                codegen.scopes.begin(
+                    func::ScopePayload {
+                        start_block: block,
+                        block,
+                        next_branches: vec![],
+                        result: Some(decl.value),
+                        ty: Some(Cow::Borrowed(ty)),
+                        declared_consts: HashMap::new(),
+                    },
+                    decl.body,
                 );
 
-                codegen.scopes.end();
+                codegen.values.insert(
+                    (i, decl.value),
+                    types::RuntimeValue::new((*data_id).into(), i, decl.value),
+                );
+
+                codegen.add_block(codegen.ctx.modules[i].globals[j].body, i);
+
+                let (_, next_block) = codegen.scopes.end();
+                // add_block will jump to the next block but not switch to it
+                if let Some(next_block) = next_block {
+                    let builder = codegen.builder.as_mut().unwrap();
+                    builder.switch_to_block(next_block);
+                }
+
+                codegen.write_global(i, decl.value, *data_id);
+
                 codegen.values.clear();
-
-                let builder = codegen.builder.as_mut().unwrap();
-
-                let next_block = builder.create_block();
-                builder.ins().jump(next_block, &[]);
-                builder.switch_to_block(next_block);
-
-                codegen.scopes.last_mut().block = next_block;
             }
 
             if let Some((mod_idx, func_idx)) = this.rt_start {
@@ -319,15 +325,15 @@ impl BinaryCodegen<'_> {
             let mut func_ctx = cl::FunctionBuilderContext::new();
             let func = this.declared_funcs.get_mut(&(mod_idx, idx)).unwrap();
             let func_builder = cl::FunctionBuilder::new(func, &mut func_ctx);
-            let mut codegen = FuncCodegen::new(this.ctx, Some(func_builder), false);
+            let mut codegen = FuncCodegen::new(this.ctx, Some(func_builder), ret_policy);
             codegen.create_initial_block(
                 &decl.params,
                 Some(decl.ret),
-                ResultPolicy::Return(ret_policy),
+                decl.body,
                 mod_idx,
             );
 
-            codegen.add_block(decl.body, mod_idx, ResultPolicy::Return(ret_policy));
+            codegen.add_block(decl.body, mod_idx);
 
             this.ctx = codegen.finish();
             this

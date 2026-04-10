@@ -53,30 +53,29 @@ impl<'a> RuntimeBuilder<'a> {
         let main_global_def = &modules[main_global.0].globals[main_global.1];
         let main_ty = &modules[main_global.0].values[main_global_def.value].ty;
 
+        let ret_v = self.add_value(b::TypeBody::Void);
         let main_v = self.add_value(main_ty.body.clone());
-        let entry_v = self.add_value(b::TypeBody::Void);
 
-        let mut body = vec![b::Instr::get_global(
+        let body_block = self.add_block();
+
+        self.blocks[body_block].extend([b::Instr::get_global(
             main_global.0,
             main_global.1,
             main_v,
             None,
-        )];
+        )]);
 
-        if let Err(e) = self.add_print(&mut body, main_v) {
+        if let Err(e) = self.add_print_main(body_block, main_v) {
             self.ctx.push_error(e);
             return self;
         }
 
-        body.push(b::Instr::break_(None, None));
-
-        let body_block = self.add_block(body);
         let entry_idx = self.funcs.len();
         self.funcs.push(b::Func {
             name: b::Name::from_ident("entry", b::NameIdentKind::Func, None),
             body: body_block,
             params: vec![],
-            ret: entry_v,
+            ret: ret_v,
             method: None,
             extrn: None,
             is_entry: true,
@@ -90,9 +89,9 @@ impl<'a> RuntimeBuilder<'a> {
         self
     }
 
-    fn add_print(
+    fn add_print_main(
         &mut self,
-        body: &mut Vec<b::Instr>,
+        block: b::BlockIdx,
         main_v: b::ValueIdx,
     ) -> Result<(), errors::Error> {
         let Some(main_global) = *self.ctx.main.read().unwrap() else {
@@ -105,41 +104,49 @@ impl<'a> RuntimeBuilder<'a> {
         let main_ty = &modules[main_global.0].values[main_global_def.value].ty;
 
         let str_ty = b::Type::new(b::TypeBody::String, None);
-        if main_ty.intersection(&str_ty, &*modules).is_some() {
-            self.add_print_str(body, main_v, &*modules);
-            return Ok(());
-        }
-
         let array_ty = b::Type::new(b::TypeBody::Array(str_ty.clone().into()), None);
-        if main_ty.intersection(&array_ty, &*modules).is_some() {
-            self.add_print_array(body, main_v, &*modules);
-            return Ok(());
-        }
-
         let array_2d_ty = b::Type::new(b::TypeBody::Array(array_ty.clone().into()), None);
-        if main_ty.intersection(&array_2d_ty, &*modules).is_some() {
-            self.add_print_array_2d(body, main_v, &*modules);
-            return Ok(());
+
+        if main_ty.intersection(&str_ty, &*modules).is_none()
+            && main_ty.intersection(&array_ty, &*modules).is_none()
+            && main_ty.intersection(&array_2d_ty, &*modules).is_none()
+        {
+            return Err(errors::Error::new(
+                errors::UnexpectedType::new(
+                    vec![&str_ty, &array_ty, &array_2d_ty],
+                    main_ty,
+                    &modules,
+                    &self.ctx.cfg,
+                )
+                .into(),
+                Some(main_global_def.loc),
+            ));
         }
 
-        Err(errors::Error::new(
-            errors::UnexpectedType::new(
-                vec![&str_ty, &array_ty, &array_2d_ty],
-                main_ty,
-                &modules,
-                &self.ctx.cfg,
-            )
-            .into(),
-            Some(main_global_def.loc),
-        ))
+        self.add_print(block, Some(block), main_v, &*modules);
+        Ok(())
     }
 
-    fn add_print_str(
+    fn add_print(
         &mut self,
-        body: &mut Vec<b::Instr>,
-        v: usize,
+        block: b::BlockIdx,
+        result_block: Option<b::BlockIdx>,
+        v: b::ValueIdx,
         modules: &[b::Module],
     ) {
+        let ty = &self.values[v].ty;
+
+        if matches!(ty.body, b::TypeBody::Array(_)) {
+            self.add_print_array(block, result_block, v, &*modules);
+        } else {
+            self.add_print_str(block, v, &*modules);
+            if let Some(result_block) = result_block {
+                self.blocks[block].extend([b::Instr::break_(result_block, None, None)]);
+            }
+        }
+    }
+
+    fn add_print_str(&mut self, block: b::BlockIdx, v: usize, modules: &[b::Module]) {
         let core_mod_idx = self.ctx.core_mod_idx.expect("core should be defined");
 
         let (print_func_idx, print_func) = modules[core_mod_idx]
@@ -149,109 +156,69 @@ impl<'a> RuntimeBuilder<'a> {
         let print_ty = &modules[core_mod_idx].values[print_func.ret].ty;
         let print_v = self.add_value(print_ty.body.clone());
 
-        body.push(b::Instr::call(
+        self.blocks[block].extend([b::Instr::call(
             core_mod_idx,
             print_func_idx,
             vec![v],
             print_v,
             None,
-        ));
+        )]);
     }
 
     fn add_print_array<'s>(
         &mut self,
-        body: &mut Vec<b::Instr>,
+        block: b::BlockIdx,
+        result_block: Option<b::BlockIdx>,
         v: usize,
         modules: &[b::Module],
     ) {
         let len_v = self.add_value(b::TypeBody::USize);
-        body.push(b::Instr::array_len(v, len_v, None));
-
         let zero_v = self.add_value(b::TypeBody::USize);
-        body.push(b::Instr::create_number("0".to_string(), zero_v, None));
-
         let one_v = self.add_value(b::TypeBody::USize);
-        body.push(b::Instr::create_number("1".to_string(), one_v, None));
-
         let idx_v = self.add_value(b::TypeBody::USize);
         let cond_v = self.add_value(b::TypeBody::Bool);
 
-        let mut then_body = vec![];
+        let loop_block = self.add_block();
+        let then_block = self.add_block();
+        let else_block = self.add_block();
 
-        let str_v = self.add_value(b::TypeBody::String);
-        then_body.push(b::Instr::array_index(v, idx_v, str_v, None));
+        self.blocks[block].extend([
+            b::Instr::array_len(v, len_v, None),
+            b::Instr::create_number("0".to_string(), zero_v, None),
+            b::Instr::create_number("1".to_string(), one_v, None),
+            b::Instr::loop_(vec![(idx_v, zero_v)], loop_block, None, None),
+        ]);
 
-        self.add_print_str(&mut then_body, str_v, &*modules);
-
-        let new_idx_v = self.add_value(b::TypeBody::USize);
-        then_body.push(b::Instr::add(idx_v, one_v, new_idx_v, None));
-        then_body.push(b::Instr::continue_(vec![new_idx_v], None));
-
-        let then_block = self.add_block(then_body);
-        let else_block = self.add_block([]);
-        let loop_body = vec![
+        self.blocks[loop_block].extend(vec![
             b::Instr::lt(idx_v, len_v, cond_v, None),
             b::Instr::if_(cond_v, then_block, else_block, None, None),
-            b::Instr::break_(None, None),
-        ];
-        let loop_block = self.add_block(loop_body);
-        body.push(b::Instr::loop_(
-            vec![(idx_v, zero_v)],
-            loop_block,
-            None,
-            None,
-        ));
-    }
+        ]);
 
-    fn add_print_array_2d<'s>(
-        &mut self,
-        body: &mut Vec<b::Instr>,
-        v: usize,
-        modules: &[b::Module],
-    ) {
-        let len_v = self.add_value(b::TypeBody::USize);
-        body.push(b::Instr::array_len(v, len_v, None));
+        let b::TypeBody::Array(item_ty) = &self.values[v].ty.body else {
+            panic!("type should be an array type");
+        };
 
-        let zero_v = self.add_value(b::TypeBody::USize);
-        body.push(b::Instr::create_number("0".to_string(), zero_v, None));
-
-        let one_v = self.add_value(b::TypeBody::USize);
-        body.push(b::Instr::create_number("1".to_string(), one_v, None));
-
-        let idx_v = self.add_value(b::TypeBody::USize);
-        let cond_v = self.add_value(b::TypeBody::Bool);
-
-        let mut then_body = vec![];
-
-        let str_array_v = self.add_value(b::TypeBody::Array(
-            b::Type::new(b::TypeBody::String, None).into(),
-        ));
-        then_body.push(b::Instr::array_index(v, idx_v, str_array_v, None));
-
-        self.add_print_array(&mut then_body, str_array_v, &*modules);
-
+        let str_v = self.add_value(item_ty.body.clone());
         let new_idx_v = self.add_value(b::TypeBody::USize);
-        then_body.push(b::Instr::add(idx_v, one_v, new_idx_v, None));
-        then_body.push(b::Instr::continue_(vec![new_idx_v], None));
 
-        let then_block = self.add_block(then_body);
-        let else_block = self.add_block([]);
-        let loop_body = vec![
-            b::Instr::lt(idx_v, len_v, cond_v, None),
-            b::Instr::if_(cond_v, then_block, else_block, None, None),
-            b::Instr::break_(None, None),
-        ];
-        let loop_block = self.add_block(loop_body);
-        body.push(b::Instr::loop_(
-            vec![(idx_v, zero_v)],
-            loop_block,
+        self.blocks[then_block].extend([b::Instr::array_index(v, idx_v, str_v, None)]);
+
+        self.add_print(then_block, None, str_v, &*modules);
+
+        self.blocks[then_block].extend([
+            b::Instr::add(idx_v, one_v, new_idx_v, None),
+            b::Instr::continue_(loop_block, vec![new_idx_v], None),
+        ]);
+
+        self.blocks[else_block].extend([b::Instr::break_(
+            result_block.unwrap_or(loop_block),
             None,
             None,
-        ));
+        )]);
     }
 
-    fn add_block(&mut self, body: impl IntoIterator<Item = b::Instr>) -> b::BlockIdx {
-        self.blocks.push(b::Block::from_iter(body));
+    fn add_block(&mut self) -> b::BlockIdx {
+        self.blocks.push(b::Block::default());
         self.blocks.len() - 1
     }
 

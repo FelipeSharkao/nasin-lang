@@ -39,16 +39,13 @@ pub struct ModuleParser<'a, 't> {
 impl<'a, 't> ModuleParser<'a, 't> {
     pub fn finish(mut self) {
         for i in 0..self.globals.len() {
-            let value_node = self.globals[i].value_node.clone();
+            let value_node = self.globals[i].value_node;
+            let block_idx = self.globals[i].global.body;
 
-            let mut value_parser = ExprParser::new(self, None, []);
+            let mut value_parser = ExprParser::new(self, None, block_idx, []);
+            value_parser.add_expr_node(value_node, Some(block_idx));
+            self = value_parser.finish();
 
-            let value_ref = value_parser.add_expr_node(value_node, true);
-            let result = value_parser.use_value_ref(&value_ref);
-
-            let body_instrs;
-            (self, body_instrs) = value_parser.finish(result);
-            self.globals[i].global.body = self.add_block(body_instrs);
             let global = &self.globals[i];
             if global.global.value == UNDEF_VALUE {
                 let ty = global.ty.clone();
@@ -62,16 +59,13 @@ impl<'a, 't> ModuleParser<'a, 't> {
                 let Some(value_node) = self.funcs[i].value_node else {
                     break 'parse;
                 };
+
+                let block_idx = self.funcs[i].func.body;
                 let params = self.funcs[i].params.clone();
 
-                let mut value_parser = ExprParser::new(self, Some(i), params);
-
-                let value_ref = value_parser.add_expr_node(value_node, true);
-                let result = value_parser.use_value_ref(&value_ref);
-
-                let body_instrs;
-                (self, body_instrs) = value_parser.finish(result);
-                self.funcs[i].func.body = self.add_block(body_instrs);
+                let mut value_parser = ExprParser::new(self, Some(i), block_idx, params);
+                value_parser.add_expr_node(value_node, Some(block_idx));
+                self = value_parser.finish();
             };
 
             let func = &self.funcs[i];
@@ -233,8 +227,8 @@ impl<'a, 't> ModuleParser<'a, 't> {
         self.values.len() - 1
     }
 
-    pub fn add_block(&mut self, body: impl IntoIterator<Item = b::Instr>) -> b::BlockIdx {
-        self.blocks.push(b::Block::from_iter(body));
+    pub fn add_block(&mut self) -> b::BlockIdx {
+        self.blocks.push(b::Block::default());
         self.blocks.len() - 1
     }
 
@@ -312,7 +306,7 @@ impl<'a, 't> ModuleParser<'a, 't> {
             extrn,
             is_entry: false,
             is_virt,
-            body: self.add_block([]),
+            body: self.add_block(),
             loc: Some(loc),
             generics,
             generic_instantiations: HashMap::new(),
@@ -345,7 +339,7 @@ impl<'a, 't> ModuleParser<'a, 't> {
         let global = b::Global {
             name,
             value: UNDEF_VALUE,
-            body: self.add_block([]),
+            body: self.add_block(),
             loc: b::Loc::from_node(self.src_idx, &node),
         };
         self.idents.insert(

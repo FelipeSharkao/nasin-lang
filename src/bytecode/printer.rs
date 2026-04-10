@@ -575,20 +575,17 @@ impl<'a> Printer<'a> {
                 }
                 write!(f, ", block{body_block})")
             }
-            InstrBody::Break(v) => {
-                write!(f, "Break(")?;
+            InstrBody::Break(block, v) => {
+                write!(f, "Break(block{block}")?;
                 if let Some(v) = v {
-                    write!(f, "v{v}")?;
+                    write!(f, ", v{v}")?;
                 }
                 write!(f, ")")
             }
-            InstrBody::Continue(vs) => {
-                write!(f, "Continue(")?;
-                for (i, v) in vs.iter().enumerate() {
-                    if i > 0 {
-                        write!(f, ", ")?;
-                    }
-                    write!(f, "v{v}")?;
+            InstrBody::Continue(block, vs) => {
+                write!(f, "Continue(block{block}")?;
+                for v in vs {
+                    write!(f, ", v{v}")?;
                 }
                 write!(f, ")")
             }
@@ -607,7 +604,7 @@ impl<'a> Printer<'a> {
             InstrBody::PtrOffset(p, o) => write!(f, "PtrOffset(v{p}, v{o})"),
             InstrBody::PtrSet(p, val) => write!(f, "PtrSet(v{p}, v{val})"),
             InstrBody::TypeName(v) => write!(f, "TypeName(v{v})"),
-            InstrBody::CompileError => write!(f, "CompileError()"),
+            InstrBody::CompileError => write!(f, "CompileError"),
             InstrBody::Dispatch(v, mod_idx, ty_idx) => {
                 write!(f, "Dispatch(v{v}, ")?;
                 self.write_type_ref(f, &TypeRef::new(*mod_idx, *ty_idx))?;
@@ -756,7 +753,7 @@ impl<'a> Printer<'a> {
             Some(g) => {
                 write!(f, "{}", g.name)?;
                 if self.show_ids {
-                    write!(f, " (gobal {mod_idx}-{global_idx})")?;
+                    write!(f, " (global {mod_idx}-{global_idx})")?;
                 }
             }
             None => write!(f, "global {mod_idx}-{global_idx}")?,

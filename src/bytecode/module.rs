@@ -14,27 +14,33 @@ use crate::utils::SortedMap;
 
 pub type BlockIdx = usize;
 
-#[derive(Debug, Clone, ctor)]
+#[derive(Debug, Clone, Default, ctor)]
 pub struct Block {
     pub body: Vec<Instr>,
     pub loc:  Option<Loc>,
 }
 
+impl Block {
+    pub fn extend(&mut self, instrs: impl IntoIterator<Item = Instr>) {
+        let old_len = self.body.len();
+        self.body.extend(instrs);
+        for instr in &self.body[old_len..] {
+            match (self.loc, instr.loc) {
+                (None, Some(new_loc)) => self.loc = Some(new_loc),
+                (Some(old_loc), Some(new_loc)) => {
+                    self.loc = Some(old_loc.merge(&new_loc))
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
 impl FromIterator<Instr> for Block {
     fn from_iter<T: IntoIterator<Item = Instr>>(iter: T) -> Self {
-        let mut loc = None;
-        let body = iter
-            .into_iter()
-            .map(|instr| {
-                match (loc, instr.loc) {
-                    (None, Some(new_loc)) => loc = Some(new_loc),
-                    (Some(old_loc), Some(new_loc)) => loc = Some(old_loc.merge(&new_loc)),
-                    _ => {}
-                }
-                instr
-            })
-            .collect();
-        Block::new(body, loc)
+        let mut block = Self::default();
+        block.extend(iter);
+        block
     }
 }
 
@@ -87,21 +93,28 @@ impl Module {
         &mut self,
         block_idx: BlockIdx,
         transformer: &mut impl BlockTransformer,
+        block_remap: &mut HashMap<BlockIdx, BlockIdx>,
     ) -> BlockIdx {
+        let new_block_idx = self.add_block([]);
+        block_remap.insert(block_idx, new_block_idx);
+
         let mut new_body = self.blocks[block_idx].body.clone();
 
         for instr in &mut new_body {
-            match &instr.body {
-                InstrBody::If(cond, then_block, else_block) => {
-                    let new_then = self.clone_block_tree(*then_block, transformer);
-                    let new_else = self.clone_block_tree(*else_block, transformer);
-                    instr.body = InstrBody::If(*cond, new_then, new_else);
+            match &mut instr.body {
+                InstrBody::If(_, then_block, else_block) => {
+                    *then_block =
+                        self.clone_block_tree(*then_block, transformer, block_remap);
+                    *else_block =
+                        self.clone_block_tree(*else_block, transformer, block_remap);
                 }
                 InstrBody::Loop(_, body_block) => {
-                    let new_body_block = self.clone_block_tree(*body_block, transformer);
-                    match &mut instr.body {
-                        InstrBody::Loop(_, block) => *block = new_body_block,
-                        _ => unreachable!(),
+                    *body_block =
+                        self.clone_block_tree(*body_block, transformer, block_remap);
+                }
+                InstrBody::Break(block, _) => {
+                    if let Some(new_block) = block_remap.get(block) {
+                        *block = *new_block;
                     }
                 }
                 _ => {}
@@ -110,7 +123,46 @@ impl Module {
             transformer.remap_instr(self, instr);
         }
 
-        self.add_block(new_body)
+        self.blocks[new_block_idx].body = new_body;
+        new_block_idx
+    }
+
+    pub fn clone_block_tree_rec(
+        &mut self,
+        block_idx: BlockIdx,
+        transformer: &mut impl BlockTransformer,
+        block_remap: &mut HashMap<BlockIdx, BlockIdx>,
+    ) -> BlockIdx {
+        let new_block_idx = self.add_block([]);
+        block_remap.insert(block_idx, new_block_idx);
+
+        let mut new_body = self.blocks[block_idx].body.clone();
+
+        for instr in &mut new_body {
+            match &mut instr.body {
+                InstrBody::If(_, then_block, else_block) => {
+                    *then_block =
+                        self.clone_block_tree(*then_block, transformer, block_remap);
+                    *else_block =
+                        self.clone_block_tree(*else_block, transformer, block_remap);
+                }
+                InstrBody::Loop(_, body_block) => {
+                    *body_block =
+                        self.clone_block_tree(*body_block, transformer, block_remap);
+                }
+                InstrBody::Break(block, _) => {
+                    if let Some(new_block) = block_remap.get(block) {
+                        *block = *new_block;
+                    }
+                }
+                _ => {}
+            }
+
+            transformer.remap_instr(self, instr);
+        }
+
+        self.blocks[new_block_idx].body = new_body;
+        new_block_idx
     }
 }
 
