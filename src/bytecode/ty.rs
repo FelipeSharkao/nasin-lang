@@ -1,13 +1,16 @@
 use std::borrow::Cow;
+use std::collections::HashMap;
 use std::fmt;
 use std::hash::Hash;
 
 use derive_ctor::ctor;
 use derive_more::{Display, From};
 use derive_setters::Setters;
+use genawaiter::rc::r#gen as rc_gen;
+use genawaiter::yield_;
 use itertools::{Itertools, chain, izip};
 
-use super::{Loc, Module, TypeDef, TypeDefBody};
+use super::{Loc, Module, TypeDef, TypeDefBody, TypeVarIdx};
 use crate::utils::{self, unordered};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, From)]
@@ -52,7 +55,7 @@ impl Display for TypeBody {
             TypeBody::AnyNumber => write!(f, "AnyNumber")?,
             TypeBody::AnySignedNumber => write!(f, "AnySignedNumber")?,
             TypeBody::AnyFloat => write!(f, "AnyFloat")?,
-            TypeBody::AnyOpaque => write!(f, "anyopaque")?,
+            TypeBody::AnyOpaque => write!(f, "AnyOpaque")?,
             TypeBody::I8 => write!(f, "i8")?,
             TypeBody::I16 => write!(f, "i16")?,
             TypeBody::I32 => write!(f, "i32")?,
@@ -64,8 +67,9 @@ impl Display for TypeBody {
             TypeBody::USize => write!(f, "usize")?,
             TypeBody::F32 => write!(f, "f32")?,
             TypeBody::F64 => write!(f, "f64")?,
+            TypeBody::String => write!(f, "str")?,
             TypeBody::Inferred(v) => {
-                write!(f, "infered {{")?;
+                write!(f, "{{")?;
                 for (name, t) in &v.members {
                     write!(f, " {name}: {t}")?;
                 }
@@ -74,21 +78,19 @@ impl Display for TypeBody {
                 }
                 write!(f, " }}")?;
             }
-            TypeBody::String => {
-                write!(f, "string")?;
-            }
-            TypeBody::Array(v) => {
-                write!(f, "array {}", v)?;
-            }
+            TypeBody::Array(v) => write!(f, "[{v}]")?,
             TypeBody::Ptr(ty) => {
-                write!(f, "ptr")?;
+                write!(f, "Ptr")?;
                 if let Some(ty) = ty {
-                    write!(f, " {ty}")?;
+                    write!(f, "({ty})")?;
                 }
             }
-            TypeBody::Func(func) => {
-                write!(f, "func {}: {}", utils::join(", ", &func.params), &func.ret)?
-            }
+            TypeBody::Func(func) => write!(
+                f,
+                "Func({}): {}",
+                utils::join(", ", &func.params),
+                &func.ret
+            )?,
             TypeBody::TypeRef(ty_ref) => write!(
                 f,
                 "{} {}-{}",
@@ -103,6 +105,7 @@ impl Display for TypeBody {
         Ok(())
     }
 }
+
 impl TypeBody {
     pub fn unknown() -> Self {
         TypeBody::Inferred(InferredType {
@@ -146,7 +149,8 @@ impl TypeBody {
     }
 }
 
-#[derive(Debug, Clone, ctor)]
+#[derive(Debug, Display, Clone, ctor)]
+#[display("{body}")]
 pub struct Type {
     pub body: TypeBody,
     pub loc:  Option<Loc>,
@@ -167,6 +171,7 @@ macro_rules! body {
         }
     };
 }
+
 impl Type {
     pub fn unknown(loc: Option<Loc>) -> Self {
         Type::new(TypeBody::unknown(), loc)
@@ -568,26 +573,60 @@ impl Type {
             _ => false,
         }
     }
+
+    pub fn substitute_typevar<'m>(
+        &self,
+        substitutions: &'m HashMap<TypeVarIdx, Type>,
+    ) -> Option<Type> {
+        let TypeBody::TypeVar(typevar) = &self.body else {
+            return None;
+        };
+        substitutions.get(&typevar.typevar_idx).cloned()
+    }
+
+    pub fn typevars(&self) -> impl Iterator<Item = TypeVarIdx> {
+        rc_gen!({
+            match &self.body {
+                TypeBody::TypeVar(typevar) => yield_!(typevar.typevar_idx),
+                TypeBody::Func(func_ty) => {
+                    for typevar in func_ty.ret.typevars() {
+                        yield_!(typevar);
+                    }
+                    for param in func_ty.params.iter() {
+                        for typevar in param.typevars() {
+                            yield_!(typevar);
+                        }
+                    }
+                }
+                TypeBody::Array(elem_ty) => {
+                    for typevar in elem_ty.typevars() {
+                        yield_!(typevar);
+                    }
+                }
+                TypeBody::Ptr(elem_ty) => {
+                    if let Some(elem_ty) = elem_ty {
+                        for typevar in elem_ty.typevars() {
+                            yield_!(typevar);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        })
+        .into_iter()
+    }
 }
+
 impl PartialEq for Type {
     fn eq(&self, other: &Self) -> bool {
         &self.body == &other.body
     }
 }
+
 impl Eq for Type {}
 impl Hash for Type {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.body.hash(state)
-    }
-}
-impl Display for Type {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "({}", &self.body)?;
-        if let Some(loc) = &self.loc {
-            write!(f, " {loc}")?;
-        }
-        write!(f, ")")?;
-        Ok(())
     }
 }
 

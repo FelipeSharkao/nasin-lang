@@ -22,9 +22,6 @@ pub struct ValueRef {
     pub loc:  Option<b::Loc>,
 }
 impl ValueRef {
-    pub fn is_never(&self) -> bool {
-        matches!(&self.body, ValueRefBody::Never)
-    }
     pub fn with_loc(&self, loc: b::Loc) -> Self {
         let mut new = self.clone();
         new.loc = Some(loc);

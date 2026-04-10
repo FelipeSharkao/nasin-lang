@@ -81,9 +81,13 @@ gdb -batch -ex "info functions" <binary>
 - Avoid adding small comments to explain what the code does. Code should be
   self-explanatory. Keep comments restricted to function/method documentation and complex
   or non-obvious code.
+- Avoid comments that only means to separate chunks of code. Keep comments restricted to
+  meaningful explanations of hard-to-understand code.
 - The codebase uses column-aligned struct fields (padded with spaces). Match the existing
   alignment style when editing structs so that the formatter doesn't introduce unnecessary
   diffs.
+- Avoid one-line wrapper functions/methods. Prefer inlining the expression at call sites
+  unless the one-liner hides genuinely confusing logic.
 
 ## Lock Discipline
 
@@ -112,7 +116,47 @@ The compilation pipeline runs in this order:
 
 When adding new features, be aware that `--dump-bytecode` output reflects the state
 _after_ typecheck but _before_ transforms. `--dump-transformed-bytecode` reflects the
-state after transformations.
+state after transformations. Use `--dump-untyped-bytecode` to dump parsed bytecode
+before type checking.
+
+## Block Model
+
+The bytecode uses a flat block structure:
+
+- `BlockIdx = usize` — index into `Module::blocks`
+- `Block { body: Vec<Instr>, loc: Option<Loc> }` — contains instructions
+- `InstrBody::If(ValueIdx, BlockIdx, BlockIdx)` — then/else branches are block indices
+- `InstrBody::Loop(Vec<(ValueIdx, ValueIdx)>, BlockIdx)` — body is a block index
+- `InstrBody::Break(BlockIdx, Option<ValueIdx>)` — target block + optional value
+- `InstrBody::Continue(BlockIdx, Vec<ValueIdx>)` — target block + loop variables
+
+Use `Module::clone_block_tree()` to deep-clone a block and all transitively
+referenced sub-blocks, applying a transformer to remap value indices.
+
+## BlockCursor
+
+`bytecode/cursor.rs` provides a cursor for traversing and transforming block trees:
+
+- `BlockCursor::new(block_idx)` — create cursor at start of block
+- `cursor.step(module)` — move to next instruction, entering nested blocks (depth-first)
+- `cursor.step_over(module)` — move to next instruction without entering nested blocks
+- `cursor.step_in(module)` — enter first nested block, queue others in `next_branches`
+- `cursor.step_out(module)` — exit current block to next queued branch or outer block
+- `cursor.instr(module)` / `cursor.instr_mut(module)` — get current instruction
+- `cursor.insert_instr(module, instr)` — insert at current position
+
+The cursor uses `Option<usize>` for `instr_idx` — `None` means "not yet positioned",
+first `step()` moves to first instruction.
+
+## Bytecode Printer
+
+The `bytecode/printer.rs` module uses `bump_scope` for efficient string allocation.
+Use `Printer::new(&modules, &cfg)` to create a printer, then:
+
+- `print_all()` — print all modules to stdout
+- `print_module(mod_idx)` — print a specific module
+- `show_ids(true)` — show module/value/function indices
+- `source_manager(&sm)` — enable source location display
 
 ## Generics Implementation Notes
 

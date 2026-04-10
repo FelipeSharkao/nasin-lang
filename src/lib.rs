@@ -6,20 +6,21 @@ use std::{fs, io, process};
 
 use clap::Args;
 
+mod bytecode;
+mod codegen;
+mod config;
+mod context;
+mod errors;
+mod parser;
+mod sources;
+mod transform;
+mod typecheck;
+mod utils;
+
+use self::bytecode as b;
 use self::config::BuildConfig;
 use self::errors::CompilerError;
 use self::utils::cmd;
-
-pub mod bytecode;
-pub mod codegen;
-pub mod config;
-pub mod context;
-pub mod errors;
-pub mod parser;
-pub mod sources;
-pub mod transform;
-pub mod typecheck;
-mod utils;
 
 #[derive(Args, Debug)]
 pub struct EmitArgs {
@@ -38,6 +39,10 @@ pub struct EmitArgs {
     /// Whether to dump the parsed bytecode of the source file after transformations (e.g.
     /// monomorphization)
     dump_transformed_bytecode: bool,
+    #[arg(long)]
+    /// Whether to dump the parsed bytecode of the source file before type inference and
+    /// type checking is performed
+    dump_untyped_bytecode: bool,
     #[arg(long)]
     /// Whether to dump the parsed CLIF of the source file, if using Cranelift
     dump_clif: bool,
@@ -114,11 +119,12 @@ pub fn build_maybe_run(
         dump_ast: emit.dump_ast,
         dump_bytecode: emit.dump_bytecode,
         dump_transformed_bytecode: emit.dump_transformed_bytecode,
+        dump_untyped_bytecode: emit.dump_untyped_bytecode,
         dump_clif: emit.dump_clif,
         run,
     });
 
-    let Ok(src_idx) = ctx.preload(file) else {
+    let Ok(src_idx) = ctx.open(file) else {
         return Err(ctx.into_compile_error());
     };
 
@@ -126,21 +132,23 @@ pub fn build_maybe_run(
         return Err(ctx.into_compile_error());
     }
 
-    ctx.parse(src_idx, true);
+    ctx.parse(src_idx);
     if ctx.has_errors() {
         if ctx.cfg.dump_bytecode {
-            for module in &*ctx.lock_modules() {
-                println!("{module}");
-            }
+            b::Printer::new(&ctx.lock_modules(), &ctx.cfg)
+                .show_ids(true)
+                .source_manager(&ctx.source_manager)
+                .print_all();
         }
 
         return Err(ctx.into_compile_error());
     }
 
     if ctx.cfg.dump_bytecode {
-        for module in &*ctx.lock_modules() {
-            println!("{module}");
-        }
+        b::Printer::new(&ctx.lock_modules(), &ctx.cfg)
+            .show_ids(true)
+            .source_manager(&ctx.source_manager)
+            .print_all();
     }
 
     let code_transform = transform::CodeTransform::new(&ctx);
@@ -150,9 +158,10 @@ pub fn build_maybe_run(
     code_transform.apply(transform::FinishDispatchStep::new(&ctx));
 
     if ctx.cfg.dump_transformed_bytecode {
-        for module in &*ctx.lock_modules() {
-            println!("{module}");
-        }
+        b::Printer::new(&ctx.lock_modules(), &ctx.cfg)
+            .show_ids(true)
+            .source_manager(&ctx.source_manager)
+            .print_all();
     }
 
     ctx.compile();

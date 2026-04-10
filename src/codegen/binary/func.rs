@@ -8,7 +8,7 @@ use itertools::{Itertools, izip};
 
 use super::context::CodegenContext;
 use super::name_mangling::NameMangler;
-use super::types::{self, ResultPolicy, ReturnPolicy};
+use super::types;
 use crate::utils::unwrap;
 use crate::{bytecode as b, utils};
 
@@ -22,6 +22,8 @@ pub enum Callee {
 pub struct FuncCodegen<'a, 'b> {
     pub ctx: CodegenContext<'a>,
     pub builder: Option<cl::FunctionBuilder<'b>>,
+    pub ret_policy: types::ReturnPolicy,
+    #[ctor(default)]
     pub is_global: bool,
     #[ctor(expr(utils::ScopeStack::empty()))]
     pub scopes: utils::ScopeStack<ScopePayload<'a>>,
@@ -47,18 +49,18 @@ impl<'a> FuncCodegen<'a, '_> {
         &mut self,
         params: &'a [b::ValueIdx],
         result: Option<b::ValueIdx>,
-        result_policy: ResultPolicy,
+        block_idx: b::BlockIdx,
         mod_idx: usize,
     ) {
-        let (block, mut cl_values) = {
-            let builder = expect_builder!(self);
-            let block = builder.create_block();
-            builder.append_block_params_for_function_params(block);
-            (block, builder.block_params(block).to_vec())
-        };
+        let builder = expect_builder!(self);
 
-        if let (ResultPolicy::Return(types::ReturnPolicy::Struct(_)), Some(result)) =
-            (result_policy, result)
+        let block = builder.create_block();
+        builder.append_block_params_for_function_params(block);
+        builder.switch_to_block(block);
+
+        let mut cl_values = builder.block_params(block).to_vec();
+
+        if let (types::ReturnPolicy::Struct(_), Some(result)) = (self.ret_policy, result)
         {
             let cl_value = cl_values.remove(0);
             let runtime_value = types::RuntimeValue::new(
@@ -80,17 +82,40 @@ impl<'a> FuncCodegen<'a, '_> {
             ),
         ));
 
-        expect_builder!(self).switch_to_block(block);
-        self.scopes.begin(ScopePayload {
-            start_block: block,
-            block,
-            next_branches: vec![],
-            ty: result
-                .clone()
-                .map(|v| Cow::Borrowed(&self.ctx.modules[mod_idx].values[v].ty)),
-            result,
-            declared_consts: HashMap::new(),
-        });
+        self.scopes.begin(
+            ScopePayload {
+                start_block: block,
+                block,
+                next_branches: vec![],
+                ty: result
+                    .clone()
+                    .map(|v| Cow::Borrowed(&self.ctx.modules[mod_idx].values[v].ty)),
+                result,
+                declared_consts: HashMap::new(),
+            },
+            block_idx,
+        );
+    }
+
+    /// Creates the initial block for functions that are not defined in the bytecode
+    pub fn create_dummy_initial_block(&mut self) {
+        self.create_initial_block(&[], None, usize::MAX, usize::MAX);
+    }
+
+    /// Creates a cranelift block that takes an optional result
+    pub fn create_block_with_result(&mut self, ty: Option<&b::Type>) -> cl::Block {
+        let builder = expect_builder!(self);
+        let block = builder.create_block();
+
+        if let Some(ty) = ty {
+            for native_ty in
+                types::get_type_canonical(ty, self.ctx.modules, &self.ctx.cl_module)
+            {
+                builder.append_block_param(block, native_ty);
+            }
+        }
+
+        block
     }
 
     pub fn finish(self) -> CodegenContext<'a> {
@@ -99,14 +124,10 @@ impl<'a> FuncCodegen<'a, '_> {
     }
 
     #[tracing::instrument(skip_all)]
-    pub fn add_body(
-        &mut self,
-        body: impl IntoIterator<Item = &'a b::Instr>,
-        mod_idx: usize,
-        result_policy: ResultPolicy,
-    ) {
-        for instr in body {
-            self.add_instr(instr, mod_idx, result_policy);
+    pub fn add_block(&mut self, block_idx: b::BlockIdx, mod_idx: usize) {
+        let body = self.ctx.modules[mod_idx].blocks[block_idx].body.to_vec();
+        for instr in &body {
+            self.add_instr(instr, mod_idx);
             if self.scopes.last().is_never()
                 || matches!(&instr.body, b::InstrBody::Break(..))
             {
@@ -116,12 +137,7 @@ impl<'a> FuncCodegen<'a, '_> {
     }
 
     #[tracing::instrument(skip(self))]
-    pub fn add_instr(
-        &mut self,
-        instr: &'a b::Instr,
-        mod_idx: usize,
-        result_policy: ResultPolicy,
-    ) {
+    pub fn add_instr(&mut self, instr: &b::Instr, mod_idx: usize) {
         if self.scopes.last().is_never() {
             return;
         }
@@ -269,10 +285,16 @@ impl<'a> FuncCodegen<'a, '_> {
                     ),
                 );
             }
-            b::InstrBody::If(cond, then_, else_) => {
-                if then_.len() == 0 && else_.len() == 0 {
+            b::InstrBody::If(cond, then_block_idx, else_block_idx) => {
+                let then_body = &self.ctx.modules[mod_idx].blocks[*then_block_idx].body;
+                let else_body = &self.ctx.modules[mod_idx].blocks[*else_block_idx].body;
+
+                if then_body.len() == 0 && else_body.len() == 0 {
                     return;
                 }
+
+                let then_not_empty = then_body.len() > 0;
+                let else_not_empty = else_body.len() > 0;
 
                 let cond = self.use_value_by_value(mod_idx, *cond);
                 assert!(cond.len() == 1);
@@ -280,19 +302,29 @@ impl<'a> FuncCodegen<'a, '_> {
 
                 let builder = expect_builder!(self);
 
-                let then_block = if then_.len() > 0 {
+                let then_block = if then_not_empty {
                     Some(builder.create_block())
                 } else {
                     None
                 };
-                let else_block = if else_.len() > 0 {
+                let else_block = if else_not_empty {
                     Some(builder.create_block())
                 } else {
                     None
                 };
 
-                let next_block = builder.create_block();
+                let (result, ty) = if instr.results.len() > 0 {
+                    let module = &self.ctx.modules[mod_idx];
+                    let ty = &module.values[instr.results[0]].ty;
 
+                    (Some(instr.results[0]), Some(Cow::Borrowed(ty)))
+                } else {
+                    (None, None)
+                };
+
+                let next_block = self.create_block_with_result(ty.as_deref());
+
+                let builder = expect_builder!(self);
                 builder.ins().brif(
                     cond,
                     then_block.unwrap_or(next_block),
@@ -301,43 +333,33 @@ impl<'a> FuncCodegen<'a, '_> {
                     &[],
                 );
 
-                let declared_consts = self.scopes.last().declared_consts.clone();
+                let last_scope = self.scopes.last_mut();
+                let declared_consts = last_scope.declared_consts.clone();
+
                 let mut scope = ScopePayload::new(
-                    then_block.unwrap_or(self.scopes.last().block),
+                    then_block.unwrap_or(last_scope.block),
                     declared_consts.clone(),
                 );
+                scope.result = result;
+                scope.ty = ty;
+
                 scope.next_branches.push(else_block.unwrap_or(next_block));
 
-                self.scopes.last_mut().block = next_block;
-                if instr.results.len() > 0 {
-                    let module = &self.ctx.modules[mod_idx];
-                    let ty = &module.values[instr.results[0]].ty;
+                last_scope.block = next_block;
 
-                    for native_ty in types::get_type_canonical(
-                        ty,
-                        self.ctx.modules,
-                        &self.ctx.cl_module,
-                    ) {
-                        builder.append_block_param(next_block, native_ty);
-                    }
-
-                    scope.result = Some(instr.results[0]);
-                    scope.ty = Some(Cow::Borrowed(ty));
-                }
-
-                self.scopes.begin(scope);
+                self.scopes.begin(scope, *then_block_idx);
 
                 if let Some(then_block) = then_block {
                     expect_builder!(self).switch_to_block(then_block);
-                    self.add_body(then_, mod_idx, ResultPolicy::Normal);
+                    self.add_block(*then_block_idx, mod_idx);
                 }
 
-                self.scopes.branch();
-                self.scopes.last_mut().declared_consts = declared_consts;
+                let (scope, _) = self.scopes.branch(*else_block_idx);
+                scope.declared_consts = declared_consts;
 
                 if let Some(else_block) = else_block {
                     expect_builder!(self).switch_to_block(else_block);
-                    self.add_body(else_, mod_idx, ResultPolicy::Normal);
+                    self.add_block(*else_block_idx, mod_idx);
                 }
 
                 let (scope, _) = self.scopes.end();
@@ -346,7 +368,7 @@ impl<'a> FuncCodegen<'a, '_> {
                     expect_builder!(self).switch_to_block(next_block);
                 }
             }
-            b::InstrBody::Loop(inputs, body) => {
+            b::InstrBody::Loop(inputs, body_block_idx) => {
                 let loop_block = {
                     let builder = expect_builder!(self);
                     builder.create_block()
@@ -378,38 +400,34 @@ impl<'a> FuncCodegen<'a, '_> {
                 let builder = expect_builder!(self);
                 builder.ins().jump(loop_block, &loop_args);
 
-                let continue_block = builder.create_block();
                 let (result, ty) = if instr.results.len() > 0 {
                     assert_eq!(instr.results.len(), 1);
                     let result = instr.results[0];
 
                     let ty = &self.ctx.modules[mod_idx].values[result].ty;
-                    for native_ty in types::get_type_canonical(
-                        ty,
-                        self.ctx.modules,
-                        &self.ctx.cl_module,
-                    ) {
-                        builder.append_block_param(continue_block, native_ty);
-                    }
 
                     (Some(result), Some(Cow::Borrowed(ty)))
                 } else {
                     (None, None)
                 };
+
+                let continue_block = self.create_block_with_result(ty.as_deref());
                 self.scopes.last_mut().block = continue_block;
 
-                let scope = self.scopes.begin(ScopePayload {
-                    start_block: loop_block,
-                    block: loop_block,
-                    next_branches: vec![],
-                    result,
-                    ty,
-                    declared_consts: self.scopes.last().declared_consts.clone(),
-                });
-                scope.is_loop = true;
+                let scope = self.scopes.begin(
+                    ScopePayload::new(
+                        loop_block,
+                        self.scopes.last().declared_consts.clone(),
+                    ),
+                    *body_block_idx,
+                );
+                scope.result = result;
+                scope.ty = ty;
 
+                let builder = expect_builder!(self);
                 builder.switch_to_block(loop_block);
-                self.add_body(body, mod_idx, ResultPolicy::Normal);
+
+                self.add_block(*body_block_idx, mod_idx);
 
                 let (scope, _) = self.scopes.end();
 
@@ -419,106 +437,14 @@ impl<'a> FuncCodegen<'a, '_> {
                     builder.switch_to_block(next_block);
                 }
             }
-            b::InstrBody::Break(v) => {
-                if let Some(v) = v {
-                    let Some(runtime_value) = self.values.get(&(mod_idx, *v)).cloned()
-                    else {
-                        panic!("value should be present in scope: {v}");
-                    };
-
-                    match result_policy {
-                        ResultPolicy::Normal => {
-                            let cl_values = self.use_value_canonical(mod_idx, *v);
-
-                            let builder = expect_builder!(self);
-
-                            let prev_scope =
-                                self.scopes.get(self.scopes.len() - 2).unwrap();
-                            builder.ins().jump(prev_scope.block, &cl_values);
-                            let block_params = builder.block_params(prev_scope.block);
-
-                            if let Some(result) = self.scopes.last().result {
-                                let src = runtime_value.src.with_values(block_params);
-                                self.values.insert(
-                                    (mod_idx, result),
-                                    types::RuntimeValue::new(src, mod_idx, result),
-                                );
-                            }
-                        }
-                        ResultPolicy::Return(ReturnPolicy::Normal) => {
-                            let cl_values = self.use_value_canonical(mod_idx, *v);
-                            expect_builder!(self).ins().return_(&cl_values);
-                        }
-                        ResultPolicy::Return(ReturnPolicy::Void) => {
-                            expect_builder!(self).ins().return_(&[]);
-                        }
-                        ResultPolicy::Return(ReturnPolicy::Struct(_)) => {
-                            if let Some(res) = self.scopes.last().result {
-                                let cl_values = self.use_value_by_value(mod_idx, *v);
-                                let res_cl = self.use_value_by_ref(mod_idx, res);
-
-                                let builder = expect_builder!(self);
-
-                                let mut offset = 0;
-                                for cl_value in &cl_values {
-                                    builder.ins().store(
-                                        cl::MemFlags::new(),
-                                        *cl_value,
-                                        res_cl,
-                                        offset,
-                                    );
-                                    offset +=
-                                        builder.func.dfg.value_type(*cl_value).bytes()
-                                            as i32;
-                                }
-                            }
-                            expect_builder!(self).ins().return_(&[]);
-                        }
-                        ResultPolicy::Return(ReturnPolicy::NoReturn) => unreachable!(),
-                        ResultPolicy::Global => {
-                            let cl_values = self.use_value_by_value(mod_idx, *v);
-                            if let Some(res) = self.scopes.last().result {
-                                let res_cl = self.use_value_by_ref(mod_idx, res);
-                                let builder = expect_builder!(self);
-                                let mut offset = 0;
-                                for cl_value in &cl_values {
-                                    builder.ins().store(
-                                        cl::MemFlags::new(),
-                                        *cl_value,
-                                        res_cl,
-                                        offset,
-                                    );
-                                    offset +=
-                                        builder.func.dfg.value_type(*cl_value).bytes()
-                                            as i32;
-                                }
-                            }
-                        }
-                    }
-                } else {
-                    match result_policy {
-                        ResultPolicy::Normal => {
-                            let prev_scope =
-                                self.scopes.get(self.scopes.len() - 2).unwrap();
-                            expect_builder!(self).ins().jump(prev_scope.block, &[]);
-
-                            if let Some(result) = self.scopes.last().result {
-                                let ty = &self.ctx.modules[mod_idx].values[result].ty;
-                                assert!(matches!(ty.body, b::TypeBody::Void));
-                            }
-                        }
-                        ResultPolicy::Return(ReturnPolicy::Void) => {
-                            expect_builder!(self).ins().return_(&[]);
-                        }
-                        _ => unreachable!(),
-                    }
-                }
+            &b::InstrBody::Break(block_idx, v) => {
+                self.break_(mod_idx, block_idx, v);
             }
-            b::InstrBody::Continue(vs) => {
+            &b::InstrBody::Continue(block_idx, ref vs) => {
                 let block = self
                     .scopes
-                    .last_loop()
-                    .expect("continue instruction should be called in a loop")
+                    .find_last(|x| x.block_idx == block_idx)
+                    .unwrap()
                     .start_block;
 
                 let values = vs
@@ -969,7 +895,7 @@ impl<'a> FuncCodegen<'a, '_> {
             }
             b::InstrBody::Type(..) => {}
             b::InstrBody::GetProperty(..) | b::InstrBody::CompileError => {
-                panic!("never should try to compile '{}'", &instr)
+                panic!("never should try to compile '{instr:?}'")
             }
             b::InstrBody::TypeName(..) => {
                 unreachable!("TypeName should have been replaced by transform phase");
@@ -985,7 +911,7 @@ impl<'a> FuncCodegen<'a, '_> {
 
     pub fn value_from_instr(
         &mut self,
-        instr: &'a b::Instr,
+        instr: &b::Instr,
         mod_idx: usize,
     ) -> Option<types::RuntimeValue> {
         utils::replace_with(self, |mut this| {
@@ -1086,7 +1012,7 @@ impl<'a> FuncCodegen<'a, '_> {
         self.call(
             Callee::Direct(func_id),
             args,
-            ReturnPolicy::from_func(
+            types::ReturnPolicy::from_func(
                 func_mod_idx,
                 func_idx,
                 self.ctx.modules,
@@ -1120,13 +1046,13 @@ impl<'a> FuncCodegen<'a, '_> {
         &mut self,
         callee: Callee,
         args: impl Into<Vec<cl::Value>>,
-        ret_policy: ReturnPolicy,
+        ret_policy: types::ReturnPolicy,
     ) -> Option<cl::Value> {
         let builder = expect_builder!(self);
 
         let mut args = args.into();
 
-        if let ReturnPolicy::Struct(size) = ret_policy {
+        if let types::ReturnPolicy::Struct(size) = ret_policy {
             let ss_data = cl::StackSlotData::new(cl::StackSlotKind::ExplicitSlot, size);
             let ss = builder.create_sized_stack_slot(ss_data);
             let stack_addr =
@@ -1149,22 +1075,35 @@ impl<'a> FuncCodegen<'a, '_> {
         assert!(results.len() <= 1);
 
         match ret_policy {
-            ReturnPolicy::Normal => Some(results[0]),
-            ReturnPolicy::Struct(..) => Some(args[0]),
-            ReturnPolicy::NoReturn => {
+            types::ReturnPolicy::Normal => Some(results[0]),
+            types::ReturnPolicy::Struct(..) => Some(args[0]),
+            types::ReturnPolicy::NoReturn => {
                 builder.ins().trap(cl::TrapCode::UnreachableCodeReached);
                 builder.set_cold_block(self.scopes.last().block);
                 self.scopes.last_mut().mark_as_never();
                 None
             }
-            ReturnPolicy::Void => None,
+            types::ReturnPolicy::Void => None,
+        }
+    }
+
+    pub fn write_global(&mut self, mod_idx: usize, v: b::ValueIdx, data_id: cl::DataId) {
+        let cl_values = self.use_value_by_value(mod_idx, v);
+        let res_cl = self.add_by_ref(&data_id.into());
+        let builder = expect_builder!(self);
+        let mut offset = 0;
+        for cl_value in &cl_values {
+            builder
+                .ins()
+                .store(cl::MemFlags::new(), *cl_value, res_cl, offset);
+            offset += builder.func.dfg.value_type(*cl_value).bytes() as i32;
         }
     }
 
     fn create_array_inst(
         &mut self,
         mod_idx: usize,
-        instr: &'a b::Instr,
+        instr: &b::Instr,
         vs: &Vec<usize>,
     ) -> Option<types::RuntimeValue> {
         let data = self.ctx.data_for_tuple(
@@ -1216,6 +1155,84 @@ impl<'a> FuncCodegen<'a, '_> {
             mod_idx,
             instr.results[0],
         ))
+    }
+
+    fn break_(&mut self, mod_idx: usize, block_idx: b::BlockIdx, v: Option<b::ValueIdx>) {
+        let scope_idx = self
+            .scopes
+            .find_last_index(|x| x.block_idx == block_idx)
+            .unwrap();
+
+        let ret_policy = if self.scopes.first().block_idx == block_idx {
+            Some(self.ret_policy)
+        } else {
+            None
+        };
+
+        match (ret_policy, v) {
+            (Some(types::ReturnPolicy::Normal), Some(v)) => {
+                let cl_values = self.use_value_canonical(mod_idx, v);
+                expect_builder!(self).ins().return_(&cl_values);
+            }
+            (Some(types::ReturnPolicy::Struct(_)), Some(v)) => {
+                if let Some(res) = self.scopes.get(scope_idx).unwrap().result {
+                    let cl_values = self.use_value_by_value(mod_idx, v);
+                    let res_cl = self.use_value_by_ref(mod_idx, res);
+
+                    let builder = expect_builder!(self);
+
+                    let mut offset = 0;
+                    for cl_value in &cl_values {
+                        builder.ins().store(
+                            cl::MemFlags::new(),
+                            *cl_value,
+                            res_cl,
+                            offset,
+                        );
+                        offset += builder.func.dfg.value_type(*cl_value).bytes() as i32;
+                    }
+                }
+                expect_builder!(self).ins().return_(&[]);
+            }
+            (Some(types::ReturnPolicy::Void), _) => {
+                expect_builder!(self).ins().return_(&[]);
+            }
+            (None, Some(v)) => {
+                let cl_values = self.use_value_canonical(mod_idx, v);
+
+                let builder = expect_builder!(self);
+
+                let prev_scope = self.scopes.get(scope_idx - 1).unwrap();
+                builder.ins().jump(prev_scope.block, &cl_values);
+                let block_params = builder.block_params(prev_scope.block);
+
+                if let Some(result) = self.scopes.get(scope_idx).unwrap().result {
+                    let (runtime_value, n) = types::take_value_from_args(
+                        mod_idx,
+                        result,
+                        &block_params,
+                        self.ctx.modules,
+                        &self.ctx.cl_module,
+                    );
+                    assert_eq!(
+                        n,
+                        block_params.len(),
+                        "we should have consumed all values"
+                    );
+                    self.values.insert((mod_idx, result), runtime_value);
+                }
+            }
+            (None, None) => {
+                let prev_scope = self.scopes.get(scope_idx - 1).unwrap();
+                expect_builder!(self).ins().jump(prev_scope.block, &[]);
+
+                if let Some(result) = self.scopes.get(scope_idx).unwrap().result {
+                    let ty = &self.ctx.modules[mod_idx].values[result].ty;
+                    assert!(matches!(ty.body, b::TypeBody::Void));
+                }
+            }
+            _ => unreachable!(),
+        }
     }
 
     fn use_value_canonical(&mut self, mod_idx: usize, v: b::ValueIdx) -> Vec<cl::Value> {
@@ -1430,7 +1447,7 @@ impl<'a> FuncCodegen<'a, '_> {
     fn create_number_inst(
         &mut self,
         mod_idx: usize,
-        instr: &'a b::Instr,
+        instr: &b::Instr,
         n: &String,
     ) -> types::RuntimeValue {
         let module = &self.ctx.modules[mod_idx];
@@ -1514,7 +1531,7 @@ impl<'a> FuncCodegen<'a, '_> {
             .call(
                 Callee::Direct(heap_alloc_func_id),
                 &[size],
-                ReturnPolicy::Normal,
+                types::ReturnPolicy::Normal,
             )
             .unwrap();
 
@@ -1667,8 +1684,15 @@ pub struct ScopePayload<'a> {
     pub ty: Option<Cow<'a, b::Type>>,
     pub declared_consts: HashMap<types::Const, cl::Value>,
 }
-impl utils::SimpleScopePayload for ScopePayload<'_> {
-    fn branch(&mut self, _: Option<&Self>) {
+
+impl utils::ScopePayload for ScopePayload<'_> {
+    type Result = Option<cl::Block>;
+
+    fn reset(&mut self, prev: Option<&Self>) -> Self::Result {
+        prev.map(|x| x.block)
+    }
+
+    fn branch(&mut self, _prev: Option<&Self>) {
         let block = self.next_branches.pop().unwrap();
         self.start_block = block;
         self.block = block;

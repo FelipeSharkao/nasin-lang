@@ -6,6 +6,7 @@ use derive_ctor::ctor;
 use derive_more::{Display, From};
 use thiserror::Error;
 
+use crate::config::BuildConfig;
 use crate::{bytecode as b, sources, utils};
 
 #[derive(Debug, Clone, ctor)]
@@ -86,10 +87,32 @@ pub struct TypeNotFound {
     pub ident: String,
 }
 
-#[derive(Debug, Clone, ctor)]
+#[derive(Debug, Clone)]
 pub struct UnexpectedType {
-    pub expected: Vec<b::Type>,
-    pub actual:   b::Type,
+    pub expected: Vec<String>,
+    pub actual:   String,
+}
+
+impl UnexpectedType {
+    pub fn new(
+        expected: Vec<&b::Type>,
+        actual: &b::Type,
+        modules: &[b::Module],
+        cfg: &BuildConfig,
+    ) -> Self {
+        let fmt_ty = |ty: &b::TypeBody| {
+            let mut s = String::new();
+            b::Printer::new(modules, cfg)
+                .reconstruct(true)
+                .write_type_expr(&mut s, ty)
+                .unwrap();
+            s
+        };
+        Self {
+            expected: expected.iter().map(|t| fmt_ty(&t.body)).collect(),
+            actual:   fmt_ty(&actual.body),
+        }
+    }
 }
 
 impl Display for UnexpectedType {
@@ -98,36 +121,73 @@ impl Display for UnexpectedType {
             write!(
                 f,
                 "Expected type {}, but found {} instead",
-                &self.expected[0].body, &self.actual.body,
+                &self.expected[0], &self.actual,
             )?;
         } else {
             write!(
                 f,
                 "Unexpected type {}. Expected one of:\n{}",
-                &self.actual.body,
-                utils::indented(
-                    2,
-                    self.expected.iter().map(|t| format!("- {}", &t.body))
-                ),
+                &self.actual,
+                utils::indented(2, self.expected.iter().map(|t| format!("- {t}"))),
             )?;
         }
         Ok(())
     }
 }
 
-#[derive(Debug, Clone, Display, ctor)]
-#[display(
-    "All results of the expression should have the same type\n{}",
-    utils::indented(2, types.iter().map(|t| format!("- found {t}"))),
-)]
+#[derive(Debug, Clone)]
 pub struct TypeMisatch {
-    pub types: Vec<b::Type>,
+    pub types: Vec<String>,
 }
 
-#[derive(Debug, Clone, Display, ctor)]
-#[display("`{ty}` is not an interface type")]
+impl TypeMisatch {
+    pub fn new(types: Vec<&b::Type>, modules: &[b::Module], cfg: &BuildConfig) -> Self {
+        Self {
+            types: types
+                .iter()
+                .map(|t| {
+                    let mut s = String::new();
+                    b::Printer::new(modules, cfg)
+                        .reconstruct(true)
+                        .write_type_expr(&mut s, &t.body)
+                        .unwrap();
+                    s
+                })
+                .collect(),
+        }
+    }
+}
+
+impl Display for TypeMisatch {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "All results of the expression should have the same type\n{}",
+            utils::indented(2, self.types.iter().map(|t| format!("- found {t}"))),
+        )
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct TypeNotInterface {
-    pub ty: b::Type,
+    pub ty: String,
+}
+
+impl TypeNotInterface {
+    pub fn new(ty: &b::Type, modules: &[b::Module], cfg: &BuildConfig) -> Self {
+        let mut s = String::new();
+        b::Printer::new(modules, cfg)
+            .reconstruct(true)
+            .write_type_expr(&mut s, &ty.body)
+            .unwrap();
+        Self { ty: s }
+    }
+}
+
+impl Display for TypeNotInterface {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "`{}` is not an interface type", &self.ty)
+    }
 }
 
 #[derive(Debug, Clone, Display, ctor)]

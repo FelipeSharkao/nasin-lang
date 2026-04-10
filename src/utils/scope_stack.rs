@@ -4,6 +4,8 @@ use std::fmt::Debug;
 use derive_ctor::ctor;
 use derive_more::{Deref, DerefMut, IntoIterator};
 
+use crate::bytecode as b;
+
 #[derive(Debug, Clone, PartialEq, Eq, IntoIterator)]
 pub struct ScopeStack<T: ScopePayload> {
     #[into_iterator(owned, ref, ref_mut)]
@@ -11,9 +13,9 @@ pub struct ScopeStack<T: ScopePayload> {
 }
 
 impl<T: ScopePayload> ScopeStack<T> {
-    pub fn new(initial_payload: T) -> Self {
+    pub fn new(initial_payload: T, block_idx: b::BlockIdx) -> Self {
         Self {
-            scopes: vec![Scope::new(initial_payload)],
+            scopes: vec![Scope::new(initial_payload, block_idx)],
         }
     }
 
@@ -49,33 +51,41 @@ impl<T: ScopePayload> ScopeStack<T> {
         self.scopes.last_mut().unwrap()
     }
 
-    pub fn last_loop(&self) -> Option<&Scope<T>> {
-        self.scopes.iter().rev().find(|scope| scope.is_loop)
+    pub fn find_last_index(&self, mut f: impl FnMut(&Scope<T>) -> bool) -> Option<usize> {
+        (0..self.scopes.len()).rev().find(|i| f(&self.scopes[*i]))
     }
 
-    pub fn last_loop_mut(&mut self) -> Option<&mut Scope<T>> {
-        self.scopes.iter_mut().rev().find(|scope| scope.is_loop)
+    pub fn find_last(&self, f: impl FnMut(&Scope<T>) -> bool) -> Option<&Scope<T>> {
+        self.find_last_index(f).map(|i| &self.scopes[i])
     }
 
-    pub fn begin(&mut self, payload: T) -> &mut Scope<T> {
-        self.scopes.push(Scope::new(payload));
+    pub fn find_last_mut(
+        &mut self,
+        f: impl FnMut(&Scope<T>) -> bool,
+    ) -> Option<&mut Scope<T>> {
+        self.find_last_index(f).map(|i| &mut self.scopes[i])
+    }
+
+    pub fn begin(&mut self, payload: T, block_idx: b::BlockIdx) -> &mut Scope<T> {
+        self.scopes.push(Scope::new(payload, block_idx));
         self.scopes.last_mut().unwrap()
     }
 
-    pub fn begin_cloned(&mut self) -> &mut Scope<T>
+    pub fn begin_cloned(&mut self, block_idx: b::BlockIdx) -> &mut Scope<T>
     where
         T: Clone,
     {
-        self.begin(self.last().payload.clone())
+        self.begin(self.last().payload.clone(), block_idx)
     }
 
-    pub fn branch(&mut self) -> (&mut Scope<T>, T::Result) {
+    pub fn branch(&mut self, block_idx: b::BlockIdx) -> (&mut Scope<T>, T::Result) {
         assert!(
             self.scopes.len() > 1,
             "should not brach the first scope of function"
         );
 
         let mut scope = self.scopes.pop().unwrap();
+        scope.block_idx = block_idx;
         scope.branches += 1;
         scope.is_never = false;
 
@@ -101,12 +111,15 @@ impl<T: ScopePayload> ScopeStack<T> {
 
         scope.is_never = scope.never_branches == scope.branches;
         if scope.is_never {
-            self.last_mut().mark_as_never();
+            if let Some(last) = self.scopes.last_mut() {
+                last.mark_as_never();
+            }
         }
 
-        let prev = self.scopes.pop();
-        let prev_payload = prev.as_ref().map(|x| &x.payload);
-        let payload_result = scope.payload.reset(prev_payload);
+        let mut prev = self.scopes.pop();
+
+        scope.payload.end(prev.as_mut().map(|x| &mut x.payload));
+        let payload_result = scope.payload.reset(prev.as_ref().map(|x| &x.payload));
 
         self.scopes.extend(prev);
 
@@ -119,10 +132,7 @@ pub struct Scope<T> {
     #[deref]
     #[deref_mut]
     pub payload: T,
-    #[ctor(expr(false))]
-    pub is_loop: bool,
-    #[ctor(expr(0))]
-    pub loop_arity: usize,
+    pub block_idx: b::BlockIdx,
     #[ctor(expr(1))]
     branches: usize,
     #[ctor(expr(0))]
@@ -145,23 +155,12 @@ impl<T> Scope<T> {
 pub trait ScopePayload: Debug {
     type Result;
     fn reset(&mut self, prev: Option<&Self>) -> Self::Result;
+
     fn branch(&mut self, prev: Option<&Self>) {
         let _ = prev;
     }
-}
 
-pub trait SimpleScopePayload: Debug {
-    fn branch(&mut self, _prev: Option<&Self>) {}
-}
-impl<T> ScopePayload for T
-where
-    T: SimpleScopePayload,
-{
-    type Result = ();
-    fn reset(&mut self, _: Option<&Self>) -> Self::Result {
-        ()
-    }
-    fn branch(&mut self, prev: Option<&Self>) {
-        SimpleScopePayload::branch(self, prev);
+    fn end(&mut self, prev: Option<&mut Self>) {
+        let _ = prev;
     }
 }

@@ -463,13 +463,6 @@ pub fn get_size(ty: &b::Type, modules: &[b::Module], cl_module: &impl cl::Module
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum ResultPolicy {
-    Normal,
-    Global,
-    Return(ReturnPolicy),
-}
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Display)]
 pub enum ReturnPolicy {
     #[display("normal")]

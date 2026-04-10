@@ -7,6 +7,7 @@ use itertools::Itertools;
 
 use super::module::*;
 use super::ty::*;
+use crate::config::BuildConfig;
 use crate::utils;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, ctor)]
@@ -46,19 +47,8 @@ impl Name {
 
     /// Resolves the name to a path. Uses the base paths to resolve relative paths.
     /// Assumes that all paths are absolute and canonicalized.
-    pub fn from_path<I>(path: &Path, base_paths: I) -> Self
-    where
-        I: IntoIterator,
-        I::Item: AsRef<Path>,
-    {
-        let mut relative_path = None;
-        for base_path in base_paths {
-            if let Ok(path) = path.strip_prefix(base_path) {
-                relative_path = Some(path);
-                break;
-            }
-        }
-        let path = relative_path.unwrap_or(path);
+    pub fn from_path(path: &Path, cfg: &BuildConfig) -> Self {
+        let path = cfg.strip_base_paths(path);
         let nodes = path
             .parent()
             .iter()
@@ -74,10 +64,30 @@ impl Name {
         Self { nodes, loc: None }
     }
 
-    /// Create a new name by appending a new type parameter list to the end. If the last
-    /// node is a type parameter, it will inserted at the end of the list instead of
-    /// creating a new type parameter list.
+    /// Creates a new name by appending a new type parameter list to the end. If the last
+    /// node is a type parameter, it will be replaced instead of creating a new type
+    /// parameter list.
     pub fn with_type_params(
+        &self,
+        tys: impl IntoIterator<Item = Type>,
+        loc: Option<Loc>,
+    ) -> Self {
+        let mut nodes = self.nodes.clone();
+        if let Some(NameNode::TypeParams(params)) = nodes.last_mut() {
+            params.params.splice(0..params.params.len(), tys);
+        } else {
+            nodes.push(NameTypeParams::new(tys.into_iter().collect()).into());
+        }
+        Self {
+            nodes,
+            loc: loc.or(self.loc),
+        }
+    }
+
+    /// Create a new name by appending a new type parameter list to the end. If the last
+    /// node is a type parameter, it will be inserted at the end of the list instead of
+    /// creating a new type parameter list.
+    pub fn with_new_type_params(
         &self,
         tys: impl IntoIterator<Item = Type>,
         loc: Option<Loc>,

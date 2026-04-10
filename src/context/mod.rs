@@ -6,7 +6,6 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, RwLock};
 
 use derive_ctor::ctor;
-use itertools::chain;
 use tree_sitter as ts;
 
 use self::runtime::RuntimeBuilder;
@@ -49,7 +48,7 @@ impl BuildContext {
         errors::CompilerError::new(Some(source_manager), errors)
     }
 
-    pub fn parse(&self, src_idx: usize, is_entry: bool) -> usize {
+    pub fn parse(&self, src_idx: usize) -> usize {
         let mut ts_parser = ts::Parser::new();
         ts_parser
             .set_language(&tree_sitter_nasin::LANGUAGE.into())
@@ -63,10 +62,8 @@ impl BuildContext {
             println!("{}", root_node.to_sexp());
         }
 
-        let name = b::Name::from_path(
-            &self.source_manager.source(src_idx).path,
-            chain!([&self.cfg.base_dir], &self.cfg.lib_dirs),
-        );
+        let name =
+            b::Name::from_path(&self.source_manager.source(src_idx).path, &self.cfg);
 
         let mod_idx = {
             let mut modules = self.lock_modules_mut();
@@ -81,13 +78,19 @@ impl BuildContext {
             mod_idx
         };
 
-        let mut module_parser =
-            parser::ModuleParser::new(self, src_idx, mod_idx, is_entry);
+        let mut module_parser = parser::ModuleParser::new(self, src_idx, mod_idx);
         if let Some(core_mod_idx) = self.core_mod_idx {
             module_parser.open_module(core_mod_idx);
         }
         module_parser.add_root(root_node);
         module_parser.finish();
+
+        if self.cfg.dump_untyped_bytecode {
+            b::Printer::new(&self.lock_modules(), &self.cfg)
+                .show_ids(true)
+                .source_manager(&self.source_manager)
+                .print_module(mod_idx);
+        }
 
         typecheck::TypeChecker::new(self, mod_idx).check();
 
@@ -108,11 +111,11 @@ impl BuildContext {
             return false;
         };
 
-        let Ok(core_src_idx) = self.preload(core) else {
+        let Ok(core_src_idx) = self.open(core) else {
             return false;
         };
 
-        self.core_mod_idx = Some(self.parse(core_src_idx, false));
+        self.core_mod_idx = Some(self.parse(core_src_idx));
         true
     }
 
@@ -127,7 +130,10 @@ impl BuildContext {
 
         if self.cfg.dump_bytecode {
             if let Some((mod_idx, _)) = rt_entry {
-                println!("{}", &modules[mod_idx]);
+                b::Printer::new(&modules, &self.cfg)
+                    .show_ids(true)
+                    .source_manager(&self.source_manager)
+                    .print_module(mod_idx);
             }
         }
 
@@ -148,16 +154,6 @@ impl BuildContext {
 
     pub fn open(&mut self, path: PathBuf) -> Result<usize, ()> {
         match self.source_manager.open(path) {
-            Ok(idx) => Ok(idx),
-            Err(err) => {
-                self.push_error(err);
-                Err(())
-            }
-        }
-    }
-
-    pub fn preload(&mut self, path: PathBuf) -> Result<usize, ()> {
-        match self.source_manager.preload(path) {
             Ok(idx) => Ok(idx),
             Err(err) => {
                 self.push_error(err);

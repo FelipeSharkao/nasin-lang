@@ -11,6 +11,7 @@ mod str;
 mod string_lit;
 mod to_radix;
 mod traits;
+mod write_io;
 
 pub use self::cmd::*;
 pub use self::deadlock_guard::*;
@@ -23,6 +24,7 @@ pub use self::str::*;
 pub use self::string_lit::*;
 pub use self::to_radix::*;
 pub use self::traits::*;
+pub use self::write_io::*;
 
 macro_rules! unordered {
     ($a:pat, $b:pat $(,)?) => {
@@ -37,8 +39,8 @@ macro_rules! unwrap {
     ($v:expr) => {
         $v.unwrap()
     };
-    ($v:expr, $msg:literal $(, $fmt:tt)* $(,)?) => {
-        $v.unwrap_or_else(|| panic!($msg, $($fmt),*))
+    ($v:expr, $($fmt:tt)*) => {
+        $v.unwrap_or_else(|| panic!($($fmt)*))
     };
 }
 pub(crate) use unwrap;
