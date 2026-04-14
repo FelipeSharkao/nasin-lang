@@ -6,12 +6,11 @@ use std::hash::Hash;
 use derive_ctor::ctor;
 use derive_more::{Display, From};
 use derive_setters::Setters;
-use genawaiter::rc::r#gen as rc_gen;
-use genawaiter::yield_;
+use genawaiter::rc::Gen;
 use itertools::{Itertools, chain, izip};
 
 use super::{Loc, Module, TypeDef, TypeDefBody, TypeVarIdx};
-use crate::utils::{self, unordered};
+use crate::utils::{self, SortedMap, unordered};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, From)]
 pub enum TypeBody {
@@ -247,15 +246,14 @@ impl Type {
         matches!(&self.body, TypeBody::Never)
     }
 
-    pub fn field<'a>(&'a self, name: &str, modules: &'a [Module]) -> Option<&'a Type> {
+    pub fn field<'a>(
+        &'a self,
+        name: &str,
+        modules: &'a [Module],
+    ) -> Option<Cow<'a, Type>> {
         match &self.body {
-            TypeBody::Inferred(v) => v.members.get(name),
-            TypeBody::TypeRef(t) => {
-                match &modules.get(t.mod_idx)?.typedefs.get(t.idx)?.body {
-                    TypeDefBody::Record(rec) => Some(&rec.fields.get(name)?.ty),
-                    TypeDefBody::Interface(_) => None,
-                }
-            }
+            TypeBody::Inferred(v) => v.members.get(name).map(|ty| Cow::Borrowed(ty)),
+            TypeBody::TypeRef(type_ref) => type_ref.field(name, modules),
             _ => None,
         }
     }
@@ -265,27 +263,10 @@ impl Type {
         name: &str,
         modules: &'a [Module],
     ) -> Option<Cow<'a, Type>> {
-        let TypeBody::TypeRef(t) = &self.body else {
-            return None;
-        };
-
-        let typedef = modules.get(t.mod_idx)?.typedefs.get(t.idx)?;
-        let method = match &typedef.body {
-            TypeDefBody::Record(rec) => rec.methods.get(name),
-            TypeDefBody::Interface(iface) => iface.methods.get(name),
-        }?;
-        let method_mod = modules.get(method.func_ref.0)?;
-        let func = &method_mod.funcs[method.func_ref.1];
-        let params_tys = func
-            .params
-            .iter()
-            .map(|param| method_mod.values[*param].ty.clone())
-            .collect_vec();
-        let ret_ty = method_mod.values[func.ret].ty.clone();
-        Some(Cow::Owned(Type::new(
-            TypeBody::Func(Box::new(FuncType::new(params_tys, ret_ty))),
-            Some(method.loc),
-        )))
+        match &self.body {
+            TypeBody::TypeRef(type_ref) => type_ref.method(name, modules),
+            _ => None,
+        }
     }
 
     pub fn property<'a>(
@@ -293,36 +274,11 @@ impl Type {
         name: &str,
         modules: &'a [Module],
     ) -> Option<Cow<'a, Type>> {
-        if let Some(ty) = self.method(name, modules) {
-            let TypeBody::Func(func) = &ty.body else {
-                return None;
-            };
-            let [params @ .., self_param] = &func.params[..] else {
-                return None;
-            };
-            // is static?
-            if self.intersection(self_param, modules).is_none() {
-                return None;
-            }
-            // functions without parameters are just values
-            if params.len() == 0 {
-                return Some(Cow::Owned(func.ret.clone()));
-            }
-            return Some(Cow::Owned(Type::new(
-                TypeBody::Func(Box::new(FuncType::new(
-                    params.to_vec(),
-                    func.ret.clone(),
-                ))),
-                ty.loc,
-            )));
+        match &self.body {
+            TypeBody::Inferred(v) => v.properties.get(name).map(|v| Cow::Borrowed(v)),
+            TypeBody::TypeRef(type_ref) => type_ref.property(name, modules),
+            _ => None,
         }
-        if let TypeBody::Inferred(v) = &self.body {
-            return v.properties.get(name).map(|v| Cow::Borrowed(v));
-        }
-        if let Some(ty) = self.field(name, modules) {
-            return Some(Cow::Borrowed(ty));
-        }
-        None
     }
 
     pub fn intersection(&self, other: &Type, modules: &[Module]) -> Option<Type> {
@@ -359,7 +315,7 @@ impl Type {
                 TypeBody::Func(a.intersection(b, modules)?.into())
             }
             (body!(TypeBody::Inferred(a)), body!(TypeBody::Inferred(b))) => {
-                let fields = chain!(a.members.keys(), b.members.keys())
+                let members = chain!(a.members.keys(), b.members.keys())
                     .unique()
                     .map(|name| {
                         let ty = match (a.members.get(name), b.members.get(name)) {
@@ -372,40 +328,63 @@ impl Type {
                         Some((name.to_string(), ty))
                     })
                     .collect::<Option<_>>()?;
-                let methods = chain!(a.properties.keys(), b.properties.keys())
+                let properties = chain!(a.properties.keys(), b.properties.keys())
                     .unique()
                     .map(|name| {
-                        let method =
-                            match (a.properties.get(name), b.properties.get(name)) {
-                                (Some(a_method), Some(b_method)) => {
-                                    a_method.intersection(b_method, modules)?
-                                }
-                                unordered!(Some(method), None) => method.clone(),
-                                _ => unreachable!(),
-                            };
-                        Some((name.to_string(), method))
+                        let ty = match (a.properties.get(name), b.properties.get(name)) {
+                            (Some(a_method), Some(b_method)) => {
+                                a_method.intersection(b_method, modules)?
+                            }
+                            unordered!(Some(method), None) => method.clone(),
+                            _ => unreachable!(),
+                        };
+                        Some((name.to_string(), ty))
                     })
                     .collect::<Option<_>>()?;
                 TypeBody::Inferred(InferredType {
-                    members:    fields,
-                    properties: methods,
+                    members,
+                    properties,
                 })
             }
             unordered!(body!(TypeBody::Inferred(a)), b) => {
                 let has_all_members = a.members.iter().all(|(name, a_ty)| {
-                    other
-                        .field(name, modules)
-                        .is_some_and(|b_ty| a_ty.intersection(b_ty, modules).is_some())
+                    other.field(name, modules).is_some_and(|b_ty| {
+                        a_ty.intersection(b_ty.as_ref(), modules).is_some()
+                    })
                 });
                 let has_all_props = a.properties.iter().all(|(name, a_ty)| {
                     other
                         .property(name, modules)
                         .is_some_and(|b_ty| a_ty.intersection(&b_ty, modules).is_some())
                 });
-                if has_all_members && has_all_props {
-                    b.body.clone()
-                } else {
+                if !has_all_members || !has_all_props {
                     return None;
+                }
+
+                if let TypeBody::TypeRef(type_ref) = &b.body
+                    && !type_ref.args.is_empty()
+                {
+                    let generics =
+                        &modules[type_ref.mod_idx].typedefs[type_ref.idx].generics;
+                    let mut substitutions = HashMap::new();
+                    if !type_ref.to_inferred(modules).collect_typevar_substitutions(
+                        a,
+                        &mut substitutions,
+                        modules,
+                    ) {
+                        return None;
+                    }
+                    let args = izip!(generics, &type_ref.args)
+                        .map(|(typevar, arg)| substitutions.get(typevar).unwrap_or(arg))
+                        .cloned()
+                        .collect_vec();
+                    TypeRef {
+                        args,
+                        ..type_ref.clone()
+                    }
+                    .into()
+                } else {
+                    b.body.clone()
                 }
             }
             (body!(TypeBody::TypeRef(a)), body!(TypeBody::TypeRef(b))) => {
@@ -423,8 +402,8 @@ impl Type {
                         (
                             (_, _, body!(TypeDefBody::Record(_))),
                             (_, _, body!(TypeDefBody::Record(_))),
-                        ) if a.is_same_of(b) => (a.mod_idx, a.idx),
-                        (
+                        )
+                        | (
                             (_, _, body!(TypeDefBody::Interface(_))),
                             (_, _, body!(TypeDefBody::Interface(_))),
                         ) if a.is_same_of(b) => (a.mod_idx, a.idx),
@@ -439,13 +418,24 @@ impl Type {
                                 return None;
                             }
 
+                            if !a.args.is_empty() && !b.args.is_empty() {
+                                todo!(
+                                    "intersection of interface and record with generics"
+                                );
+                            }
+
                             (r_mod_idx, r_ty_idx)
                         }
                         _ => return None,
                     };
 
+                let args = izip!(&a.args, &b.args)
+                    .map(|(a_arg, b_arg)| a_arg.intersection(b_arg, modules))
+                    .collect::<Option<Vec<_>>>()?;
+
                 TypeRef::new(mod_idx, ty_idx)
                     .with_is_self(a.is_self || b.is_self)
+                    .with_args(args)
                     .into()
             }
             // TODO: when we add constraints to generics, we will have to intersect with
@@ -526,7 +516,7 @@ impl Type {
                 let has_all_members = a.members.iter().all(|(name, a_ty)| {
                     other
                         .field(name, modules)
-                        .is_some_and(|b_ty| a_ty.union(b_ty, modules).is_some())
+                        .is_some_and(|b_ty| a_ty.union(b_ty.as_ref(), modules).is_some())
                 });
                 let has_all_props = a.properties.iter().all(|(name, a_ty)| {
                     other
@@ -561,59 +551,216 @@ impl Type {
         Some(Type::new(body, loc))
     }
 
-    pub fn contains_typevar(&self) -> bool {
-        match &self.body {
-            TypeBody::TypeVar(_) => true,
-            TypeBody::Func(func_ty) => {
-                func_ty.ret.contains_typevar()
-                    || func_ty.params.iter().any(Type::contains_typevar)
-            }
-            TypeBody::Array(elem_ty) => elem_ty.contains_typevar(),
-            TypeBody::Ptr(Some(elem_ty)) => elem_ty.contains_typevar(),
-            _ => false,
-        }
-    }
-
     pub fn substitute_typevar<'m>(
         &self,
         substitutions: &'m HashMap<TypeVarIdx, Type>,
     ) -> Option<Type> {
-        let TypeBody::TypeVar(typevar) = &self.body else {
-            return None;
+        struct Substitutions<'a>(&'a HashMap<TypeVarIdx, Type>);
+        impl<'a> Substitutions<'a> {
+            fn substitute(&self, ty: &Type) -> Option<Type> {
+                ty.substitute_typevar(self.0)
+            }
+
+            fn substitute_many<'s>(
+                &'s self,
+                iter: impl IntoIterator<Item = &'s Type>,
+            ) -> Vec<Option<Type>>
+            where
+                'a: 's,
+            {
+                iter.into_iter().map(|ty| self.substitute(ty)).collect_vec()
+            }
+
+            fn mix(&self, old: &Type, new: Option<Type>) -> Type {
+                new.unwrap_or_else(|| old.clone())
+            }
+
+            fn mix_many<'s>(
+                &'s self,
+                old: impl IntoIterator<Item = &'s Type>,
+                new: impl IntoIterator<Item = Option<Type>>,
+            ) -> impl Iterator<Item = Type>
+            where
+                'a: 's,
+            {
+                izip!(old, new).map(|(old_ty, new_ty)| self.mix(old_ty, new_ty))
+            }
+        }
+
+        let subs = Substitutions(substitutions);
+
+        macro_rules! validate {
+            ($($iter:expr),* $(,)?) => {
+                if chain!($($iter),*).all(|ty| ty.is_none()) {
+                    return None;
+                }
+            };
+        }
+
+        let body = match &self.body {
+            TypeBody::TypeVar(typevar) => {
+                return substitutions.get(&typevar.typevar_idx).cloned();
+            }
+            TypeBody::TypeRef(type_ref) => {
+                let args = subs.substitute_many(&type_ref.args);
+                validate!(&args);
+                TypeBody::TypeRef(TypeRef {
+                    args: subs.mix_many(&type_ref.args, args).collect(),
+                    ..type_ref.clone()
+                })
+            }
+            TypeBody::Inferred(inferred) => {
+                let members = subs.substitute_many(inferred.members.values());
+                let properties = subs.substitute_many(inferred.properties.values());
+                validate!(&members, &properties);
+                TypeBody::Inferred(InferredType {
+                    members: izip!(
+                        inferred.members.keys().cloned(),
+                        subs.mix_many(inferred.members.values(), members)
+                    )
+                    .collect(),
+                    properties: izip!(
+                        inferred.properties.keys().cloned(),
+                        subs.mix_many(inferred.properties.values(), properties)
+                    )
+                    .collect(),
+                    ..inferred.clone()
+                })
+            }
+            TypeBody::Func(func_ty) => {
+                let params = subs.substitute_many(&func_ty.params);
+                let ret = subs.substitute(&func_ty.ret);
+                validate!(&params, Some(&ret));
+                TypeBody::Func(Box::new(FuncType::new(
+                    subs.mix_many(&func_ty.params, params).collect(),
+                    subs.mix(&func_ty.ret, ret),
+                )))
+            }
+            TypeBody::Array(elem_ty) => {
+                let new_elem_ty = subs.substitute(elem_ty.as_ref());
+                validate!(Some(&new_elem_ty));
+                TypeBody::Array(Box::new(subs.mix(elem_ty, new_elem_ty)))
+            }
+            TypeBody::Ptr(Some(elem_ty)) => {
+                let new_elem_ty = subs.substitute(elem_ty.as_ref());
+                validate!(Some(&new_elem_ty));
+                TypeBody::Ptr(Some(Box::new(subs.mix(elem_ty, new_elem_ty))))
+            }
+            _ => return None,
         };
-        substitutions.get(&typevar.typevar_idx).cloned()
+
+        Some(Type::new(body, self.loc))
     }
 
     pub fn typevars(&self) -> impl Iterator<Item = TypeVarIdx> {
-        rc_gen!({
-            match &self.body {
-                TypeBody::TypeVar(typevar) => yield_!(typevar.typevar_idx),
-                TypeBody::Func(func_ty) => {
-                    for typevar in func_ty.ret.typevars() {
-                        yield_!(typevar);
-                    }
-                    for param in func_ty.params.iter() {
-                        for typevar in param.typevars() {
-                            yield_!(typevar);
-                        }
+        Gen::new(async move |co| match &self.body {
+            TypeBody::TypeVar(typevar) => co.yield_(typevar.typevar_idx).await,
+            TypeBody::TypeRef(type_ref) => {
+                for arg_ty in &type_ref.args {
+                    for typevar in arg_ty.typevars() {
+                        co.yield_(typevar).await;
                     }
                 }
-                TypeBody::Array(elem_ty) => {
-                    for typevar in elem_ty.typevars() {
-                        yield_!(typevar);
-                    }
-                }
-                TypeBody::Ptr(elem_ty) => {
-                    if let Some(elem_ty) = elem_ty {
-                        for typevar in elem_ty.typevars() {
-                            yield_!(typevar);
-                        }
-                    }
-                }
-                _ => {}
             }
+            TypeBody::Inferred(inferred) => {
+                for ty in inferred.members.values() {
+                    for typevar in ty.typevars() {
+                        co.yield_(typevar).await;
+                    }
+                }
+                for ty in inferred.properties.values() {
+                    for typevar in ty.typevars() {
+                        co.yield_(typevar).await;
+                    }
+                }
+            }
+            TypeBody::Func(func_ty) => {
+                for param in &func_ty.params {
+                    for typevar in param.typevars() {
+                        co.yield_(typevar).await;
+                    }
+                }
+                for typevar in func_ty.ret.typevars() {
+                    co.yield_(typevar).await;
+                }
+            }
+            TypeBody::Array(elem_ty) => {
+                for typevar in elem_ty.typevars() {
+                    co.yield_(typevar).await;
+                }
+            }
+            TypeBody::Ptr(Some(elem_ty)) => {
+                for typevar in elem_ty.typevars() {
+                    co.yield_(typevar).await;
+                }
+            }
+            _ => {}
         })
         .into_iter()
+    }
+
+    /// Compares the type `self` with `other` and updates a map of typevars that exist in
+    /// `self` and the type they are mapped to in `other`. Returns false if `self` and
+    /// `other` are incompatible.
+    pub fn collect_typevar_substitutions(
+        &self,
+        other: &Type,
+        substitutions: &mut HashMap<TypeVarIdx, Type>,
+        modules: &[Module],
+    ) -> bool {
+        macro_rules! rec_or_return {
+            ($a:expr, $b:expr) => {
+                if !($a).collect_typevar_substitutions($b, substitutions, modules) {
+                    return false;
+                }
+            };
+        }
+
+        match (self, other) {
+            (body!(TypeBody::TypeVar(typevar)), ty) => {
+                let ty = if let Some(existing) = substitutions.get(&typevar.typevar_idx) {
+                    let Some(intersection) = existing.intersection(ty, modules) else {
+                        return false;
+                    };
+                    intersection
+                } else {
+                    ty.clone()
+                };
+                substitutions.insert(typevar.typevar_idx, ty);
+            }
+            (body!(TypeBody::TypeRef(a)), body!(TypeBody::TypeRef(b)))
+                if a.is_same_of(b) =>
+            {
+                if a.args.len() != b.args.len() {
+                    return false;
+                }
+                for (a_arg, b_arg) in izip!(&a.args, &b.args) {
+                    rec_or_return!(a_arg, b_arg);
+                }
+            }
+            (body!(TypeBody::TypeRef(a)), body!(TypeBody::Inferred(b))) => {
+                rec_or_return!(&a.to_inferred(modules), b);
+            }
+            (body!(TypeBody::Inferred(a)), body!(TypeBody::TypeRef(b))) => {
+                rec_or_return!(a, &b.to_inferred(modules));
+            }
+            (body!(TypeBody::Func(a)), body!(TypeBody::Func(b))) => {
+                if a.params.len() != b.params.len() {
+                    return false;
+                }
+                for (a_param, b_param) in izip!(&a.params, &b.params) {
+                    rec_or_return!(a_param, b_param);
+                }
+                rec_or_return!(&a.ret, &b.ret);
+            }
+            (body!(TypeBody::Array(a)), body!(TypeBody::Array(b)))
+            | (body!(TypeBody::Ptr(Some(a))), body!(TypeBody::Ptr(Some(b)))) => {
+                rec_or_return!(a, b);
+            }
+            _ if self != other => return false,
+            _ => {}
+        }
+        true
     }
 }
 
@@ -630,17 +777,150 @@ impl Hash for Type {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Setters, ctor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Setters, ctor)]
 #[setters(into, prefix = "with_")]
 pub struct TypeRef {
     pub mod_idx: usize,
     pub idx:     usize,
     #[ctor(expr(false))]
     pub is_self: bool,
+    #[ctor(default)]
+    pub args:    Vec<Type>,
 }
+
 impl TypeRef {
     pub fn is_same_of(&self, other: &TypeRef) -> bool {
         (self.mod_idx, self.idx) == (other.mod_idx, other.idx)
+    }
+
+    pub fn field<'a>(
+        &'a self,
+        name: &str,
+        modules: &'a [Module],
+    ) -> Option<Cow<'a, Type>> {
+        match &modules[self.mod_idx].typedefs[self.idx].body {
+            TypeDefBody::Record(rec) => {
+                let ty = &rec.fields.get(name)?.ty;
+                let substitutions = self.typevar_substitutions(modules);
+                if let Some(ty) = ty.substitute_typevar(&substitutions) {
+                    Some(Cow::Owned(ty))
+                } else {
+                    Some(Cow::Borrowed(ty))
+                }
+            }
+            TypeDefBody::Interface(_) => None,
+        }
+    }
+
+    pub fn method<'a>(
+        &'a self,
+        name: &str,
+        modules: &'a [Module],
+    ) -> Option<Cow<'a, Type>> {
+        let typedef = modules.get(self.mod_idx)?.typedefs.get(self.idx)?;
+        let method = match &typedef.body {
+            TypeDefBody::Record(rec) => rec.methods.get(name),
+            TypeDefBody::Interface(iface) => iface.methods.get(name),
+        }?;
+        let method_mod = modules.get(method.func_ref.0)?;
+        let func = &method_mod.funcs[method.func_ref.1];
+
+        let substitutions = self.typevar_substitutions(modules);
+
+        let params_tys = func
+            .params
+            .iter()
+            .map(|param| {
+                let ty = &method_mod.values[*param].ty;
+                ty.substitute_typevar(&substitutions)
+                    .unwrap_or_else(|| ty.clone())
+            })
+            .collect_vec();
+        let ret_ty = &method_mod.values[func.ret].ty;
+        let ret_ty = ret_ty
+            .substitute_typevar(&substitutions)
+            .unwrap_or_else(|| ret_ty.clone());
+
+        Some(Cow::Owned(Type::new(
+            TypeBody::Func(Box::new(FuncType::new(params_tys, ret_ty))),
+            Some(method.loc),
+        )))
+    }
+
+    pub fn property<'a>(
+        &'a self,
+        name: &str,
+        modules: &'a [Module],
+    ) -> Option<Cow<'a, Type>> {
+        if let Some(ty) = self.method(name, modules) {
+            let TypeBody::Func(func) = &ty.body else {
+                return None;
+            };
+
+            let [params @ .., self_param] = &func.params[..] else {
+                return None;
+            };
+
+            // is static?
+            if self_param
+                .intersection(&Type::new(self.clone().into(), None), modules)
+                .is_none()
+            {
+                return None;
+            }
+
+            // functions without parameters are just values
+            if params.len() == 0 {
+                return Some(Cow::Owned(func.ret.clone()));
+            }
+
+            Some(Cow::Owned(Type::new(
+                TypeBody::Func(Box::new(FuncType::new(
+                    params.to_vec(),
+                    func.ret.clone(),
+                ))),
+                ty.loc,
+            )))
+        } else if let Some(ty) = self.field(name, modules) {
+            Some(ty)
+        } else {
+            None
+        }
+    }
+
+    pub fn typevar_substitutions(&self, modules: &[Module]) -> HashMap<TypeVarIdx, Type> {
+        let def = &modules[self.mod_idx].typedefs[self.idx];
+        izip!(&def.generics, &self.args)
+            .map(|(&typevar, arg)| (typevar, arg.clone()))
+            .collect()
+    }
+
+    pub fn to_inferred(&self, modules: &[Module]) -> InferredType {
+        let def = &modules[self.mod_idx].typedefs[self.idx];
+
+        let (fields, methods) = match &def.body {
+            TypeDefBody::Record(rec) => (&rec.fields, &rec.methods),
+            TypeDefBody::Interface(iface) => (&SortedMap::new(), &iface.methods),
+        };
+
+        let mut members = utils::SortedMap::new();
+        let mut properties = utils::SortedMap::new();
+
+        for name in fields.keys() {
+            let Some(ty) = self.field(name, modules) else {
+                continue;
+            };
+            members.insert(name.to_string(), ty.clone().into_owned());
+        }
+
+        for name in chain!(fields.keys(), methods.keys()).unique() {
+            let Some(ty) = self.property(name, modules) else {
+                continue;
+            };
+            properties.insert(name.to_string(), ty.into_owned());
+        }
+
+        InferredType::new(members, properties)
     }
 }
 
@@ -667,6 +947,36 @@ impl InferredType {
             members:    members.into_iter().collect(),
             properties: props.into_iter().collect(),
         }
+    }
+
+    /// Compares the type `self` with `other` and updates a map of typevars that exist in
+    /// `self` and the type they are mapped to in `other`. Returns false if `self` and
+    /// `other` are incompatible.
+    pub fn collect_typevar_substitutions(
+        &self,
+        other: &Self,
+        substitutions: &mut HashMap<TypeVarIdx, Type>,
+        modules: &[Module],
+    ) -> bool {
+        macro_rules! rec_or_return {
+            ($a:expr, $b:expr) => {
+                if !($a).collect_typevar_substitutions($b, substitutions, modules) {
+                    return false;
+                }
+            };
+        }
+
+        for (name, ty) in chain!(&self.members, &self.properties) {
+            if let Some(other_ty) = other
+                .members
+                .get(name)
+                .or_else(|| other.properties.get(name))
+            {
+                rec_or_return!(ty, other_ty);
+            }
+        }
+
+        true
     }
 }
 

@@ -361,17 +361,20 @@ impl<'a> TypeChecker<'a> {
 
                 for (arg, param) in izip!(args, params) {
                     let param_ty = &modules[call_mod_idx].values[param].ty;
-                    let kind =
-                        if call_mod_idx == self.mod_idx && !param_ty.contains_typevar() {
-                            ConstraintKind::TypeOf(param)
-                        } else {
-                            ConstraintKind::Is(param_ty.clone())
-                        };
+                    let kind = if call_mod_idx == self.mod_idx
+                        && !param_ty.typevars().next().is_some()
+                    {
+                        ConstraintKind::TypeOf(param)
+                    } else {
+                        ConstraintKind::Is(param_ty.clone())
+                    };
                     self.add_constraint(arg, Constraint::new(kind, loc), modules);
                 }
 
                 let ret_ty = &modules[call_mod_idx].values[ret].ty;
-                let kind = if call_mod_idx == self.mod_idx && !ret_ty.contains_typevar() {
+                let kind = if call_mod_idx == self.mod_idx
+                    && !ret_ty.typevars().next().is_some()
+                {
                     ConstraintKind::TypeOf(ret)
                 } else {
                     ConstraintKind::Is(ret_ty.clone())

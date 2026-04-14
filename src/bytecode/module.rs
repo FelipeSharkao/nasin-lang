@@ -172,9 +172,10 @@ pub trait BlockTransformer {
 
 #[derive(Debug, Clone)]
 pub struct TypeDef {
-    pub name: Name,
-    pub body: TypeDefBody,
-    pub loc:  Loc,
+    pub name:     Name,
+    pub body:     TypeDefBody,
+    pub loc:      Loc,
+    pub generics: Vec<TypeVarIdx>,
 }
 impl TypeDef {
     pub fn get_ifaces(&self) -> Vec<(usize, usize)> {

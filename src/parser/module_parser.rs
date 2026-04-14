@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use derive_ctor::ctor;
 use itertools::{Itertools, enumerate, multizip};
@@ -292,7 +292,7 @@ impl<'a, 't> ModuleParser<'a, 't> {
             }
         }
 
-        let mut generics = ret_ty.typevars().collect_vec();
+        let mut generics: HashSet<_> = ret_ty.typevars().collect();
         for &param_idx in &params {
             let param_ty = &self.values[param_idx].ty;
             generics.extend(param_ty.typevars());
@@ -309,7 +309,7 @@ impl<'a, 't> ModuleParser<'a, 't> {
             is_virt,
             body: self.add_block(),
             loc: Some(loc),
-            generics,
+            generics: generics.into_iter().sorted().collect(),
             generic_instantiations: HashMap::new(),
         };
         let func_idx = self.funcs.len();

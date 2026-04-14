@@ -1,0 +1,15 @@
+typevar T
+
+type Foo(T) {
+    data: T
+}
+
+main = [
+    get_type_name({data=1:u8}),
+    get_type_name({data=10:u8}),
+    get_type_name({data="hello"}),
+    get_type_name({data=true}),
+]
+
+get_type_name(x: Foo(T)) =
+    @type_name(x.data)

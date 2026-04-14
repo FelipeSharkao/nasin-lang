@@ -59,6 +59,7 @@ pub enum ErrorDetail {
     ReadError(ReadError),
     ValueNotFound(ValueNotFound),
     TypeNotFound(TypeNotFound),
+    TypeVarNotFound(TypeVarNotFound),
     UnexpectedType(UnexpectedType),
     TypeMisatch(TypeMisatch),
     #[display("Type should be known at this point")]
@@ -84,6 +85,12 @@ pub struct ValueNotFound {
 #[derive(Debug, Clone, Display, ctor)]
 #[display("Cannot find type `{ident}` on the current scope")]
 pub struct TypeNotFound {
+    pub ident: String,
+}
+
+#[derive(Debug, Clone, Display, ctor)]
+#[display("Cannot find typevar `{ident}` on the current scope")]
+pub struct TypeVarNotFound {
     pub ident: String,
 }
 

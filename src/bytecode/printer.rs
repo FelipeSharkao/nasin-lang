@@ -180,6 +180,21 @@ impl<'a> Printer<'a> {
         write!(header, "{S:indent$}type ")?;
         self.write_name(header, &typedef.name)?;
 
+        if typedef.generics.len() > 0 {
+            write!(header, "(")?;
+            for (i, &idx) in typedef.generics.iter().enumerate() {
+                if i > 0 {
+                    write!(header, ", ")?;
+                }
+                let typevar_def = &module.typevars[idx];
+                self.write_name(header, &typevar_def.name)?;
+                if self.show_ids {
+                    write!(header, " (typevar {idx})")?;
+                }
+            }
+            write!(header, ")")?;
+        }
+
         if self.show_ids && !self.reconstruct {
             write!(header, " (type {idx})")?;
         }
@@ -730,6 +745,17 @@ impl<'a> Printer<'a> {
 
         let typedef = &self.modules[type_ref.mod_idx].typedefs[type_ref.idx];
         self.write_name(f, &typedef.name)?;
+
+        if !type_ref.args.is_empty() {
+            write!(f, "(")?;
+            for (i, arg) in type_ref.args.iter().enumerate() {
+                if i > 0 {
+                    write!(f, ", ")?;
+                }
+                self.write_type_body(f, &arg.body)?;
+            }
+            write!(f, ")")?;
+        }
 
         if self.show_ids {
             write!(f, " (type {}-{})", type_ref.mod_idx, type_ref.idx)?;

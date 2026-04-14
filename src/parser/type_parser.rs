@@ -27,52 +27,99 @@ impl<'a, 't> TypeParser<'a, 't> {
             .map(|x| self.finish_typedef(x))
             .collect()
     }
+
     pub fn parse_type_expr(&self, node: ts::Node<'t>) -> b::Type {
         let node = node.of_kind("type_expr").child(0).unwrap();
 
         let body = match node.kind() {
-            "ident" => {
-                let ident = node.get_text(
-                    &self.ctx.source_manager.source(self.src_idx).content().text,
-                );
-                match self.idents.get(ident) {
-                    Some(body) => body.clone(),
-                    None => {
-                        self.ctx.push_error(errors::Error::new(
-                            errors::TypeNotFound::new(ident.to_string()).into(),
-                            Some(b::Loc::from_node(self.src_idx, &node)),
-                        ));
-                        b::TypeBody::unknown()
-                    }
-                }
-            }
+            "ident" => self.parse_type_ident(node, []),
             "array_type" => {
                 let item_ty = self.parse_type_expr(node.required_field("item_type"));
                 b::TypeBody::Array(item_ty.into())
             }
             "generic_type" => {
-                let name = node.required_field("name").of_kind("ident").get_text(
-                    &self.ctx.source_manager.source(self.src_idx).content().text,
-                );
-
+                let name_node = node.required_field("name");
                 let args = node
                     .iter_field("args")
-                    .map(|arg_node| self.parse_type_expr(arg_node))
-                    .collect_vec();
-
-                match name {
-                    "Ptr" => {
-                        // TODO: Better error handling
-                        assert!(args.len() == 1, "Ptr accepts only one parameter");
-                        b::TypeBody::Ptr(Some(args.into_item(0).unwrap().into()))
-                    }
-                    _ => panic!("unhandled generic type: `{name}`"),
-                }
+                    .map(|arg_node| self.parse_type_expr(arg_node));
+                self.parse_type_ident(name_node, args)
             }
             k => panic!("Unhandled type node `{k}`"),
         };
         b::Type::new(body, Some(b::Loc::from_node(self.src_idx, &node)))
     }
+
+    pub fn parse_type_ident(
+        &self,
+        node: ts::Node<'t>,
+        args: impl IntoIterator<Item = b::Type>,
+    ) -> b::TypeBody {
+        let mut args = args.into_iter().collect_vec();
+
+        let ident =
+            node.get_text(&self.ctx.source_manager.source(self.src_idx).content().text);
+
+        macro_rules! validate_args {
+            ($min:expr, $max:expr) => {{
+                let min = $min;
+                let max = $max;
+                let len = args.len();
+                let expected_len = if len < min {
+                    Some(min)
+                } else if len > max {
+                    Some(max)
+                } else {
+                    None
+                };
+                if let Some(expected_len) = expected_len {
+                    self.ctx.push_error(errors::Error::new(
+                        errors::WrongArgumentCount::new(
+                            ident.to_string(),
+                            expected_len,
+                            len,
+                        )
+                        .into(),
+                        Some(b::Loc::from_node(self.src_idx, &node)),
+                    ));
+                    args.resize_with(expected_len, || b::Type::unknown(None));
+                }
+            }};
+            ($count:expr) => {{
+                let count = $count;
+                validate_args!(count, count);
+            }};
+        }
+
+        let Some(mut body) = self.idents.get(ident).cloned() else {
+            self.ctx.push_error(errors::Error::new(
+                errors::TypeNotFound::new(ident.to_string()).into(),
+                Some(b::Loc::from_node(self.src_idx, &node)),
+            ));
+            return b::TypeBody::unknown();
+        };
+
+        match &mut body {
+            b::TypeBody::TypeRef(type_ref) if !type_ref.is_self => {
+                let modules = self.ctx.lock_modules();
+                let decl = if type_ref.mod_idx == self.mod_idx {
+                    &self.typedefs[type_ref.idx].typedef
+                } else {
+                    &modules[type_ref.mod_idx].typedefs[type_ref.idx]
+                };
+                validate_args!(decl.generics.len());
+                type_ref.args = args;
+            }
+            b::TypeBody::Ptr(item_ty @ None) => {
+                validate_args!(0, 1);
+                *item_ty = args.into_item(0).map(|ty| ty.into());
+            }
+            body if body.is_unknown() => {}
+            _ => validate_args!(0),
+        }
+
+        body
+    }
+
     pub fn parse_type_decl(
         &mut self,
         name: b::Name,
@@ -94,10 +141,16 @@ impl<'a, 't> TypeParser<'a, 't> {
             v => panic!("Unexpected type body kind: {v}"),
         };
 
+        let generics = node
+            .iter_field("params")
+            .map(|_| b::TypeVarIdx::MAX)
+            .collect_vec();
+
         let value = b::TypeDef {
             name,
             body,
             loc: b::Loc::from_node(self.src_idx, &node),
+            generics,
         };
         self.idents.insert(
             value.name.last_ident().to_string(),
@@ -114,6 +167,29 @@ impl<'a, 't> TypeParser<'a, 't> {
         let Some(node) = x.type_decl_node else {
             return x.typedef.clone();
         };
+
+        let generics = node
+            .iter_field("params")
+            .map(|param_node| {
+                let ident = param_node.of_kind("ident").get_text(
+                    &self.ctx.source_manager.source(self.src_idx).content().text,
+                );
+
+                if let Some(b::TypeBody::TypeVar(typevar)) = self.idents.get(ident)
+                    && typevar.mod_idx == self.mod_idx
+                {
+                    return typevar.typevar_idx;
+                }
+
+                self.ctx.push_error(errors::Error::new(
+                    errors::TypeVarNotFound::new(ident.to_string()).into(),
+                    Some(b::Loc::from_node(self.src_idx, &param_node)),
+                ));
+
+                return b::TypeVarIdx::MAX;
+            })
+            .collect_vec();
+
         let body_node = node.required_field("body");
         let body =
             match (body_node.kind(), &x.typedef.body) {
@@ -230,8 +306,10 @@ impl<'a, 't> TypeParser<'a, 't> {
                 }
                 _ => unreachable!(),
             };
+
         b::TypeDef {
             body,
+            generics,
             ..x.typedef.clone()
         }
     }
@@ -260,5 +338,6 @@ fn default_idents() -> HashMap<String, b::TypeBody> {
         ("f32".to_string(), b::TypeBody::F32),
         ("f64".to_string(), b::TypeBody::F64),
         ("str".to_string(), b::TypeBody::String),
+        ("Ptr".to_string(), b::TypeBody::Ptr(None)),
     ])
 }

@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use derive_ctor::ctor;
-use itertools::Itertools;
+use itertools::{Itertools, izip};
 
 use super::CodeTransformStep;
 use crate::bytecode as b;
@@ -63,16 +63,10 @@ impl<'a> InstantiateGenericFuncsStep<'a> {
 
         let mut substitutions = HashMap::new();
 
-        for (param_idx, param_value_idx) in func.params.iter().enumerate() {
-            let param_ty = &modules[func_mod_idx].values[*param_value_idx].ty;
-
-            let b::TypeBody::TypeVar(tv) = &param_ty.body else {
-                continue;
-            };
-
-            let arg_ty = &modules[call_mod_idx].values[args[param_idx]].ty;
-
-            substitutions.insert(tv.typevar_idx, arg_ty.clone());
+        for (&param, &arg) in izip!(&func.params, args) {
+            let param_ty = &modules[func_mod_idx].values[param].ty;
+            let arg_ty = &modules[call_mod_idx].values[arg].ty;
+            param_ty.collect_typevar_substitutions(arg_ty, &mut substitutions, modules);
         }
 
         substitutions
