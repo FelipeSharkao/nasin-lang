@@ -445,7 +445,7 @@ impl Type {
                     };
 
                 TypeRef::new(mod_idx, ty_idx)
-                    .is_self(a.is_self || b.is_self)
+                    .with_is_self(a.is_self || b.is_self)
                     .into()
             }
             // TODO: when we add constraints to generics, we will have to intersect with
@@ -543,7 +543,7 @@ impl Type {
                 if a.is_same_of(b) =>
             {
                 TypeRef::new(a.mod_idx, a.idx)
-                    .is_self(a.is_self && b.is_self)
+                    .with_is_self(a.is_self && b.is_self)
                     .into()
             }
             (a, b) => {
@@ -631,6 +631,7 @@ impl Hash for Type {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Setters, ctor)]
+#[setters(into, prefix = "with_")]
 pub struct TypeRef {
     pub mod_idx: usize,
     pub idx:     usize,

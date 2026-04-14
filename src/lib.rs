@@ -136,8 +136,8 @@ pub fn build_maybe_run(
     if ctx.has_errors() {
         if ctx.cfg.dump_bytecode {
             b::Printer::new(&ctx.lock_modules(), &ctx.cfg)
-                .show_ids(true)
-                .source_manager(&ctx.source_manager)
+                .with_show_ids(true)
+                .with_source_manager(&ctx.source_manager)
                 .print_all();
         }
 
@@ -146,8 +146,8 @@ pub fn build_maybe_run(
 
     if ctx.cfg.dump_bytecode {
         b::Printer::new(&ctx.lock_modules(), &ctx.cfg)
-            .show_ids(true)
-            .source_manager(&ctx.source_manager)
+            .with_show_ids(true)
+            .with_source_manager(&ctx.source_manager)
             .print_all();
     }
 
@@ -159,8 +159,8 @@ pub fn build_maybe_run(
 
     if ctx.cfg.dump_transformed_bytecode {
         b::Printer::new(&ctx.lock_modules(), &ctx.cfg)
-            .show_ids(true)
-            .source_manager(&ctx.source_manager)
+            .with_show_ids(true)
+            .with_source_manager(&ctx.source_manager)
             .print_all();
     }
 

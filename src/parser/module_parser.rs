@@ -114,7 +114,8 @@ impl<'a, 't> ModuleParser<'a, 't> {
                 "type_decl" => {
                     let old_self_type = self.types.idents.get(SELF_INDENT).cloned();
                     let ty_idx = self.types.typedefs.len();
-                    let self_type = b::TypeRef::new(self.mod_idx, ty_idx).is_self(true);
+                    let self_type =
+                        b::TypeRef::new(self.mod_idx, ty_idx).with_is_self(true);
                     self.types
                         .idents
                         .insert(SELF_INDENT.to_string(), self_type.into());

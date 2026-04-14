@@ -87,8 +87,8 @@ impl BuildContext {
 
         if self.cfg.dump_untyped_bytecode {
             b::Printer::new(&self.lock_modules(), &self.cfg)
-                .show_ids(true)
-                .source_manager(&self.source_manager)
+                .with_show_ids(true)
+                .with_source_manager(&self.source_manager)
                 .print_module(mod_idx);
         }
 
@@ -131,8 +131,8 @@ impl BuildContext {
         if self.cfg.dump_bytecode {
             if let Some((mod_idx, _)) = rt_entry {
                 b::Printer::new(&modules, &self.cfg)
-                    .show_ids(true)
-                    .source_manager(&self.source_manager)
+                    .with_show_ids(true)
+                    .with_source_manager(&self.source_manager)
                     .print_module(mod_idx);
             }
         }

@@ -103,7 +103,7 @@ impl UnexpectedType {
         let fmt_ty = |ty: &b::TypeBody| {
             let mut s = String::new();
             b::Printer::new(modules, cfg)
-                .reconstruct(true)
+                .with_reconstruct(true)
                 .write_type_expr(&mut s, ty)
                 .unwrap();
             s
@@ -148,7 +148,7 @@ impl TypeMisatch {
                 .map(|t| {
                     let mut s = String::new();
                     b::Printer::new(modules, cfg)
-                        .reconstruct(true)
+                        .with_reconstruct(true)
                         .write_type_expr(&mut s, &t.body)
                         .unwrap();
                     s
@@ -177,7 +177,7 @@ impl TypeNotInterface {
     pub fn new(ty: &b::Type, modules: &[b::Module], cfg: &BuildConfig) -> Self {
         let mut s = String::new();
         b::Printer::new(modules, cfg)
-            .reconstruct(true)
+            .with_reconstruct(true)
             .write_type_expr(&mut s, &ty.body)
             .unwrap();
         Self { ty: s }

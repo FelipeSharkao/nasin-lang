@@ -16,7 +16,7 @@ use crate::utils;
 const S: &str = "";
 
 #[derive(ctor, Setters)]
-#[setters(into)]
+#[setters(into, prefix = "with_")]
 pub struct Printer<'a> {
     modules: &'a [Module],
     cfg: &'a BuildConfig,
