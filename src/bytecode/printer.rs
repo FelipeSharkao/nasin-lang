@@ -5,7 +5,9 @@ use bump_scope::traits::BumpAllocatorTyped;
 use bump_scope::{Bump, BumpScope, BumpString, BumpVec, bump_vec};
 use derive_ctor::ctor;
 use derive_setters::Setters;
+use itertools::Itertools;
 
+use super::Name;
 use super::instr::*;
 use super::module::*;
 use super::ty::*;
@@ -26,6 +28,8 @@ pub struct Printer<'a> {
     show_ids: bool,
     #[ctor(default)]
     reconstruct: bool,
+    #[ctor(default)]
+    cur_mod_idx: Option<usize>,
 }
 
 impl<'a> Printer<'a> {
@@ -89,9 +93,13 @@ impl<'a> Printer<'a> {
         }
         write!(f, ":")?;
 
+        let prev_mod_idx = self.cur_mod_idx;
+        self.cur_mod_idx = Some(mod_idx);
+
         for (i, _) in module.typedefs.iter().enumerate() {
             writeln!(f)?;
-            self.write_typedef(f, module, i, 2)?;
+            self.write_typedef_in(f, &mut bump, module, i, 2)?;
+            writeln!(f)?;
         }
 
         if module.typevars.len() > 0 {
@@ -120,6 +128,8 @@ impl<'a> Printer<'a> {
             writeln!(f)?;
         }
 
+        self.cur_mod_idx = prev_mod_idx;
+
         Ok(())
     }
 
@@ -135,7 +145,8 @@ impl<'a> Printer<'a> {
         table.start_row();
 
         let line = table.push_cell();
-        write!(line, "{S:indent$}typevar {}", &typevar.name)?;
+        write!(line, "{S:indent$}typevar ")?;
+        self.write_name(line, &typevar.name)?;
         if self.show_ids {
             write!(line, " (typevar {idx})")?;
         }
@@ -150,98 +161,116 @@ impl<'a> Printer<'a> {
         Ok(())
     }
 
-    fn write_typedef(
+    fn write_typedef_in(
         &mut self,
         f: &mut impl Write,
+        bump: &mut BumpScope,
         module: &Module,
         idx: usize,
         indent: usize,
     ) -> fmt::Result {
+        let mut guard = bump.scope_guard();
+        let bump = guard.scope().by_value();
+
+        let mut table = BumpTable::new_in(&bump);
+
         let typedef = &module.typedefs[idx];
 
-        if self.reconstruct {
-            write!(f, "{S:indent$}type {}", typedef.name.last_ident())?;
-            match &typedef.body {
-                TypeDefBody::Record(rec) => {
-                    write!(f, " {{")?;
-                    for (name, field) in &rec.fields {
-                        writeln!(f)?;
-                        write!(f, "{S:indent$}  {name}: ")?;
-                        self.write_type_body(f, &field.ty.body)?;
-                    }
-                    for (name, method) in &rec.methods {
-                        let func =
-                            &self.modules[method.func_ref.0].funcs[method.func_ref.1];
-                        writeln!(f)?;
-                        write!(f, "{S:indent$}  ")?;
-                        self.write_method_signature(
-                            f,
-                            name,
-                            &self.modules[method.func_ref.0],
-                            func,
-                        )?;
-                    }
-                    writeln!(f)?;
-                    write!(f, "{S:indent$}}}")?;
-                }
-                TypeDefBody::Interface(iface) => {
-                    write!(f, " interface {{")?;
-                    for (name, method) in &iface.methods {
-                        let func =
-                            &self.modules[method.func_ref.0].funcs[method.func_ref.1];
-                        writeln!(f)?;
-                        write!(f, "{S:indent$}  ")?;
-                        self.write_method_signature(
-                            f,
-                            name,
-                            &self.modules[method.func_ref.0],
-                            func,
-                        )?;
-                    }
-                    writeln!(f)?;
-                    write!(f, "{S:indent$}}}")?;
-                }
-            }
-        } else {
-            let mod_idx = module.idx;
-            write!(f, "{S:indent$}type {mod_idx}-{idx} {}", typedef.name)?;
-            self.write_loc_comment(f, Some(&typedef.loc))?;
+        let header = table.push_cell();
+        write!(header, "{S:indent$}type ")?;
+        self.write_name(header, &typedef.name)?;
 
-            match &typedef.body {
-                TypeDefBody::Record(rec) => {
-                    write!(f, " record:")?;
-                    if !rec.ifaces.is_empty() {
-                        write!(f, "\n{S:indent$}  implements")?;
-                        let mut ifaces: Vec<_> = rec.ifaces.iter().collect();
-                        ifaces.sort();
-                        for (m, t) in ifaces {
-                            write!(f, " ({m}-{t})")?;
-                        }
+        if self.show_ids && !self.reconstruct {
+            write!(header, " (type {idx})")?;
+        }
+
+        match &typedef.body {
+            TypeDefBody::Record(rec) => {
+                for (i, (mod_idx, ty_idx)) in rec.ifaces.iter().sorted().enumerate() {
+                    if i == 0 {
+                        write!(header, ": ")?;
+                    } else {
+                        write!(header, ", ")?;
                     }
-                    for (name, field) in &rec.fields {
-                        write!(f, "\n{S:indent$}  {name}: ")?;
-                        self.write_type_body(f, &field.ty.body)?;
-                    }
-                    for (name, method) in &rec.methods {
+                    self.write_type_ref(header, &TypeRef::new(*mod_idx, *ty_idx))?;
+                }
+
+                write!(header, " {{")?;
+
+                if !self.reconstruct {
+                    let loc_comment = table.push_cell();
+                    self.write_loc_comment(loc_comment, Some(&typedef.loc))?;
+                }
+
+                for (name, field) in &rec.fields {
+                    table.start_row();
+                    let line = table.push_cell();
+                    write!(line, "{S:indent$}  {name}: ")?;
+                    self.write_type_body(line, &field.ty.body)?;
+                }
+
+                for (name, method) in &rec.methods {
+                    table.start_row();
+                    let line = table.push_cell();
+                    let func = &self.modules[method.func_ref.0].funcs[method.func_ref.1];
+                    write!(line, "{S:indent$}  ")?;
+                    self.write_method_signature(
+                        line,
+                        name,
+                        &self.modules[method.func_ref.0],
+                        func,
+                    )?;
+
+                    if !self.reconstruct && self.show_ids {
                         write!(
-                            f,
-                            "\n{S:indent$}  {name}(): ({}-{})",
+                            line,
+                            " (func {}-{})",
                             method.func_ref.0, method.func_ref.1
                         )?;
                     }
                 }
-                TypeDefBody::Interface(iface) => {
-                    write!(f, " interface:")?;
-                    for (name, method) in &iface.methods {
+
+                table.end_row();
+                let line = table.push_cell();
+                write!(line, "{S:indent$}}}")?;
+            }
+            TypeDefBody::Interface(iface) => {
+                write!(header, " interface {{")?;
+
+                if !self.reconstruct {
+                    let loc_comment = table.push_cell();
+                    self.write_loc_comment(loc_comment, Some(&typedef.loc))?;
+                }
+
+                for (name, method) in &iface.methods {
+                    table.start_row();
+                    let line = table.push_cell();
+                    let func = &self.modules[method.func_ref.0].funcs[method.func_ref.1];
+                    write!(line, "{S:indent$}  ")?;
+                    self.write_method_signature(
+                        line,
+                        name,
+                        &self.modules[method.func_ref.0],
+                        func,
+                    )?;
+
+                    if !self.reconstruct && self.show_ids {
+                        let loc_comment = table.push_cell();
                         write!(
-                            f,
-                            "\n{S:indent$}  {name}(): ({}-{})",
+                            loc_comment,
+                            " (func {}-{})",
                             method.func_ref.0, method.func_ref.1
                         )?;
                     }
                 }
+
+                table.end_row();
+                let line = table.push_cell();
+                write!(line, "{S:indent$}}}")?;
             }
         }
+
+        write!(f, "{table}")?;
 
         Ok(())
     }
@@ -262,7 +291,8 @@ impl<'a> Printer<'a> {
         let mut table = BumpTable::new_in(&bump);
 
         let line = table.push_cell();
-        write!(line, "{S:indent$}{}", global.name)?;
+        write!(line, "{S:indent$}")?;
+        self.write_name(line, &global.name)?;
 
         if !self.reconstruct {
             write!(line, " v{}", global.value)?;
@@ -314,18 +344,19 @@ impl<'a> Printer<'a> {
     ) -> fmt::Result {
         let func = &module.funcs[idx];
 
-        write!(f, "{S:indent$}{}", func.name)?;
+        write!(f, "{S:indent$}")?;
+        self.write_name(f, &func.name)?;
 
         if !func.generics.is_empty() && !self.reconstruct {
             write!(f, "<")?;
-            for (i, &tv_idx) in func.generics.iter().enumerate() {
+            for (i, &idx) in func.generics.iter().enumerate() {
                 if i > 0 {
                     write!(f, ", ")?;
                 }
-                let tv = &module.typevars[tv_idx];
-                write!(f, "{}", tv.name)?;
+                let typevar_def = &module.typevars[idx];
+                self.write_name(f, &typevar_def.name)?;
                 if self.show_ids {
-                    write!(f, " ({tv_idx})")?;
+                    write!(f, " (typevar {idx})")?;
                 }
             }
             write!(f, ">")?;
@@ -519,9 +550,9 @@ impl<'a> Printer<'a> {
                 }
                 write!(f, ")")
             }
-            InstrBody::GetProperty(v, prop) => write!(f, "GetProperty(v{v}, .{prop})"),
-            InstrBody::GetField(v, field) => write!(f, "GetField(v{v}, .{field})"),
-            InstrBody::GetMethod(v, name) => write!(f, "GetMethod(v{v}, .{name})"),
+            InstrBody::GetProperty(v, prop) => write!(f, "GetProperty(v{v}, {prop})"),
+            InstrBody::GetField(v, field) => write!(f, "GetField(v{v}, {field})"),
+            InstrBody::GetMethod(v, name) => write!(f, "GetMethod(v{v}, {name})"),
             InstrBody::CreateBool(b) => write!(f, "CreateBool({b})"),
             InstrBody::CreateNumber(n) => write!(f, "CreateNumber({n})"),
             InstrBody::CreateString(s) => {
@@ -546,7 +577,7 @@ impl<'a> Printer<'a> {
                     if i > 0 {
                         write!(f, ", ")?;
                     }
-                    write!(f, ".{name}=v{v}")?;
+                    write!(f, "{name}=v{v}")?;
                 }
                 write!(f, ")")
             }
@@ -657,17 +688,12 @@ impl<'a> Printer<'a> {
                 self.write_type_body(f, &func.ret.body)?;
             }
             TypeBody::TypeRef(ty_ref) => self.write_type_ref(f, ty_ref)?,
-            TypeBody::TypeVar(tv) => {
-                let name = self
-                    .modules
-                    .get(tv.mod_idx)
-                    .and_then(|m| m.typevars.get(tv.typevar_idx))
-                    .map(|tv| tv.name.to_string());
-                if let Some(name) = name {
-                    write!(f, "{name}")?;
-                }
-                if self.show_ids {
-                    write!(f, " ({}-{})", tv.mod_idx, tv.typevar_idx)?;
+            TypeBody::TypeVar(typevar) => {
+                let typevar_def =
+                    &self.modules[typevar.mod_idx].typevars[typevar.typevar_idx];
+                self.write_name(f, &typevar_def.name)?;
+                if !self.reconstruct && self.show_ids {
+                    write!(f, " (typevar {}-{})", typevar.mod_idx, typevar.typevar_idx)?;
                 }
             }
             TypeBody::Void
@@ -693,27 +719,22 @@ impl<'a> Printer<'a> {
         Ok(())
     }
 
-    fn write_type_ref(&mut self, f: &mut impl Write, ty_ref: &TypeRef) -> fmt::Result {
-        if ty_ref.is_self {
+    fn write_type_ref(&mut self, f: &mut impl Write, type_ref: &TypeRef) -> fmt::Result {
+        if type_ref.is_self {
             write!(f, "Self")?;
             if self.show_ids {
-                write!(f, " ({}-{})", ty_ref.mod_idx, ty_ref.idx)?;
+                write!(f, " (type {}-{})", type_ref.mod_idx, type_ref.idx)?;
             }
             return Ok(());
         }
-        match self
-            .modules
-            .get(ty_ref.mod_idx)
-            .and_then(|m| m.typedefs.get(ty_ref.idx))
-        {
-            Some(td) => {
-                write!(f, "{}", td.name)?;
-                if self.show_ids {
-                    write!(f, " ({}-{})", ty_ref.mod_idx, ty_ref.idx)?;
-                }
-            }
-            None => write!(f, "type({}-{})", ty_ref.mod_idx, ty_ref.idx)?,
+
+        let typedef = &self.modules[type_ref.mod_idx].typedefs[type_ref.idx];
+        self.write_name(f, &typedef.name)?;
+
+        if self.show_ids {
+            write!(f, " (type {}-{})", type_ref.mod_idx, type_ref.idx)?;
         }
+
         Ok(())
     }
 
@@ -729,7 +750,7 @@ impl<'a> Printer<'a> {
             .and_then(|m| m.funcs.get(func_idx))
         {
             Some(func) => {
-                write!(f, "{}", func.name)?;
+                self.write_name(f, &func.name)?;
                 if self.show_ids {
                     write!(f, " (func {mod_idx}-{func_idx})")?;
                 }
@@ -750,8 +771,8 @@ impl<'a> Printer<'a> {
             .get(mod_idx)
             .and_then(|m| m.globals.get(global_idx))
         {
-            Some(g) => {
-                write!(f, "{}", g.name)?;
+            Some(global) => {
+                self.write_name(f, &global.name)?;
                 if self.show_ids {
                     write!(f, " (global {mod_idx}-{global_idx})")?;
                 }
@@ -777,6 +798,15 @@ impl<'a> Printer<'a> {
         let path = self.cfg.strip_base_paths(&source.path).display();
 
         write!(f, "; {path}:{}:{}", loc.start_line, loc.start_col)
+    }
+
+    fn write_name(&mut self, f: &mut impl Write, name: &Name) -> fmt::Result {
+        if let Some(mod_idx) = self.cur_mod_idx {
+            let name = name.strip_prefix(&self.modules[mod_idx].name);
+            write!(f, "{}", name)
+        } else {
+            write!(f, "{}", name)
+        }
     }
 }
 
