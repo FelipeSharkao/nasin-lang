@@ -66,7 +66,12 @@ impl<'a> InstantiateGenericFuncsStep<'a> {
         for (&param, &arg) in izip!(&func.params, args) {
             let param_ty = &modules[func_mod_idx].values[param].ty;
             let arg_ty = &modules[call_mod_idx].values[arg].ty;
-            param_ty.collect_typevar_substitutions(arg_ty, &mut substitutions, modules);
+            param_ty.collect_typevar_substitutions(
+                arg_ty,
+                b::Variance::Covariant,
+                &mut substitutions,
+                modules,
+            );
         }
 
         substitutions

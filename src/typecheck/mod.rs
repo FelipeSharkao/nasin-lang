@@ -862,7 +862,8 @@ impl<'a> TypeChecker<'a> {
 
             result_ty = b::Type::new(b::TypeBody::Never, None);
             for ty in &tys {
-                if let Some(ty) = result_ty.union(ty, modules) {
+                if let Some(ty) = result_ty.merge(ty, b::Variance::Contravariant, modules)
+                {
                     result_ty = ty;
                 } else {
                     union_success = false;
@@ -1079,7 +1080,9 @@ impl<'a> TypeChecker<'a> {
 
                     tracing::trace!(?merge_with, "got type");
 
-                    if let Some(ty) = result_ty.intersection(&merge_with, modules) {
+                    if let Some(ty) =
+                        result_ty.merge(&merge_with, b::Variance::Covariant, modules)
+                    {
                         result_ty = ty;
                         None
                     } else {

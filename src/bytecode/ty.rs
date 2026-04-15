@@ -281,14 +281,18 @@ impl Type {
         }
     }
 
-    pub fn intersection(&self, other: &Type, modules: &[Module]) -> Option<Type> {
+    pub fn merge(
+        &self,
+        other: &Type,
+        variance: Variance,
+        modules: &[Module],
+    ) -> Option<Type> {
         let body = match (self, other) {
             (body!(a), body!(b)) if a == b => a.clone(),
-            // INFO: This is not correct, an intersection with `never` and `a` should be
-            // `never`, not `a`, but due to the way that `if` branches are checked, this
-            // was necessary, and I reckon it won't be all that harmful. Maybe I'll fix it
-            // later when it becomes a problem
-            unordered!(body!(TypeBody::Never), body!(a)) => a.clone(),
+            unordered!(body!(TypeBody::Never), body!(a)) => match variance {
+                Variance::Covariant => TypeBody::Never,
+                Variance::Contravariant => a.clone(),
+            },
             number!(U8) => TypeBody::U8,
             number!(U16) => TypeBody::U16,
             number!(U32) => TypeBody::U32,
@@ -301,46 +305,51 @@ impl Type {
             number!(F32, AnySignedNumber, AnyFloat) => TypeBody::F32,
             number!(F64, AnySignedNumber, AnyFloat) => TypeBody::F64,
             (body!(TypeBody::Array(a)), body!(TypeBody::Array(b))) => {
-                TypeBody::Array(a.intersection(&b, modules)?.into())
+                TypeBody::Array(a.merge(&b, variance, modules)?.into())
             }
             (body!(TypeBody::Ptr(a)), body!(TypeBody::Ptr(b))) => {
                 let ty = match (a, b) {
-                    (Some(a), Some(b)) => Some(a.intersection(b, modules)?.into()),
+                    (Some(a), Some(b)) => Some(a.merge(b, variance, modules)?.into()),
                     (None, None) => None,
-                    unordered!(Some(a), None) => Some(a.clone()),
+                    unordered!(Some(a), None) => match variance {
+                        Variance::Covariant => Some(a.clone()),
+                        Variance::Contravariant => None,
+                    },
                 };
                 TypeBody::Ptr(ty)
             }
             (body!(TypeBody::Func(a)), body!(TypeBody::Func(b))) => {
-                TypeBody::Func(a.intersection(b, modules)?.into())
+                TypeBody::Func(a.merge(b, variance, modules)?.into())
             }
             (body!(TypeBody::Inferred(a)), body!(TypeBody::Inferred(b))) => {
-                let members = chain!(a.members.keys(), b.members.keys())
-                    .unique()
-                    .map(|name| {
-                        let ty = match (a.members.get(name), b.members.get(name)) {
-                            (Some(a_member), Some(b_member)) => {
-                                a_member.intersection(b_member, modules)?
-                            }
-                            unordered!(Some(field), None) => field.clone(),
-                            _ => unreachable!(),
-                        };
-                        Some((name.to_string(), ty))
-                    })
-                    .collect::<Option<_>>()?;
-                let properties = chain!(a.properties.keys(), b.properties.keys())
-                    .unique()
-                    .map(|name| {
-                        let ty = match (a.properties.get(name), b.properties.get(name)) {
-                            (Some(a_method), Some(b_method)) => {
-                                a_method.intersection(b_method, modules)?
-                            }
-                            unordered!(Some(method), None) => method.clone(),
-                            _ => unreachable!(),
-                        };
-                        Some((name.to_string(), ty))
-                    })
-                    .collect::<Option<_>>()?;
+                let mut members = SortedMap::new();
+                for name in chain!(a.members.keys(), b.members.keys()).unique() {
+                    let ty = match (a.members.get(name), b.members.get(name)) {
+                        (Some(a_member), Some(b_member)) => {
+                            a_member.merge(b_member, variance, modules)?
+                        }
+                        // TODO: optional fields
+                        unordered!(Some(_), None) => return None,
+                        _ => unreachable!(),
+                    };
+                    members.insert(name.to_string(), ty);
+                }
+
+                let mut properties = SortedMap::new();
+                for name in chain!(a.properties.keys(), b.properties.keys()).unique() {
+                    let ty = match (a.properties.get(name), b.properties.get(name)) {
+                        (Some(a_prop), Some(b_prop)) => {
+                            a_prop.merge(b_prop, variance, modules)?
+                        }
+                        unordered!(Some(prop), None) => match variance {
+                            Variance::Covariant => prop.clone(),
+                            Variance::Contravariant => continue,
+                        },
+                        _ => unreachable!(),
+                    };
+                    properties.insert(name.to_string(), ty);
+                }
+
                 TypeBody::Inferred(InferredType {
                     members,
                     properties,
@@ -349,13 +358,13 @@ impl Type {
             unordered!(body!(TypeBody::Inferred(a)), b) => {
                 let has_all_members = a.members.iter().all(|(name, a_ty)| {
                     other.field(name, modules).is_some_and(|b_ty| {
-                        a_ty.intersection(b_ty.as_ref(), modules).is_some()
+                        a_ty.merge(b_ty.as_ref(), variance, modules).is_some()
                     })
                 });
                 let has_all_props = a.properties.iter().all(|(name, a_ty)| {
-                    other
-                        .property(name, modules)
-                        .is_some_and(|b_ty| a_ty.intersection(&b_ty, modules).is_some())
+                    other.property(name, modules).is_some_and(|b_ty| {
+                        a_ty.merge(&b_ty, variance, modules).is_some()
+                    })
                 });
                 if !has_all_members || !has_all_props {
                     return None;
@@ -369,6 +378,7 @@ impl Type {
                     let mut substitutions = HashMap::new();
                     if !type_ref.to_inferred(modules).collect_typevar_substitutions(
                         a,
+                        variance,
                         &mut substitutions,
                         modules,
                     ) {
@@ -391,7 +401,7 @@ impl Type {
                 let a_ty = &modules[a.mod_idx].typedefs[a.idx];
                 let b_ty = &modules[b.mod_idx].typedefs[b.idx];
 
-                macro_rules! body {
+                macro_rules! def_body {
                     ($pat:pat) => {
                         TypeDef { body: $pat, .. }
                     };
@@ -400,16 +410,16 @@ impl Type {
                 let (mod_idx, ty_idx) =
                     match ((a.mod_idx, a.idx, a_ty), (b.mod_idx, b.idx, b_ty)) {
                         (
-                            (_, _, body!(TypeDefBody::Record(_))),
-                            (_, _, body!(TypeDefBody::Record(_))),
+                            (_, _, def_body!(TypeDefBody::Record(_))),
+                            (_, _, def_body!(TypeDefBody::Record(_))),
                         )
                         | (
-                            (_, _, body!(TypeDefBody::Interface(_))),
-                            (_, _, body!(TypeDefBody::Interface(_))),
+                            (_, _, def_body!(TypeDefBody::Interface(_))),
+                            (_, _, def_body!(TypeDefBody::Interface(_))),
                         ) if a.is_same_of(b) => (a.mod_idx, a.idx),
                         unordered!(
-                            (r_mod_idx, r_ty_idx, body!(TypeDefBody::Record(rec))),
-                            (i_mod_idx, i_ty_idx, body!(TypeDefBody::Interface(..))),
+                            (r_mod_idx, r_ty_idx, def_body!(TypeDefBody::Record(rec))),
+                            (i_mod_idx, i_ty_idx, def_body!(TypeDefBody::Interface(..))),
                         ) => {
                             let extends = rec.ifaces.iter().any(|(mod_idx, ty_idx)| {
                                 i_mod_idx == *mod_idx && i_ty_idx == *ty_idx
@@ -419,18 +429,19 @@ impl Type {
                             }
 
                             if !a.args.is_empty() && !b.args.is_empty() {
-                                todo!(
-                                    "intersection of interface and record with generics"
-                                );
+                                todo!("merge of interface and record with generics");
                             }
 
-                            (r_mod_idx, r_ty_idx)
+                            match variance {
+                                Variance::Covariant => (r_mod_idx, r_ty_idx),
+                                Variance::Contravariant => (i_mod_idx, i_ty_idx),
+                            }
                         }
                         _ => return None,
                     };
 
                 let args = izip!(&a.args, &b.args)
-                    .map(|(a_arg, b_arg)| a_arg.intersection(b_arg, modules))
+                    .map(|(a_arg, b_arg)| a_arg.merge(b_arg, variance, modules))
                     .collect::<Option<Vec<_>>>()?;
 
                 TypeRef::new(mod_idx, ty_idx)
@@ -454,99 +465,6 @@ impl Type {
                 }
             }
             (None, None) => None,
-        };
-        Some(Type::new(body, loc))
-    }
-
-    pub fn union(&self, other: &Type, modules: &[Module]) -> Option<Type> {
-        let body = match (self, other) {
-            unordered!(body!(TypeBody::Never), body!(a)) => a.clone(),
-            (body!(TypeBody::Array(a)), body!(TypeBody::Array(b))) => {
-                TypeBody::Array(a.union(&b, modules)?.into())
-            }
-            (body!(TypeBody::Ptr(a)), body!(TypeBody::Ptr(b))) => {
-                let ty = match (a, b) {
-                    (Some(a), Some(b)) => Some(a.union(b, modules)?.into()),
-                    _ => None,
-                };
-                TypeBody::Ptr(ty)
-            }
-            (body!(TypeBody::Func(a)), body!(TypeBody::Func(b))) => {
-                TypeBody::Func(a.union(b, modules)?.into())
-            }
-            (body!(TypeBody::Inferred(a)), body!(TypeBody::Inferred(b))) => {
-                let fields = chain!(a.members.keys(), b.members.keys())
-                    .unique()
-                    .map(|name| {
-                        let ty = match (a.members.get(name), b.members.get(name)) {
-                            (Some(a_member), Some(b_member)) => {
-                                a_member.union(b_member, modules)?
-                            }
-                            _ => unreachable!(),
-                        };
-                        Some((name.to_string(), ty))
-                    })
-                    .collect::<Option<_>>()?;
-                let props = chain!(a.properties.keys(), b.properties.keys())
-                    .unique()
-                    .filter_map(|name| {
-                        let prop = match (a.properties.get(name), b.properties.get(name))
-                        {
-                            (Some(a_prop), Some(b_prop)) => {
-                                match a_prop.union(b_prop, modules) {
-                                    Some(p) => p,
-                                    // If there's no common signature, so the type is
-                                    // impossible
-                                    None => return Some(None),
-                                }
-                            }
-                            // Omit field present in only one
-                            unordered!(Some(_), None) => return None,
-                            _ => unreachable!(),
-                        };
-                        Some(Some((name.to_string(), prop))) // that's so ugly
-                    })
-                    .collect::<Option<_>>()?;
-                TypeBody::Inferred(InferredType {
-                    members:    fields,
-                    properties: props,
-                })
-            }
-            unordered!(body!(TypeBody::Inferred(a)), b) => {
-                let has_all_members = a.members.iter().all(|(name, a_ty)| {
-                    other
-                        .field(name, modules)
-                        .is_some_and(|b_ty| a_ty.union(b_ty.as_ref(), modules).is_some())
-                });
-                let has_all_props = a.properties.iter().all(|(name, a_ty)| {
-                    other
-                        .property(name, modules)
-                        .is_some_and(|b_ty| a_ty.union(&b_ty, modules).is_some())
-                });
-                if has_all_members && has_all_props {
-                    b.body.clone()
-                } else {
-                    return None;
-                }
-            }
-            unordered!(body!(TypeBody::TypeRef(a)), body!(TypeBody::TypeRef(b)))
-                if a.is_same_of(b) =>
-            {
-                TypeRef::new(a.mod_idx, a.idx)
-                    .with_is_self(a.is_self && b.is_self)
-                    .into()
-            }
-            (a, b) => {
-                if &a.body == &b.body {
-                    a.body.clone()
-                } else {
-                    return a.intersection(b, modules);
-                }
-            }
-        };
-        let loc = match (&self.loc, &other.loc) {
-            unordered!(Some(loc), None) => Some(loc.clone()),
-            (Some(_), Some(_)) | (None, None) => None,
         };
         Some(Type::new(body, loc))
     }
@@ -705,12 +623,18 @@ impl Type {
     pub fn collect_typevar_substitutions(
         &self,
         other: &Type,
+        variance: Variance,
         substitutions: &mut HashMap<TypeVarIdx, Type>,
         modules: &[Module],
     ) -> bool {
         macro_rules! rec_or_return {
             ($a:expr, $b:expr) => {
-                if !($a).collect_typevar_substitutions($b, substitutions, modules) {
+                if !($a).collect_typevar_substitutions(
+                    $b,
+                    variance,
+                    substitutions,
+                    modules,
+                ) {
                     return false;
                 }
             };
@@ -719,10 +643,10 @@ impl Type {
         match (self, other) {
             (body!(TypeBody::TypeVar(typevar)), ty) => {
                 let ty = if let Some(existing) = substitutions.get(&typevar.typevar_idx) {
-                    let Some(intersection) = existing.intersection(ty, modules) else {
+                    let Some(merged) = existing.merge(ty, variance, modules) else {
                         return false;
                     };
-                    intersection
+                    merged
                 } else {
                     ty.clone()
                 };
@@ -761,6 +685,21 @@ impl Type {
             _ => {}
         }
         true
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Variance {
+    Covariant,
+    Contravariant,
+}
+
+impl Variance {
+    pub fn invert(self) -> Self {
+        match self {
+            Variance::Covariant => Variance::Contravariant,
+            Variance::Contravariant => Variance::Covariant,
+        }
     }
 }
 
@@ -863,7 +802,11 @@ impl TypeRef {
 
             // is static?
             if self_param
-                .intersection(&Type::new(self.clone().into(), None), modules)
+                .merge(
+                    &Type::new(self.clone().into(), None),
+                    Variance::Covariant,
+                    modules,
+                )
                 .is_none()
             {
                 return None;
@@ -955,12 +898,18 @@ impl InferredType {
     pub fn collect_typevar_substitutions(
         &self,
         other: &Self,
+        variance: Variance,
         substitutions: &mut HashMap<TypeVarIdx, Type>,
         modules: &[Module],
     ) -> bool {
         macro_rules! rec_or_return {
             ($a:expr, $b:expr) => {
-                if !($a).collect_typevar_substitutions($b, substitutions, modules) {
+                if !($a).collect_typevar_substitutions(
+                    $b,
+                    variance,
+                    substitutions,
+                    modules,
+                ) {
                     return false;
                 }
             };
@@ -987,25 +936,21 @@ pub struct FuncType {
     pub ret:    Type,
 }
 impl FuncType {
-    pub fn intersection(&self, other: &FuncType, modules: &[Module]) -> Option<FuncType> {
+    pub fn merge(
+        &self,
+        other: &FuncType,
+        var: Variance,
+        modules: &[Module],
+    ) -> Option<FuncType> {
         if self.params.len() != other.params.len() {
             return None;
         }
         let params = izip!(&self.params, &other.params)
-            .map(|(a_param, b_param)| a_param.union(b_param, modules))
+            .map(|(a_param, b_param)| a_param.merge(b_param, var.invert(), modules))
             .collect::<Option<_>>()?;
         Some(FuncType::new(
             params,
-            self.ret.intersection(&other.ret, modules)?,
+            self.ret.merge(&other.ret, var, modules)?,
         ))
-    }
-    pub fn union(&self, other: &FuncType, modules: &[Module]) -> Option<FuncType> {
-        if self.params.len() != other.params.len() {
-            return None;
-        }
-        let params = izip!(&self.params, &other.params)
-            .map(|(a_param, b_param)| a_param.intersection(b_param, modules))
-            .collect::<Option<_>>()?;
-        Some(FuncType::new(params, self.ret.union(&other.ret, modules)?))
     }
 }
