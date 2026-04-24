@@ -222,6 +222,11 @@ impl<'a> Printer<'a> {
                     let line = table.push_cell();
                     write!(line, "{S:indent$}  {name}: ")?;
                     self.write_type_body(line, &field.ty.body)?;
+
+                    if !self.reconstruct {
+                        let loc_comment = table.push_cell();
+                        self.write_loc_comment(loc_comment, Some(&field.loc))?;
+                    }
                 }
 
                 for (name, method) in &rec.methods {
@@ -242,6 +247,11 @@ impl<'a> Printer<'a> {
                             " (func {}-{})",
                             method.func_ref.0, method.func_ref.1
                         )?;
+                    }
+
+                    if !self.reconstruct {
+                        let loc_comment = table.push_cell();
+                        self.write_loc_comment(loc_comment, Some(&method.loc))?;
                     }
                 }
 
@@ -276,6 +286,11 @@ impl<'a> Printer<'a> {
                             " (func {}-{})",
                             method.func_ref.0, method.func_ref.1
                         )?;
+                    }
+
+                    if !self.reconstruct {
+                        let loc_comment = table.push_cell();
+                        self.write_loc_comment(loc_comment, Some(&method.loc))?;
                     }
                 }
 
@@ -735,14 +750,6 @@ impl<'a> Printer<'a> {
     }
 
     fn write_type_ref(&mut self, f: &mut impl Write, type_ref: &TypeRef) -> fmt::Result {
-        if type_ref.is_self {
-            write!(f, "Self")?;
-            if self.show_ids {
-                write!(f, " (type {}-{})", type_ref.mod_idx, type_ref.idx)?;
-            }
-            return Ok(());
-        }
-
         let typedef = &self.modules[type_ref.mod_idx].typedefs[type_ref.idx];
         self.write_name(f, &typedef.name)?;
 
@@ -758,7 +765,13 @@ impl<'a> Printer<'a> {
         }
 
         if self.show_ids {
-            write!(f, " (type {}-{})", type_ref.mod_idx, type_ref.idx)?;
+            write!(
+                f,
+                " ({} {}-{})",
+                if type_ref.is_self { "self" } else { "type" },
+                type_ref.mod_idx,
+                type_ref.idx,
+            )?;
         }
 
         Ok(())

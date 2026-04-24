@@ -18,18 +18,22 @@ pub struct ExprParser<'a, 't> {
 }
 
 impl<'a, 't> ExprParser<'a, 't> {
-    #[tracing::instrument(skip(module, inputs))]
+    #[tracing::instrument(skip(module))]
     pub fn new(
         module: ModuleParser<'a, 't>,
         func_idx: Option<usize>,
         block_idx: b::BlockIdx,
-        inputs: impl IntoIterator<Item = (String, b::ValueIdx, b::Loc)>,
     ) -> Self {
         let mut idents = module.idents.clone();
 
-        for (ident, v, loc) in inputs.into_iter() {
-            tracing::trace!(v, "insert input '{ident}'");
-            idents.insert(ident, ValueRef::new(ValueRefBody::Value(v), Some(loc)));
+        if let Some(func_idx) = func_idx {
+            for param in &module.funcs[func_idx].params {
+                tracing::trace!(?param, "insert param");
+                idents.insert(
+                    param.name.clone(),
+                    ValueRef::new(ValueRefBody::Value(param.value), Some(param.loc)),
+                );
+            }
         }
 
         ExprParser {

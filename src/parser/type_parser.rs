@@ -7,6 +7,8 @@ use tree_sitter as ts;
 use crate::utils::{IntoItem, SortedMap, TreeSitterUtils};
 use crate::{bytecode as b, context, errors};
 
+pub const UNDEF_TYPEVAR: b::TypeVarIdx = usize::MAX;
+
 #[derive(ctor)]
 pub struct TypeParser<'a, 't> {
     #[ctor(default)]
@@ -22,10 +24,7 @@ pub struct TypeParser<'a, 't> {
 
 impl<'a, 't> TypeParser<'a, 't> {
     pub fn finish(self) -> Vec<b::TypeDef> {
-        self.typedefs
-            .iter()
-            .map(|x| self.finish_typedef(x))
-            .collect()
+        self.typedefs.into_iter().map(|x| x.typedef).collect()
     }
 
     pub fn parse_type_expr(&self, node: ts::Node<'t>) -> b::Type {
@@ -163,9 +162,16 @@ impl<'a, 't> TypeParser<'a, 't> {
         });
     }
 
-    fn finish_typedef(&self, x: &DeclaredTypeDef) -> b::TypeDef {
-        let Some(node) = x.type_decl_node else {
-            return x.typedef.clone();
+    pub fn define_typedefs(&mut self) {
+        for i in 0..self.typedefs.len() {
+            self.define_typedef(i);
+        }
+    }
+
+    fn define_typedef(&mut self, i: usize) {
+        let typedef = &self.typedefs[i];
+        let Some(node) = typedef.type_decl_node else {
+            return;
         };
 
         let generics = node
@@ -192,7 +198,7 @@ impl<'a, 't> TypeParser<'a, 't> {
 
         let body_node = node.required_field("body");
         let body =
-            match (body_node.kind(), &x.typedef.body) {
+            match (body_node.kind(), &typedef.typedef.body) {
                 ("record_type", b::TypeDefBody::Record(rec)) => {
                     let fields = body_node
                         .iter_field("fields")
@@ -231,7 +237,7 @@ impl<'a, 't> TypeParser<'a, 't> {
                                         .text,
                                 )
                                 .to_string();
-                            let func_ref = x.methods_idx.get(&name as &str).expect(
+                            let func_ref = typedef.methods_idx.get(&name as &str).expect(
                                 "index of method's function should already be known",
                             );
 
@@ -286,7 +292,7 @@ impl<'a, 't> TypeParser<'a, 't> {
                                         .text,
                                 )
                                 .to_string();
-                            let func_ref = x.methods_idx.get(&name as &str).expect(
+                            let func_ref = typedef.methods_idx.get(&name as &str).expect(
                                 "index of method's function should already be known",
                             );
 
@@ -307,11 +313,9 @@ impl<'a, 't> TypeParser<'a, 't> {
                 _ => unreachable!(),
             };
 
-        b::TypeDef {
-            body,
-            generics,
-            ..x.typedef.clone()
-        }
+        let typedef = &mut self.typedefs[i];
+        typedef.typedef.body = body;
+        typedef.typedef.generics = generics;
     }
 }
 

@@ -1,4 +1,4 @@
-:i count 17
+:i count 18
 :b shell 29
 ./bin/nasin r tests/hello.nsn
 :i returncode 0
@@ -157,6 +157,17 @@ bool
 
 :b shell 38
 ./bin/nasin r tests/generic_record.nsn
+:i returncode 0
+:b stdout 15
+u8
+u8
+str
+bool
+
+:b stderr 0
+
+:b shell 38
+./bin/nasin r tests/generic_method.nsn
 :i returncode 0
 :b stdout 15
 u8

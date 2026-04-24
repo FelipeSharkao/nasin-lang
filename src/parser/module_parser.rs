@@ -1,13 +1,15 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use derive_ctor::ctor;
-use itertools::{Itertools, enumerate, multizip};
+use derive_more::Debug;
+use itertools::{Itertools, enumerate};
 use tree_sitter as ts;
 
 use super::parser_value::ValueRef;
 use super::type_parser::TypeParser;
 use crate::parser::expr_parser::ExprParser;
 use crate::parser::parser_value::ValueRefBody;
+use crate::parser::type_parser::UNDEF_TYPEVAR;
 use crate::utils::TreeSitterUtils;
 use crate::{bytecode as b, context, utils};
 
@@ -38,11 +40,13 @@ pub struct ModuleParser<'a, 't> {
 
 impl<'a, 't> ModuleParser<'a, 't> {
     pub fn finish(mut self) {
+        self.types.define_typedefs();
+
         for i in 0..self.globals.len() {
             let value_node = self.globals[i].value_node;
             let block_idx = self.globals[i].global.body;
 
-            let mut value_parser = ExprParser::new(self, None, block_idx, []);
+            let mut value_parser = ExprParser::new(self, None, block_idx);
             value_parser.add_expr_node(value_node, Some(block_idx));
             self = value_parser.finish();
 
@@ -55,25 +59,7 @@ impl<'a, 't> ModuleParser<'a, 't> {
         }
 
         for i in 0..self.funcs.len() {
-            'parse: {
-                let Some(value_node) = self.funcs[i].value_node else {
-                    break 'parse;
-                };
-
-                let block_idx = self.funcs[i].func.body;
-                let params = self.funcs[i].params.clone();
-
-                let mut value_parser = ExprParser::new(self, Some(i), block_idx, params);
-                value_parser.add_expr_node(value_node, Some(block_idx));
-                self = value_parser.finish();
-            };
-
-            let func = &self.funcs[i];
-            if func.func.ret == UNDEF_VALUE {
-                let ret_ty = func.ret_ty.clone();
-                let loc = func.func.loc;
-                self.funcs[i].func.ret = self.create_value(ret_ty, loc)
-            }
+            self.define_func(i);
         }
 
         let typedefs = self.types.finish();
@@ -112,13 +98,7 @@ impl<'a, 't> ModuleParser<'a, 't> {
 
             match sym_node.kind() {
                 "type_decl" => {
-                    let old_self_type = self.types.idents.get(SELF_INDENT).cloned();
                     let ty_idx = self.types.typedefs.len();
-                    let self_type =
-                        b::TypeRef::new(self.mod_idx, ty_idx).with_is_self(true);
-                    self.types
-                        .idents
-                        .insert(SELF_INDENT.to_string(), self_type.into());
 
                     let body_node = sym_node.required_field("body");
                     let is_virt = body_node.kind() == "interface_type";
@@ -146,7 +126,11 @@ impl<'a, 't> ModuleParser<'a, 't> {
                                     )),
                                 ),
                                 method_node,
-                                Some((self.mod_idx, ty_idx, method_name.to_string())),
+                                Some(b::FuncMethodInfo::new(
+                                    method_name.to_string(),
+                                    self.mod_idx,
+                                    ty_idx,
+                                )),
                                 is_virt,
                             );
 
@@ -154,14 +138,6 @@ impl<'a, 't> ModuleParser<'a, 't> {
                         })
                         .collect();
                     self.types.parse_type_decl(name, sym_node, methods);
-
-                    if let Some(old_self_type) = old_self_type {
-                        self.types
-                            .idents
-                            .insert(SELF_INDENT.to_string(), old_self_type);
-                    } else {
-                        self.types.idents.remove(SELF_INDENT);
-                    }
                 }
                 "typevar_decl" => {
                     let typevar_idx = self.types.typevar_count;
@@ -237,12 +213,14 @@ impl<'a, 't> ModuleParser<'a, 't> {
         &mut self,
         name: b::Name,
         node: ts::Node<'t>,
-        method: Option<(usize, usize, String)>,
+        method: Option<b::FuncMethodInfo>,
         is_virt: bool,
     ) -> usize {
         assert!(matches!(node.kind(), "func_decl" | "method"));
 
-        let (params, params_names, params_locs): (Vec<_>, Vec<_>, Vec<_>) = node
+        let loc = b::Loc::from_node(self.src_idx, &node);
+
+        let params = node
             .iter_field("params")
             .map(|param_node| {
                 let param_name_node = param_node.required_field("pat").of_kind("ident");
@@ -250,24 +228,17 @@ impl<'a, 't> ModuleParser<'a, 't> {
                     &self.ctx.source_manager.source(self.src_idx).content().text,
                 );
 
-                let param_ty = match param_node.field("type") {
-                    Some(ty_node) => self.types.parse_type_expr(ty_node),
-                    None => b::Type::unknown(None),
-                };
-
                 let loc = b::Loc::from_node(self.src_idx, &param_node);
-                (
-                    self.create_value(param_ty, Some(loc)),
+                DeclaredParam::new(
                     param_name.to_string(),
+                    self.create_value(b::Type::unknown(None), Some(loc)),
                     b::Loc::from_node(self.src_idx, &param_name_node),
+                    param_node.field("type"),
                 )
             })
-            .multiunzip();
+            .collect_vec();
 
-        let ret_ty = match node.field("ret_type") {
-            Some(ty_node) => self.types.parse_type_expr(ty_node),
-            None => b::Type::unknown(None),
-        };
+        let ret = self.create_value(b::Type::unknown(None), Some(loc));
 
         let mut extrn: Option<b::Extern> = None;
         for directive_node in node.iter_field("directives") {
@@ -292,37 +263,32 @@ impl<'a, 't> ModuleParser<'a, 't> {
             }
         }
 
-        let mut generics: HashSet<_> = ret_ty.typevars().collect();
-        for &param_idx in &params {
-            let param_ty = &self.values[param_idx].ty;
-            generics.extend(param_ty.typevars());
-        }
-
-        let loc = b::Loc::from_node(self.src_idx, &node);
         let func = b::Func {
             name,
-            params: params.clone(),
-            ret: UNDEF_VALUE,
+            params: params.iter().map(|x| x.value).collect(),
+            ret,
             method,
             extrn,
             is_entry: false,
             is_virt,
             body: self.add_block(),
             loc: Some(loc),
-            generics: generics.into_iter().sorted().collect(),
+            generics: vec![],
             generic_instantiations: HashMap::new(),
         };
+
         let func_idx = self.funcs.len();
         self.idents.insert(
             func.name.last_ident().to_string(),
             ValueRef::new(ValueRefBody::Func(self.mod_idx, func_idx), Some(loc)),
         );
-        self.funcs.push(DeclaredFunc {
+
+        self.funcs.push(DeclaredFunc::new(
             func,
-            value_node: node.field("return"),
-            params: multizip((params_names, params, params_locs)).collect(),
-            ret_ty,
-        });
+            params,
+            node.field("return"),
+            node.field("ret_type"),
+        ));
 
         func_idx
     }
@@ -361,15 +327,94 @@ impl<'a, 't> ModuleParser<'a, 't> {
             *main = Some((self.mod_idx, self.globals.len() - 1));
         }
     }
+
+    fn define_func(&mut self, i: usize) {
+        let func = &mut self.funcs[i];
+
+        let old_self_type = self.types.idents.get(SELF_INDENT).cloned();
+
+        if let Some(method) = &func.func.method {
+            assert_eq!(
+                method.mod_idx, self.mod_idx,
+                "method should be defined in the same module of the type"
+            );
+            let type_def = &self.types.typedefs[method.ty_idx].typedef;
+
+            let args = type_def.generics.iter().map(|&idx| {
+                assert!(idx < UNDEF_TYPEVAR);
+                b::Type::new(b::TypeVar::new(self.mod_idx, idx).into(), None)
+            });
+            let type_ref = b::TypeRef::new(method.mod_idx, method.ty_idx)
+                .with_is_self(true)
+                .with_args(args.collect_vec());
+
+            self.types
+                .idents
+                .insert(SELF_INDENT.to_string(), type_ref.into());
+        }
+
+        for param in &func.params {
+            if let Some(ty_node) = param.ty_node {
+                let ty = self.types.parse_type_expr(ty_node);
+                self.values[param.value].ty = ty;
+            }
+        }
+
+        if let Some(ret_ty_node) = func.ret_ty_node {
+            let ty = self.types.parse_type_expr(ret_ty_node);
+            self.values[func.func.ret].ty = ty;
+        }
+
+        func.func.generics = func
+            .params
+            .iter()
+            .flat_map(|param| {
+                let param_ty = &self.values[param.value].ty;
+                param_ty.typevars()
+            })
+            .chain(self.values[func.func.ret].ty.typevars())
+            .unique()
+            .sorted()
+            .collect();
+
+        if let Some(value_node) = func.value_node {
+            let block_idx = func.func.body;
+
+            utils::replace_with(self, |module| {
+                let mut value_parser = ExprParser::new(module, Some(i), block_idx);
+                value_parser.add_expr_node(value_node, Some(block_idx));
+                value_parser.finish()
+            });
+        }
+
+        if let Some(old_self_type) = old_self_type {
+            self.types
+                .idents
+                .insert(SELF_INDENT.to_string(), old_self_type);
+        } else {
+            self.types.idents.remove(SELF_INDENT);
+        }
+    }
 }
 
+#[derive(Debug, ctor)]
 pub struct DeclaredFunc<'t> {
-    pub func:   b::Func,
-    value_node: Option<ts::Node<'t>>,
-    params:     Vec<(String, b::ValueIdx, b::Loc)>,
-    ret_ty:     b::Type,
+    pub func:    b::Func,
+    pub params:  Vec<DeclaredParam<'t>>,
+    value_node:  Option<ts::Node<'t>>,
+    ret_ty_node: Option<ts::Node<'t>>,
 }
 
+#[derive(Debug, ctor)]
+pub struct DeclaredParam<'t> {
+    pub name:  String,
+    pub value: b::ValueIdx,
+    pub loc:   b::Loc,
+    #[debug(skip)]
+    ty_node:   Option<ts::Node<'t>>,
+}
+
+#[derive(Debug, ctor)]
 pub struct DeclaredGlobal<'t> {
     pub global: b::Global,
     value_node: ts::Node<'t>,

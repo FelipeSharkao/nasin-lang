@@ -1001,13 +1001,14 @@ impl<'a> FuncCodegen<'a, '_> {
         func_idx: usize,
         args: impl Into<Vec<cl::Value>>,
     ) -> Option<cl::Value> {
-        let func_id = self
+        let Some(func_id) = self
             .ctx
             .funcs
             .get(&(func_mod_idx, func_idx))
-            .unwrap()
-            .func_id
-            .expect("Function should be declared");
+            .and_then(|func| func.func_id)
+        else {
+            unreachable!("Function ({func_mod_idx}, {func_idx}) should be declared");
+        };
 
         self.call(
             Callee::Direct(func_id),

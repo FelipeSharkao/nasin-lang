@@ -2,7 +2,7 @@ use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-use derivative::Derivative;
+use derive_more::Debug;
 use itertools::Itertools;
 use lazy_init::LazyTransform;
 
@@ -29,11 +29,10 @@ impl SourceManager {
     }
 }
 
-#[derive(Derivative)]
-#[derivative(Debug)]
+#[derive(Debug)]
 pub struct Source {
     pub path: PathBuf,
-    #[derivative(Debug = "ignore")]
+    #[debug(skip)]
     content:  LazyTransform<File, SourceContent>,
 }
 impl Source {

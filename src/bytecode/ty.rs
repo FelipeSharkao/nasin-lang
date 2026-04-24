@@ -45,6 +45,7 @@ pub enum TypeBody {
     TypeRef(TypeRef),
     TypeVar(TypeVar),
 }
+
 impl Display for TypeBody {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -289,10 +290,11 @@ impl Type {
     ) -> Option<Type> {
         let body = match (self, other) {
             (body!(a), body!(b)) if a == b => a.clone(),
-            unordered!(body!(TypeBody::Never), body!(a)) => match variance {
-                Variance::Covariant => TypeBody::Never,
-                Variance::Contravariant => a.clone(),
-            },
+            // unordered!(body!(TypeBody::Never), body!(a)) => match variance {
+            //     Variance::Covariant => TypeBody::Never,
+            //     Variance::Contravariant => a.clone(),
+            // },
+            unordered!(body!(TypeBody::Never), body!(a)) => a.clone(),
             number!(U8) => TypeBody::U8,
             number!(U16) => TypeBody::U16,
             number!(U32) => TypeBody::U32,
@@ -398,56 +400,7 @@ impl Type {
                 }
             }
             (body!(TypeBody::TypeRef(a)), body!(TypeBody::TypeRef(b))) => {
-                let a_ty = &modules[a.mod_idx].typedefs[a.idx];
-                let b_ty = &modules[b.mod_idx].typedefs[b.idx];
-
-                macro_rules! def_body {
-                    ($pat:pat) => {
-                        TypeDef { body: $pat, .. }
-                    };
-                }
-
-                let (mod_idx, ty_idx) =
-                    match ((a.mod_idx, a.idx, a_ty), (b.mod_idx, b.idx, b_ty)) {
-                        (
-                            (_, _, def_body!(TypeDefBody::Record(_))),
-                            (_, _, def_body!(TypeDefBody::Record(_))),
-                        )
-                        | (
-                            (_, _, def_body!(TypeDefBody::Interface(_))),
-                            (_, _, def_body!(TypeDefBody::Interface(_))),
-                        ) if a.is_same_of(b) => (a.mod_idx, a.idx),
-                        unordered!(
-                            (r_mod_idx, r_ty_idx, def_body!(TypeDefBody::Record(rec))),
-                            (i_mod_idx, i_ty_idx, def_body!(TypeDefBody::Interface(..))),
-                        ) => {
-                            let extends = rec.ifaces.iter().any(|(mod_idx, ty_idx)| {
-                                i_mod_idx == *mod_idx && i_ty_idx == *ty_idx
-                            });
-                            if !extends {
-                                return None;
-                            }
-
-                            if !a.args.is_empty() && !b.args.is_empty() {
-                                todo!("merge of interface and record with generics");
-                            }
-
-                            match variance {
-                                Variance::Covariant => (r_mod_idx, r_ty_idx),
-                                Variance::Contravariant => (i_mod_idx, i_ty_idx),
-                            }
-                        }
-                        _ => return None,
-                    };
-
-                let args = izip!(&a.args, &b.args)
-                    .map(|(a_arg, b_arg)| a_arg.merge(b_arg, variance, modules))
-                    .collect::<Option<Vec<_>>>()?;
-
-                TypeRef::new(mod_idx, ty_idx)
-                    .with_is_self(a.is_self || b.is_self)
-                    .with_args(args)
-                    .into()
+                a.merge(b, variance, modules)?.into()
             }
             // TODO: when we add constraints to generics, we will have to intersect with
             // that. Since we don't have that yet, all typevars are blanket, they don't
@@ -681,7 +634,7 @@ impl Type {
             | (body!(TypeBody::Ptr(Some(a))), body!(TypeBody::Ptr(Some(b)))) => {
                 rec_or_return!(a, b);
             }
-            _ if self != other => return false,
+            _ if self.merge(other, variance, modules).is_none() => return false,
             _ => {}
         }
         true
@@ -730,6 +683,67 @@ pub struct TypeRef {
 impl TypeRef {
     pub fn is_same_of(&self, other: &TypeRef) -> bool {
         (self.mod_idx, self.idx) == (other.mod_idx, other.idx)
+    }
+
+    pub fn merge(
+        &self,
+        other: &Self,
+        variance: Variance,
+        modules: &[Module],
+    ) -> Option<Self> {
+        let self_def = &modules[self.mod_idx].typedefs[self.idx];
+        let other_def = &modules[other.mod_idx].typedefs[other.idx];
+
+        macro_rules! def_body {
+            ($pat:pat) => {
+                TypeDef { body: $pat, .. }
+            };
+        }
+
+        let (mod_idx, ty_idx) = match (
+            (self.mod_idx, self.idx, self_def),
+            (other.mod_idx, other.idx, other_def),
+        ) {
+            (
+                (_, _, def_body!(TypeDefBody::Record(_))),
+                (_, _, def_body!(TypeDefBody::Record(_))),
+            )
+            | (
+                (_, _, def_body!(TypeDefBody::Interface(_))),
+                (_, _, def_body!(TypeDefBody::Interface(_))),
+            ) if self.is_same_of(other) => (self.mod_idx, other.idx),
+            unordered!(
+                (r_mod_idx, r_ty_idx, def_body!(TypeDefBody::Record(rec))),
+                (i_mod_idx, i_ty_idx, def_body!(TypeDefBody::Interface(..))),
+            ) => {
+                let extends = rec.ifaces.iter().any(|(mod_idx, ty_idx)| {
+                    i_mod_idx == *mod_idx && i_ty_idx == *ty_idx
+                });
+                if !extends {
+                    return None;
+                }
+
+                if !self.args.is_empty() && !other.args.is_empty() {
+                    todo!("merge of interface and record with generics");
+                }
+
+                match variance {
+                    Variance::Covariant => (r_mod_idx, r_ty_idx),
+                    Variance::Contravariant => (i_mod_idx, i_ty_idx),
+                }
+            }
+            _ => return None,
+        };
+
+        let args = izip!(&self.args, &other.args)
+            .map(|(self_arg, other_arg)| self_arg.merge(other_arg, variance, modules))
+            .collect::<Option<Vec<_>>>()?;
+
+        Some(
+            TypeRef::new(mod_idx, ty_idx)
+                .with_is_self(other.is_self || self.is_self)
+                .with_args(args),
+        )
     }
 
     pub fn field<'a>(
@@ -796,17 +810,16 @@ impl TypeRef {
                 return None;
             };
 
-            let [params @ .., self_param] = &func.params[..] else {
+            let [params @ .., obj_param] = &func.params[..] else {
                 return None;
             };
 
             // is static?
-            if self_param
-                .merge(
-                    &Type::new(self.clone().into(), None),
-                    Variance::Covariant,
-                    modules,
-                )
+            let TypeBody::TypeRef(obj_type_ref) = &obj_param.body else {
+                return None;
+            };
+            if obj_type_ref
+                .merge(&self, Variance::Covariant, modules)
                 .is_none()
             {
                 return None;
@@ -902,26 +915,20 @@ impl InferredType {
         substitutions: &mut HashMap<TypeVarIdx, Type>,
         modules: &[Module],
     ) -> bool {
-        macro_rules! rec_or_return {
-            ($a:expr, $b:expr) => {
-                if !($a).collect_typevar_substitutions(
-                    $b,
-                    variance,
-                    substitutions,
-                    modules,
-                ) {
-                    return false;
-                }
-            };
-        }
-
         for (name, ty) in chain!(&self.members, &self.properties) {
             if let Some(other_ty) = other
                 .members
                 .get(name)
                 .or_else(|| other.properties.get(name))
             {
-                rec_or_return!(ty, other_ty);
+                if !ty.collect_typevar_substitutions(
+                    other_ty,
+                    variance,
+                    substitutions,
+                    modules,
+                ) {
+                    return false;
+                }
             }
         }
 
