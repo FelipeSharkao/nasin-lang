@@ -306,6 +306,8 @@ impl Type {
             number!(I64, AnySignedNumber) => TypeBody::I64,
             number!(F32, AnySignedNumber, AnyFloat) => TypeBody::F32,
             number!(F64, AnySignedNumber, AnyFloat) => TypeBody::F64,
+            number!(AnySignedNumber) => TypeBody::AnySignedNumber,
+            number!(AnyFloat, AnySignedNumber) => TypeBody::AnyFloat,
             (body!(TypeBody::Array(a)), body!(TypeBody::Array(b))) => {
                 TypeBody::Array(a.merge(&b, variance, modules)?.into())
             }

@@ -616,6 +616,7 @@ impl<'a> Printer<'a> {
             InstrBody::Mul(a, b) => write!(f, "Mul(v{a}, v{b})"),
             InstrBody::Div(a, b) => write!(f, "Div(v{a}, v{b})"),
             InstrBody::Mod(a, b) => write!(f, "Mod(v{a}, v{b})"),
+            InstrBody::Neg(v) => write!(f, "Neg(v{v})"),
             InstrBody::Eq(a, b) => write!(f, "Eq(v{a}, v{b})"),
             InstrBody::Neq(a, b) => write!(f, "Neq(v{a}, v{b})"),
             InstrBody::Gt(a, b) => write!(f, "Gt(v{a}, v{b})"),

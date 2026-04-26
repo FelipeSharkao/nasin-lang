@@ -308,6 +308,22 @@ impl<'a> TypeChecker<'a> {
                     modules,
                 );
             }
+            &b::InstrBody::Neg(x) => {
+                let v = instr.results[0];
+                self.merge_types([&x, &v], modules);
+                // FIXME: use interface/trait
+                self.add_constraint(
+                    x,
+                    Constraint::new(
+                        ConstraintKind::Is(b::Type::new(
+                            b::TypeBody::AnySignedNumber,
+                            None,
+                        )),
+                        loc,
+                    ),
+                    modules,
+                );
+            }
             &b::InstrBody::Not(x) => {
                 let v = instr.results[0];
                 self.merge_types([&x, &v], modules);
@@ -1089,6 +1105,7 @@ impl<'a> TypeChecker<'a> {
                         result_ty = ty;
                         None
                     } else {
+                        dbg!((&result_ty, &merge_with));
                         tracing::trace!(?result_ty, ?merge_with, "incompatible types");
                         Some((
                             merge_with,

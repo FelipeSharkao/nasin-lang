@@ -25,6 +25,7 @@ pub enum InstrBody {
     Mul(ValueIdx, ValueIdx),
     Div(ValueIdx, ValueIdx),
     Mod(ValueIdx, ValueIdx),
+    Neg(ValueIdx),
 
     Eq(ValueIdx, ValueIdx),
     Neq(ValueIdx, ValueIdx),
@@ -73,6 +74,7 @@ impl InstrBody {
             | InstrBody::GetField(v, _)
             | InstrBody::GetMethod(v, _)
             | InstrBody::CreateUninitializedString(v)
+            | InstrBody::Neg(v)
             | InstrBody::Not(v)
             | InstrBody::If(v, _, _)
             | InstrBody::Break(_, Some(v))

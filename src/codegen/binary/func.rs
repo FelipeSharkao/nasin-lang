@@ -147,26 +147,26 @@ impl<'a> FuncCodegen<'a, '_> {
         }
 
         match &instr.body {
-            b::InstrBody::Add(a, b)
-            | b::InstrBody::Sub(a, b)
-            | b::InstrBody::Mul(a, b)
-            | b::InstrBody::Div(a, b)
-            | b::InstrBody::Mod(a, b)
-            | b::InstrBody::Eq(a, b)
-            | b::InstrBody::Neq(a, b)
-            | b::InstrBody::Gt(a, b)
-            | b::InstrBody::Lt(a, b)
-            | b::InstrBody::Gte(a, b)
-            | b::InstrBody::Lte(a, b) => {
-                let lhs = self.use_value_by_value(mod_idx, *a);
+            &b::InstrBody::Add(a, b)
+            | &b::InstrBody::Sub(a, b)
+            | &b::InstrBody::Mul(a, b)
+            | &b::InstrBody::Div(a, b)
+            | &b::InstrBody::Mod(a, b)
+            | &b::InstrBody::Eq(a, b)
+            | &b::InstrBody::Neq(a, b)
+            | &b::InstrBody::Gt(a, b)
+            | &b::InstrBody::Lt(a, b)
+            | &b::InstrBody::Gte(a, b)
+            | &b::InstrBody::Lte(a, b) => {
+                let lhs = self.use_value_by_value(mod_idx, a);
                 assert!(lhs.len() == 1);
                 let lhs = lhs[0];
 
-                let rhs = self.use_value_by_value(mod_idx, *b);
+                let rhs = self.use_value_by_value(mod_idx, b);
                 assert!(rhs.len() == 1);
                 let rhs = rhs[0];
 
-                let ty = &self.ctx.modules[mod_idx].values[*a].ty;
+                let ty = &self.ctx.modules[mod_idx].values[a].ty;
 
                 let builder = expect_builder!(self);
 
@@ -266,8 +266,31 @@ impl<'a> FuncCodegen<'a, '_> {
                     ),
                 );
             }
-            b::InstrBody::Not(cond) => {
-                let cond = self.use_value_by_value(mod_idx, *cond);
+            &b::InstrBody::Neg(v) => {
+                let cl_values = self.use_value_by_value(mod_idx, v);
+                assert!(cl_values.len() == 1);
+                let cl_value = cl_values[0];
+
+                let ty = &self.ctx.modules[mod_idx].values[v].ty;
+
+                let builder = expect_builder!(self);
+                let cl_value = if ty.is_int() {
+                    builder.ins().ineg(cl_value)
+                } else {
+                    builder.ins().fneg(cl_value)
+                };
+
+                self.values.insert(
+                    (mod_idx, instr.results[0]),
+                    types::RuntimeValue::new(
+                        types::ValueSource::Primitive(cl_value),
+                        mod_idx,
+                        instr.results[0],
+                    ),
+                );
+            }
+            &b::InstrBody::Not(cond) => {
+                let cond = self.use_value_by_value(mod_idx, cond);
                 assert!(cond.len() == 1);
                 let cond = cond[0];
 

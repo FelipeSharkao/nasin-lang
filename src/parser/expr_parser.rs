@@ -384,6 +384,7 @@ impl<'a, 't> ExprParser<'a, 't> {
         let operand_v = self.use_value_ref(&operand);
         let body = match op.kind() {
             "not" => b::InstrBody::Not(operand_v),
+            "minus" => b::InstrBody::Neg(operand_v),
             kind => panic!("Unhandled unary operator: {kind}"),
         };
         let mut loc = b::Loc::from_node(self.module.src_idx, &op);
