@@ -1,4 +1,4 @@
-:i count 18
+:i count 19
 :b shell 29
 ./bin/nasin r tests/hello.nsn
 :i returncode 0
@@ -174,6 +174,15 @@ u8
 u8
 str
 bool
+
+:b stderr 0
+
+:b shell 38
+./bin/nasin r tests/readme_example.nsn
+:i returncode 0
+:b stdout 11
+right
+left
 
 :b stderr 0
 

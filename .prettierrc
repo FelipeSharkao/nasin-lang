@@ -1,0 +1,6 @@
+{
+  "semi": false,
+  "singleQuote": false,
+  "quoteProps": "consistent",
+  "proseWrap": "always"
+}

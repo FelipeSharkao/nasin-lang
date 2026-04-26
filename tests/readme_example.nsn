@@ -1,0 +1,16 @@
+type Point {
+    x: i32
+    y: i32
+}
+
+Point.shift(point: Self, n): Self =
+    {x = point.x + n, y = point.y + n}
+
+Point.side(point: Self) =
+    if point.x > 0 then "right" else "left"
+
+origin: Point = {x=10, y=0}
+
+main =
+    let shifted = origin.shift(-20)
+    [origin.side, shifted.side]
