@@ -9,6 +9,7 @@ use derive_ctor::ctor;
 use tree_sitter as ts;
 
 use self::runtime::RuntimeBuilder;
+use crate::utils::TreeSitterUtils;
 use crate::{bytecode as b, codegen, config, errors, parser, sources, typecheck, utils};
 
 #[derive(Debug, ctor)]
@@ -59,7 +60,8 @@ impl BuildContext {
         let root_node = tree.root_node();
 
         if self.cfg.dump_ast {
-            println!("{}", root_node.to_sexp());
+            let source = &self.source_manager.source(src_idx).content().text;
+            println!("{}", root_node.display(source));
         }
 
         let name =
