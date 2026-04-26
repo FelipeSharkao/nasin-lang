@@ -9,6 +9,7 @@ use derive_ctor::ctor;
 use tree_sitter as ts;
 
 use self::runtime::RuntimeBuilder;
+use crate::utils::TreeSitterUtils;
 use crate::{bytecode as b, codegen, config, errors, parser, sources, typecheck, utils};
 
 #[derive(Debug, ctor)]
@@ -59,7 +60,8 @@ impl BuildContext {
         let root_node = tree.root_node();
 
         if self.cfg.dump_ast {
-            println!("{}", root_node.to_sexp());
+            let source = &self.source_manager.source(src_idx).content().text;
+            println!("{}", root_node.display(source));
         }
 
         let name =
@@ -78,6 +80,17 @@ impl BuildContext {
             mod_idx
         };
 
+        if root_node.has_error() {
+            for err in root_node.iter_errors() {
+                let source = &self.source_manager.source(src_idx).content().text;
+                let token = err.child(0).unwrap().get_text(source).to_string();
+                self.push_error(errors::Error::new(
+                    errors::UnexpectedToken::new(token).into(),
+                    Some(b::Loc::from_node(src_idx, &err)),
+                ));
+            }
+        }
+
         let mut module_parser = parser::ModuleParser::new(self, src_idx, mod_idx);
         if let Some(core_mod_idx) = self.core_mod_idx {
             module_parser.open_module(core_mod_idx);
@@ -87,8 +100,8 @@ impl BuildContext {
 
         if self.cfg.dump_untyped_bytecode {
             b::Printer::new(&self.lock_modules(), &self.cfg)
-                .show_ids(true)
-                .source_manager(&self.source_manager)
+                .with_show_ids(true)
+                .with_source_manager(&self.source_manager)
                 .print_module(mod_idx);
         }
 
@@ -131,8 +144,8 @@ impl BuildContext {
         if self.cfg.dump_bytecode {
             if let Some((mod_idx, _)) = rt_entry {
                 b::Printer::new(&modules, &self.cfg)
-                    .show_ids(true)
-                    .source_manager(&self.source_manager)
+                    .with_show_ids(true)
+                    .with_source_manager(&self.source_manager)
                     .print_module(mod_idx);
             }
         }

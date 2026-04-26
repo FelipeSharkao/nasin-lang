@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fmt::Write;
 
@@ -130,8 +131,14 @@ impl<'a> NameMangler<'a> {
                 write!(s, "E").unwrap();
             }
             b::TypeBody::TypeRef(ty_ref) => {
-                let ty = &self.modules[ty_ref.mod_idx].typedefs[ty_ref.idx];
-                self.write_name(s, &ty.name);
+                let def = &self.modules[ty_ref.mod_idx].typedefs[ty_ref.idx];
+                let mut name = Cow::Borrowed(&def.name);
+                if !ty_ref.args.is_empty() {
+                    name = Cow::Owned(
+                        name.with_type_params(ty_ref.args.iter().cloned(), None),
+                    );
+                }
+                self.write_name(s, name.as_ref());
             }
             b::TypeBody::Never
             | b::TypeBody::AnyOpaque

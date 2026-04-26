@@ -1,11 +1,26 @@
 use std::collections::HashMap;
 
 use derive_ctor::ctor;
-use itertools::Itertools;
+use genawaiter::rc::Gen;
+use itertools::{Itertools, izip};
 
 use super::CodeTransformStep;
 use crate::bytecode as b;
 use crate::context::BuildContext;
+
+#[derive(Clone, Debug, ctor)]
+enum FuncArgs {
+    Call {
+        args: Vec<b::ValueIdx>,
+    },
+    GetFunc {
+        result: b::ValueIdx,
+    },
+    GetMethod {
+        source: b::ValueIdx,
+        result: b::ValueIdx,
+    },
+}
 
 #[derive(Clone, Copy, ctor)]
 pub struct InstantiateGenericFuncsStep<'a> {
@@ -15,64 +30,181 @@ pub struct InstantiateGenericFuncsStep<'a> {
 impl<'a> CodeTransformStep for InstantiateGenericFuncsStep<'a> {
     #[tracing::instrument(skip(self))]
     fn transform(&mut self, mod_idx: usize, cursor: &mut b::BlockCursor) {
-        let (args, func_mod_idx, func_idx) = {
-            let modules = &self.ctx.lock_modules();
-            let instr = cursor.instr(&modules[mod_idx]).unwrap();
-
-            let b::InstrBody::Call(func_mod_idx, func_idx, args) = &instr.body else {
-                return;
-            };
-
-            let func = &modules[*func_mod_idx].funcs[*func_idx];
-            if func.generics.is_empty() {
-                return;
-            }
-
-            (args.clone(), *func_mod_idx, *func_idx)
-        };
-
-        let type_substitutions =
-            self.find_type_substitutions(mod_idx, func_mod_idx, func_idx, &args);
-
-        if type_substitutions.is_empty() {
-            return;
-        }
-
-        let new_func_idx =
-            self.instantiate_generic_func(func_mod_idx, func_idx, &type_substitutions);
-
         let modules = &mut self.ctx.lock_modules_mut();
-        let instr = cursor.instr_mut(&mut modules[mod_idx]).unwrap();
-        if let b::InstrBody::Call(_, _, _) = &mut instr.body {
-            instr.body = b::InstrBody::Call(func_mod_idx, new_func_idx, args);
+        let instr = cursor.instr(&modules[mod_idx]).unwrap();
+        match &instr.body {
+            &b::InstrBody::Call(func_mod_idx, func_idx, ref args) => {
+                let args = args.clone();
+                let Some((new_func_idx, _)) = self.instantiate_call(
+                    modules,
+                    mod_idx,
+                    func_mod_idx,
+                    func_idx,
+                    FuncArgs::call(args),
+                ) else {
+                    return;
+                };
+
+                let instr = cursor.instr_mut(&mut modules[mod_idx]).unwrap();
+                if let b::InstrBody::Call(_, func_idx, _) = &mut instr.body {
+                    *func_idx = new_func_idx;
+                }
+            }
+            &b::InstrBody::GetFunc(func_mod_idx, func_idx) => {
+                assert!(instr.results.len() == 1);
+                let result = instr.results[0];
+
+                let Some((new_func_idx, _)) = self.instantiate_call(
+                    modules,
+                    mod_idx,
+                    func_mod_idx,
+                    func_idx,
+                    FuncArgs::get_func(result),
+                ) else {
+                    return;
+                };
+
+                let instr = cursor.instr_mut(&mut modules[mod_idx]).unwrap();
+                if let b::InstrBody::GetFunc(_, func_idx) = &mut instr.body {
+                    *func_idx = new_func_idx;
+                }
+            }
+            &b::InstrBody::GetProperty(source, ref prop)
+            | &b::InstrBody::GetMethod(source, ref prop) => {
+                assert!(instr.results.len() == 1);
+                let result = instr.results[0];
+
+                let source_ty = &modules[mod_idx].values[source].ty;
+                let b::TypeBody::TypeRef(type_ref) = &source_ty.body else {
+                    return;
+                };
+
+                let ty_mod_idx = type_ref.mod_idx;
+                let ty_idx = type_ref.idx;
+                let typedef = &modules[ty_mod_idx].typedefs[ty_idx];
+
+                let prop = prop.clone();
+                let Some(method) = typedef.get_method(&prop) else {
+                    return;
+                };
+
+                let (func_mod_idx, func_idx) = method.func_ref;
+
+                let Some((new_func_idx, tys)) = self.instantiate_call(
+                    modules,
+                    mod_idx,
+                    func_mod_idx,
+                    func_idx,
+                    FuncArgs::get_method(source, result),
+                ) else {
+                    return;
+                };
+
+                let typedef = &mut modules[ty_mod_idx].typedefs[ty_idx];
+                let mut new_method = typedef.get_method(&prop).unwrap().clone();
+                new_method.func_ref.1 = new_func_idx;
+
+                let new_prop = b::Name::from_ident(prop, b::NameIdentKind::Func, None)
+                    .with_type_params(
+                        tys.into_iter().map(|body| b::Type::new(body, None)),
+                        None,
+                    )
+                    .to_string();
+
+                typedef.add_method(new_prop.clone(), new_method);
+
+                let instr = cursor.instr_mut(&mut modules[mod_idx]).unwrap();
+                if let b::InstrBody::GetProperty(_, prop)
+                | b::InstrBody::GetMethod(_, prop) = &mut instr.body
+                {
+                    *prop = new_prop;
+                }
+            }
+            _ => {}
         }
     }
 }
 
 impl<'a> InstantiateGenericFuncsStep<'a> {
     #[tracing::instrument(skip(self))]
-    fn find_type_substitutions(
-        &self,
-        call_mod_idx: usize,
+    fn instantiate_call<'b>(
+        &mut self,
+        modules: &mut [b::Module],
+        mod_idx: usize,
         func_mod_idx: usize,
         func_idx: usize,
-        args: &[b::ValueIdx],
+        args: FuncArgs,
+    ) -> Option<(usize, Vec<b::TypeBody>)> {
+        let type_substitutions =
+            self.find_type_substitutions(modules, mod_idx, func_mod_idx, func_idx, args);
+
+        if type_substitutions.is_empty() {
+            return None;
+        }
+
+        let res = self.instantiate_generic_func(
+            modules,
+            func_mod_idx,
+            func_idx,
+            &type_substitutions,
+        );
+
+        Some(res)
+    }
+
+    #[tracing::instrument(skip(self))]
+    fn find_type_substitutions<'b>(
+        &self,
+        modules: &[b::Module],
+        mod_idx: usize,
+        func_mod_idx: usize,
+        func_idx: usize,
+        args: FuncArgs,
     ) -> HashMap<b::TypeVarIdx, b::Type> {
-        let modules = &self.ctx.lock_modules();
         let func = &modules[func_mod_idx].funcs[func_idx];
 
         let mut substitutions = HashMap::new();
 
-        for (param_idx, param_value_idx) in func.params.iter().enumerate() {
-            let param_ty = &modules[func_mod_idx].values[*param_value_idx].ty;
+        let args_tys = Gen::new(async move |co| match args {
+            FuncArgs::Call { args } => {
+                for arg in args {
+                    co.yield_(&modules[mod_idx].values[arg].ty).await;
+                }
+            }
+            FuncArgs::GetFunc { result } => {
+                let result_ty = &modules[mod_idx].values[result].ty;
+                let b::TypeBody::Func(func_ty) = &result_ty.body else {
+                    return;
+                };
+                for param in &func_ty.params {
+                    co.yield_(param).await;
+                }
+            }
+            FuncArgs::GetMethod { source, result } => {
+                let func = &modules[func_mod_idx].funcs[func_idx];
+                if func.params.len() > 1 {
+                    let result_ty = &modules[mod_idx].values[result].ty;
+                    let b::TypeBody::Func(func_ty) = &result_ty.body else {
+                        return;
+                    };
 
-            let b::TypeBody::TypeVar(tv) = &param_ty.body else {
-                continue;
-            };
+                    for param in &func_ty.params {
+                        co.yield_(param).await;
+                    }
+                }
 
-            let arg_ty = &modules[call_mod_idx].values[args[param_idx]].ty;
+                co.yield_(&modules[mod_idx].values[source].ty).await;
+            }
+        });
 
-            substitutions.insert(tv.typevar_idx, arg_ty.clone());
+        for (&param, arg_ty) in izip!(&func.params, args_tys) {
+            let param_ty = &modules[func_mod_idx].values[param].ty;
+            param_ty.collect_typevar_substitutions(
+                arg_ty,
+                b::Variance::Covariant,
+                &mut substitutions,
+                modules,
+            );
         }
 
         substitutions
@@ -81,22 +213,21 @@ impl<'a> InstantiateGenericFuncsStep<'a> {
     #[tracing::instrument(skip(self))]
     fn instantiate_generic_func(
         &mut self,
+        modules: &mut [b::Module],
         func_mod_idx: usize,
         func_idx: usize,
         substitutions: &HashMap<b::TypeVarIdx, b::Type>,
-    ) -> usize {
-        let key: Vec<b::TypeBody> = substitutions
+    ) -> (usize, Vec<b::TypeBody>) {
+        let tys: Vec<b::TypeBody> = substitutions
             .iter()
             .map(|(_, ty)| ty.body.clone())
             .collect();
 
-        let modules = &mut self.ctx.lock_modules_mut();
-
         if let Some(&existing_idx) = modules[func_mod_idx].funcs[func_idx]
             .generic_instantiations
-            .get(&key)
+            .get(&tys)
         {
-            return existing_idx;
+            return (existing_idx, tys);
         }
 
         let module = &mut modules[func_mod_idx];
@@ -105,9 +236,9 @@ impl<'a> InstantiateGenericFuncsStep<'a> {
 
         module.funcs[func_idx]
             .generic_instantiations
-            .insert(key, new_func_idx);
+            .insert(tys.clone(), new_func_idx);
 
-        new_func_idx
+        (new_func_idx, tys)
     }
 }
 

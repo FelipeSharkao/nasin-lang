@@ -107,9 +107,15 @@ impl<'a> RuntimeBuilder<'a> {
         let array_ty = b::Type::new(b::TypeBody::Array(str_ty.clone().into()), None);
         let array_2d_ty = b::Type::new(b::TypeBody::Array(array_ty.clone().into()), None);
 
-        if main_ty.intersection(&str_ty, &*modules).is_none()
-            && main_ty.intersection(&array_ty, &*modules).is_none()
-            && main_ty.intersection(&array_2d_ty, &*modules).is_none()
+        if main_ty
+            .merge(&str_ty, b::Variance::Covariant, &*modules)
+            .is_none()
+            && main_ty
+                .merge(&array_ty, b::Variance::Covariant, &*modules)
+                .is_none()
+            && main_ty
+                .merge(&array_2d_ty, b::Variance::Covariant, &*modules)
+                .is_none()
         {
             return Err(errors::Error::new(
                 errors::UnexpectedType::new(

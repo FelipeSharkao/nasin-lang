@@ -1,0 +1,20 @@
+typevar T
+
+type Foo(T) {
+    data: T
+}
+
+main =
+    let v1: Foo(u8)   = {data=1}
+    let v2: Foo(u8)   = {data=10}
+    let v3: Foo(str)  = {data="hello"}
+    let v4: Foo(bool) = {data=true}
+    [
+        v1.get_type_name,
+        v2.get_type_name,
+        v3.get_type_name,
+        v4.get_type_name,
+    ]
+
+Foo.get_type_name(foo: Self) =
+    @type_name(foo.data)

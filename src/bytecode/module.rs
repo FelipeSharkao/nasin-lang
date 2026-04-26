@@ -172,10 +172,12 @@ pub trait BlockTransformer {
 
 #[derive(Debug, Clone)]
 pub struct TypeDef {
-    pub name: Name,
-    pub body: TypeDefBody,
-    pub loc:  Loc,
+    pub name:     Name,
+    pub body:     TypeDefBody,
+    pub loc:      Loc,
+    pub generics: Vec<TypeVarIdx>,
 }
+
 impl TypeDef {
     pub fn get_ifaces(&self) -> Vec<(usize, usize)> {
         match &self.body {
@@ -188,6 +190,13 @@ impl TypeDef {
         match &self.body {
             TypeDefBody::Record(rec) => rec.methods.get(name),
             TypeDefBody::Interface(iface) => iface.methods.get(name),
+        }
+    }
+
+    pub fn add_method(&mut self, name: String, method: Method) {
+        match &mut self.body {
+            TypeDefBody::Record(rec) => rec.methods.insert(name, method),
+            TypeDefBody::Interface(iface) => iface.methods.insert(name, method),
         }
     }
 }
@@ -206,7 +215,7 @@ pub struct Func {
     pub params: Vec<ValueIdx>,
     pub ret: ValueIdx,
     pub body: BlockIdx,
-    pub method: Option<(usize, usize, String)>,
+    pub method: Option<FuncMethodInfo>,
     pub extrn: Option<Extern>,
     pub is_entry: bool,
     pub is_virt: bool,
@@ -215,6 +224,13 @@ pub struct Func {
     /// Maps generic substitutions to the index of the instantiated func. Used to
     /// deduplicate generic instantiations
     pub generic_instantiations: HashMap<Vec<TypeBody>, usize>,
+}
+
+#[derive(Debug, Clone, ctor)]
+pub struct FuncMethodInfo {
+    pub name:    String,
+    pub mod_idx: usize,
+    pub ty_idx:  usize,
 }
 
 #[derive(Debug, Clone, From)]
@@ -231,28 +247,30 @@ pub struct TypeVarDef {
 
 pub type TypeVarIdx = usize;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, ctor)]
 pub struct RecordType {
+    #[ctor(default)]
     pub ifaces:  HashSet<(usize, usize)>,
+    #[ctor(default)]
     pub fields:  SortedMap<String, RecordField>,
+    #[ctor(default)]
     pub methods: SortedMap<String, Method>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, ctor)]
 pub struct InterfaceType {
+    #[ctor(default)]
     pub methods: SortedMap<String, Method>,
 }
 
 #[derive(Debug, Clone, ctor)]
 pub struct RecordField {
-    pub name: String,
-    pub ty:   Type,
-    pub loc:  Loc,
+    pub ty:  Type,
+    pub loc: Loc,
 }
 
 #[derive(Debug, Clone, ctor)]
 pub struct Method {
-    pub name:     String,
     pub func_ref: (usize, usize),
     pub loc:      Loc,
 }

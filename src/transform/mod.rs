@@ -21,12 +21,15 @@ impl<'a> CodeTransform<'a> {
     #[tracing::instrument(skip(self, step))]
     pub fn apply(&self, mut step: impl CodeTransformStep) {
         for mod_idx in 0..({ self.ctx.lock_modules().len() }) {
+            tracing::trace!(mod_idx, "transforming module");
+
             for global_idx in 0..({ self.ctx.lock_modules()[mod_idx].globals.len() }) {
                 tracing::trace!(mod_idx, global_idx, "transforming global");
                 let block_idx =
                     { self.ctx.lock_modules()[mod_idx].globals[global_idx].body };
                 self.transform_block(&mut step, mod_idx, block_idx);
             }
+
             for func_idx in 0..({ self.ctx.lock_modules()[mod_idx].funcs.len() }) {
                 let (is_generic, block_idx) = {
                     let modules = &self.ctx.lock_modules();
@@ -40,6 +43,8 @@ impl<'a> CodeTransform<'a> {
                 tracing::trace!(mod_idx, func_idx, "transforming function");
                 self.transform_block(&mut step, mod_idx, block_idx);
             }
+
+            tracing::trace!(mod_idx, "transforming module done");
         }
     }
 

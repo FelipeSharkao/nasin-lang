@@ -57,8 +57,10 @@ impl fmt::Display for CompilerError {
 #[derive(Debug, Clone, Display, From)]
 pub enum ErrorDetail {
     ReadError(ReadError),
+    UnexpectedToken(UnexpectedToken),
     ValueNotFound(ValueNotFound),
     TypeNotFound(TypeNotFound),
+    TypeVarNotFound(TypeVarNotFound),
     UnexpectedType(UnexpectedType),
     TypeMisatch(TypeMisatch),
     #[display("Type should be known at this point")]
@@ -76,6 +78,12 @@ pub struct ReadError {
 }
 
 #[derive(Debug, Clone, Display, ctor)]
+#[display("Unexpected token `{}`", token)]
+pub struct UnexpectedToken {
+    pub token: String,
+}
+
+#[derive(Debug, Clone, Display, ctor)]
 #[display("Cannot find value `{ident}` on the current scope")]
 pub struct ValueNotFound {
     pub ident: String,
@@ -84,6 +92,12 @@ pub struct ValueNotFound {
 #[derive(Debug, Clone, Display, ctor)]
 #[display("Cannot find type `{ident}` on the current scope")]
 pub struct TypeNotFound {
+    pub ident: String,
+}
+
+#[derive(Debug, Clone, Display, ctor)]
+#[display("Cannot find typevar `{ident}` on the current scope")]
+pub struct TypeVarNotFound {
     pub ident: String,
 }
 
@@ -103,7 +117,7 @@ impl UnexpectedType {
         let fmt_ty = |ty: &b::TypeBody| {
             let mut s = String::new();
             b::Printer::new(modules, cfg)
-                .reconstruct(true)
+                .with_reconstruct(true)
                 .write_type_expr(&mut s, ty)
                 .unwrap();
             s
@@ -148,7 +162,7 @@ impl TypeMisatch {
                 .map(|t| {
                     let mut s = String::new();
                     b::Printer::new(modules, cfg)
-                        .reconstruct(true)
+                        .with_reconstruct(true)
                         .write_type_expr(&mut s, &t.body)
                         .unwrap();
                     s
@@ -177,7 +191,7 @@ impl TypeNotInterface {
     pub fn new(ty: &b::Type, modules: &[b::Module], cfg: &BuildConfig) -> Self {
         let mut s = String::new();
         b::Printer::new(modules, cfg)
-            .reconstruct(true)
+            .with_reconstruct(true)
             .write_type_expr(&mut s, &ty.body)
             .unwrap();
         Self { ty: s }
@@ -191,7 +205,10 @@ impl Display for TypeNotInterface {
 }
 
 #[derive(Debug, Clone, Display, ctor)]
-#[display("`{name}` requires {expected} arguments, but {found} were provided")]
+#[display(
+    "`{name}` requires {expected} {}, but {found} were provided",
+    if *expected == 1 { "argument" } else { "arguments" }
+)]
 pub struct WrongArgumentCount {
     pub name:     String,
     pub expected: usize,

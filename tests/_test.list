@@ -14,3 +14,5 @@
 ./bin/nasin r tests/interface.nsn
 ./bin/nasin r tests/func_as_value.nsn
 ./bin/nasin r tests/generic_func.nsn
+./bin/nasin r tests/generic_record.nsn
+./bin/nasin r tests/generic_method.nsn

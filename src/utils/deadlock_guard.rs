@@ -2,7 +2,7 @@ use std::backtrace::Backtrace;
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use std::{process, thread};
+use std::{env, process, thread};
 
 use derive_more::{Deref, DerefMut};
 
@@ -22,55 +22,56 @@ pub struct DeadlockGuard<T> {
 
 impl<T> DeadlockGuard<T> {
     pub fn new(lock: T) -> Self {
-        let lock_id = if cfg!(debug_assertions) {
-            let item = DeadlockGuardItem {
-                backtrace:  Backtrace::capture(),
-                created_at: Instant::now(),
-            };
+        let lock_id =
+            if cfg!(debug_assertions) && env::var("NASIN_NO_DEADLOCK_GUARD").is_err() {
+                let item = DeadlockGuardItem {
+                    backtrace:  Backtrace::capture(),
+                    created_at: Instant::now(),
+                };
 
-            let mut control = CONTROL.lock().unwrap();
-            if control.is_none() {
-                *control = Some(DeadlockGuardControl {
-                    pending_locks: HashMap::new(),
-                    next_lock_id:  0,
-                });
+                let mut control = CONTROL.lock().unwrap();
+                if control.is_none() {
+                    *control = Some(DeadlockGuardControl {
+                        pending_locks: HashMap::new(),
+                        next_lock_id:  0,
+                    });
 
-                thread::spawn(move || {
-                    loop {
-                        thread::sleep(DEADLOCK_TIMEOUT / 2);
-                        let mut control = CONTROL.lock().unwrap();
-                        let Some(control) = control.as_mut() else {
-                            break;
-                        };
-                        for item in control.pending_locks.values() {
-                            if item.created_at.elapsed() > DEADLOCK_TIMEOUT {
-                                eprintln!("Lock was not released");
-                                eprintln!("{}", item.backtrace);
-                                process::abort();
+                    thread::spawn(move || {
+                        loop {
+                            thread::sleep(DEADLOCK_TIMEOUT / 2);
+                            let mut control = CONTROL.lock().unwrap();
+                            let Some(control) = control.as_mut() else {
+                                break;
+                            };
+                            for item in control.pending_locks.values() {
+                                if item.created_at.elapsed() > DEADLOCK_TIMEOUT {
+                                    eprintln!("Lock was not released");
+                                    eprintln!("{}", item.backtrace);
+                                    process::abort();
+                                }
                             }
                         }
-                    }
-                });
-            }
-            let control = control.as_mut().unwrap();
-
-            if control.pending_locks.len() >= MAX_LOCKS {
-                eprintln!("Too many locks held, probably a leak");
-                for item in control.pending_locks.values().take(5) {
-                    eprintln!("{}", item.backtrace);
+                    });
                 }
-                eprintln!("Too many locks held, probably a leak");
-                process::abort();
-            }
+                let control = control.as_mut().unwrap();
 
-            let lock_id = control.next_lock_id;
-            control.next_lock_id += 1;
-            control.pending_locks.insert(lock_id, item);
+                if control.pending_locks.len() >= MAX_LOCKS {
+                    eprintln!("Too many locks held, probably a leak");
+                    for item in control.pending_locks.values().take(5) {
+                        eprintln!("{}", item.backtrace);
+                    }
+                    eprintln!("Too many locks held, probably a leak");
+                    process::abort();
+                }
 
-            lock_id
-        } else {
-            0
-        };
+                let lock_id = control.next_lock_id;
+                control.next_lock_id += 1;
+                control.pending_locks.insert(lock_id, item);
+
+                lock_id
+            } else {
+                0
+            };
 
         Self { lock, lock_id }
     }

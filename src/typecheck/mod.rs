@@ -97,12 +97,12 @@ impl<'a> TypeChecker<'a> {
     ) {
         let func = &modules[self.mod_idx].funcs[idx];
 
-        if let Some((mod_idx, ty_idx, name)) = &func.method {
-            let parent_funcs = modules[*mod_idx].typedefs[*ty_idx]
+        if let Some(method) = &func.method {
+            let parent_funcs = modules[method.mod_idx].typedefs[method.ty_idx]
                 .get_ifaces()
                 .into_iter()
                 .filter_map(|(mod_idx, ty_idx)| {
-                    modules[mod_idx].typedefs[ty_idx].get_method(name)
+                    modules[mod_idx].typedefs[ty_idx].get_method(&method.name)
                 })
                 .map(|f| f.func_ref)
                 .collect_vec();
@@ -113,7 +113,7 @@ impl<'a> TypeChecker<'a> {
                     .map(|(p, pp)| (*p, *pp))
                     .collect();
                 let parent_mod_idx_is_mod_idx =
-                    func.method.as_ref().unwrap().0 == parent_mod_idx;
+                    func.method.as_ref().unwrap().mod_idx == parent_mod_idx;
                 for (param, parent_param) in pairs {
                     if parent_mod_idx_is_mod_idx {
                         self.add_constraint(
@@ -361,17 +361,20 @@ impl<'a> TypeChecker<'a> {
 
                 for (arg, param) in izip!(args, params) {
                     let param_ty = &modules[call_mod_idx].values[param].ty;
-                    let kind =
-                        if call_mod_idx == self.mod_idx && !param_ty.contains_typevar() {
-                            ConstraintKind::TypeOf(param)
-                        } else {
-                            ConstraintKind::Is(param_ty.clone())
-                        };
+                    let kind = if call_mod_idx == self.mod_idx
+                        && !param_ty.typevars().next().is_some()
+                    {
+                        ConstraintKind::TypeOf(param)
+                    } else {
+                        ConstraintKind::Is(param_ty.clone())
+                    };
                     self.add_constraint(arg, Constraint::new(kind, loc), modules);
                 }
 
                 let ret_ty = &modules[call_mod_idx].values[ret].ty;
-                let kind = if call_mod_idx == self.mod_idx && !ret_ty.contains_typevar() {
+                let kind = if call_mod_idx == self.mod_idx
+                    && !ret_ty.typevars().next().is_some()
+                {
                     ConstraintKind::TypeOf(ret)
                 } else {
                     ConstraintKind::Is(ret_ty.clone())
@@ -457,7 +460,7 @@ impl<'a> TypeChecker<'a> {
 
                 let scope = scopes.begin(ScopePayload::new(v), body_block);
                 for (loop_v, initial_v) in inputs.clone() {
-                    self.merge_types([&initial_v, &loop_v], modules);
+                    self.ordered_merge_types([&loop_v, &initial_v], modules);
                     scope.loop_args.push(loop_v);
                 }
 
@@ -472,7 +475,7 @@ impl<'a> TypeChecker<'a> {
                     .find_last(|x| x.block_idx == block_idx)
                     .and_then(|x| x.result);
                 if let (Some(v), Some(result)) = (v, result) {
-                    self.merge_types([&result, &v], modules);
+                    self.ordered_merge_types([&v, &result], modules);
                 }
             }
             &b::InstrBody::Continue(block_idx, ref vs) => {
@@ -482,7 +485,7 @@ impl<'a> TypeChecker<'a> {
                     .loop_args;
                 for (v, loop_v) in izip!(vs.clone(), loop_args) {
                     if v != *loop_v {
-                        self.merge_types([&v, loop_v], modules);
+                        self.merge_types([loop_v, &v], modules);
                     }
                 }
             }
@@ -700,10 +703,6 @@ impl<'a> TypeChecker<'a> {
                 (
                     ConstraintKind::HasProperty(name_a, a),
                     ConstraintKind::HasProperty(name_b, b),
-                )
-                | (
-                    ConstraintKind::IsProperty(a, name_a),
-                    ConstraintKind::IsProperty(b, name_b),
                 ) if name_a == name_b => {
                     self.merge_types([a, b], modules);
                 }
@@ -747,31 +746,38 @@ impl<'a> TypeChecker<'a> {
     }
 
     #[tracing::instrument(level = "trace", skip(self, modules))]
-    fn merge_types<'i, I>(
+    fn merge_types<'i>(
         &mut self,
-        items: I,
+        items: impl IntoIterator<Item = &'i b::ValueIdx> + Debug,
         // FIXME: use per-module locks instead of locking the entire module list
         modules: &mut [b::Module],
-    ) where
-        I: IntoIterator<Item = &'i b::ValueIdx>,
-        I: Debug,
-    {
+    ) {
+        let merge_with = items.into_iter().unique().sorted();
+        self.ordered_merge_types(merge_with, modules);
+    }
+
+    #[tracing::instrument(level = "trace", skip(self, modules))]
+    fn ordered_merge_types<'i>(
+        &mut self,
+        items: impl IntoIterator<Item = &'i b::ValueIdx> + Debug,
+        // FIXME: use per-module locks instead of locking the entire module list
+        modules: &mut [b::Module],
+    ) {
         tracing::trace!("merge types");
 
-        let mut merge_with = items
-            .into_iter()
-            .unique()
-            .sorted_by(|a, b| a.cmp(b).reverse())
-            .copied()
-            .collect_vec();
+        let mut merge_with = items.into_iter();
+        let mut seen = HashSet::new();
 
-        if merge_with.len() <= 1 {
+        let Some(&head) = merge_with.next() else {
             return;
-        }
+        };
 
-        let head = merge_with.pop().unwrap();
+        while let Some(&v) = merge_with.next() {
+            if seen.contains(&v) {
+                continue;
+            }
+            seen.insert(v);
 
-        while let Some(v) = merge_with.pop() {
             modules[self.mod_idx].values[v].same_type_of.insert(head);
             let constraints =
                 mem::replace(&mut self.nodes[v].constraints, HashSet::new());
@@ -859,7 +865,8 @@ impl<'a> TypeChecker<'a> {
 
             result_ty = b::Type::new(b::TypeBody::Never, None);
             for ty in &tys {
-                if let Some(ty) = result_ty.union(ty, modules) {
+                if let Some(ty) = result_ty.merge(ty, b::Variance::Contravariant, modules)
+                {
                     result_ty = ty;
                 } else {
                     union_success = false;
@@ -886,7 +893,7 @@ impl<'a> TypeChecker<'a> {
                 .sorted_by(|a, b| b.priority().cmp(&a.priority()))
                 .filter_map(|c| {
                     tracing::trace!(?c, "checking constraint");
-                    let merge_with = match c.kind {
+                    let merge_with = match c.kind.clone() {
                         ConstraintKind::Is(ty) => ty.clone(),
                         ConstraintKind::TypeOf(target) => {
                             tracing::trace!(target, "will validate TypeOf");
@@ -1076,7 +1083,9 @@ impl<'a> TypeChecker<'a> {
 
                     tracing::trace!(?merge_with, "got type");
 
-                    if let Some(ty) = result_ty.intersection(&merge_with, modules) {
+                    if let Some(ty) =
+                        result_ty.merge(&merge_with, b::Variance::Covariant, modules)
+                    {
                         result_ty = ty;
                         None
                     } else {

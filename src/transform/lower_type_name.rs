@@ -21,7 +21,7 @@ impl<'a> CodeTransformStep for LowerTypeNameStep<'a> {
         let type_name = {
             let mut s = String::new();
             b::Printer::new(&modules, &self.ctx.cfg)
-                .reconstruct(true)
+                .with_reconstruct(true)
                 .write_type_expr(&mut s, &ty.body)
                 .unwrap();
             s

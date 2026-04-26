@@ -1,9 +1,10 @@
+use std::borrow::Cow;
 use std::fmt;
 use std::path::{Component, Path};
 
 use derive_ctor::ctor;
 use derive_more::{Debug, Display, From};
-use itertools::Itertools;
+use itertools::{Itertools, izip};
 
 use super::module::*;
 use super::ty::*;
@@ -112,6 +113,21 @@ impl Name {
             }
         }
         panic!("Name is empty")
+    }
+
+    pub fn strip_prefix(&self, prefix: &Self) -> Cow<'_, Self> {
+        if self.nodes.len() < prefix.nodes.len() {
+            return Cow::Borrowed(self);
+        }
+        for (a, b) in izip!(&self.nodes, &prefix.nodes) {
+            if a != b {
+                return Cow::Borrowed(self);
+            }
+        }
+        Cow::Owned(Self {
+            nodes: self.nodes[prefix.nodes.len()..].to_vec(),
+            ..self.clone()
+        })
     }
 }
 
