@@ -80,6 +80,17 @@ impl BuildContext {
             mod_idx
         };
 
+        if root_node.has_error() {
+            for err in root_node.iter_errors() {
+                let source = &self.source_manager.source(src_idx).content().text;
+                let token = err.child(0).unwrap().get_text(source).to_string();
+                self.push_error(errors::Error::new(
+                    errors::UnexpectedToken::new(token).into(),
+                    Some(b::Loc::from_node(src_idx, &err)),
+                ));
+            }
+        }
+
         let mut module_parser = parser::ModuleParser::new(self, src_idx, mod_idx);
         if let Some(core_mod_idx) = self.core_mod_idx {
             module_parser.open_module(core_mod_idx);

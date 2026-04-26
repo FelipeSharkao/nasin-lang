@@ -10,6 +10,7 @@ pub trait TreeSitterUtils<'t> {
     fn get_text<'s>(&self, source: &'s str) -> &'s str;
     fn iter_children(&self) -> impl Iterator<Item = ts::Node<'t>>;
     fn iter_field(&self, field: &str) -> impl Iterator<Item = ts::Node<'t>>;
+    fn iter_errors(&self) -> impl Iterator<Item = ts::Node<'t>>;
     fn field(&self, field: &str) -> Option<ts::Node<'t>>;
     fn required_field(&self, field: &str) -> ts::Node<'t>;
     fn display<'s>(&self, source: &'s str) -> impl Display;
@@ -35,6 +36,10 @@ impl<'t> TreeSitterUtils<'t> for ts::Node<'t> {
         TreeSitterChildren::new(self)
             .filter(move |x| x.field.is_some_and(|f| f == field))
             .map(|x| x.node)
+    }
+
+    fn iter_errors(&self) -> impl Iterator<Item = ts::Node<'t>> {
+        TreeSitterErrors::new(self)
     }
 
     fn field(&self, field: &str) -> Option<ts::Node<'t>> {
@@ -91,6 +96,59 @@ impl<'t> Iterator for TreeSitterChildren<'t> {
         self.finished = !self.cursor.goto_next_sibling();
 
         Some(TreeSitterChild { node, field })
+    }
+}
+
+struct TreeSitterErrors<'t> {
+    cursor:   ts::TreeCursor<'t>,
+    root:     ts::Node<'t>,
+    finished: bool,
+}
+
+impl<'t> TreeSitterErrors<'t> {
+    fn new(node: &ts::Node<'t>) -> Self {
+        let mut cursor = node.walk();
+        let has_children = cursor.goto_first_child();
+
+        Self {
+            cursor,
+            root: *node,
+            finished: !has_children,
+        }
+    }
+
+    fn goto_next_sibling_or_parent(&mut self) {
+        while !self.finished && !self.cursor.goto_next_sibling() {
+            self.cursor.goto_parent();
+            self.finished = self.cursor.node() == self.root;
+        }
+    }
+}
+
+impl<'t> Iterator for TreeSitterErrors<'t> {
+    type Item = ts::Node<'t>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        while !self.finished
+            && !self.cursor.node().is_error()
+            && !self.cursor.node().is_missing()
+        {
+            if self.cursor.node().has_error() {
+                self.cursor.goto_first_child();
+                continue;
+            }
+            self.goto_next_sibling_or_parent();
+        }
+
+        if self.finished {
+            return None;
+        }
+
+        let node = self.cursor.node();
+
+        self.goto_next_sibling_or_parent();
+
+        Some(node)
     }
 }
 
