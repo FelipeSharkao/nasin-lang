@@ -810,7 +810,7 @@ impl TypeRef {
                 return None;
             };
 
-            let [params @ .., obj_param] = &func.params[..] else {
+            let [obj_param, params @ ..] = &func.params[..] else {
                 return None;
             };
 

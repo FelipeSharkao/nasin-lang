@@ -134,7 +134,7 @@ pub fn build_maybe_run(
 
     ctx.parse(src_idx);
     if ctx.has_errors() {
-        if ctx.cfg.dump_bytecode {
+        if ctx.cfg.dump_bytecode || ctx.cfg.dump_transformed_bytecode {
             b::Printer::new(&ctx.lock_modules(), &ctx.cfg)
                 .with_show_ids(true)
                 .with_source_manager(&ctx.source_manager)

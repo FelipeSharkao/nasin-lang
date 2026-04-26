@@ -11,11 +11,11 @@ use crate::parser::expr_parser::ExprParser;
 use crate::parser::parser_value::ValueRefBody;
 use crate::parser::type_parser::UNDEF_TYPEVAR;
 use crate::utils::TreeSitterUtils;
-use crate::{bytecode as b, context, utils};
+use crate::{bytecode as b, context, errors, utils};
 
 const UNDEF_VALUE: b::ValueIdx = usize::MAX;
 
-const SELF_INDENT: &str = "Self";
+const SELF_TYPE_INDENT: &str = "Self";
 
 #[derive(ctor)]
 pub struct ModuleParser<'a, 't> {
@@ -103,41 +103,30 @@ impl<'a, 't> ModuleParser<'a, 't> {
                     let body_node = sym_node.required_field("body");
                     let is_virt = body_node.kind() == "interface_type";
 
-                    let methods = body_node
-                        .iter_field("methods")
-                        .map(|method_node| {
-                            let method_name_node =
-                                method_node.required_field("name").of_kind("ident");
-                            let method_name = method_name_node.get_text(
-                                &self
-                                    .ctx
-                                    .source_manager
-                                    .source(self.src_idx)
-                                    .content()
-                                    .text,
-                            );
-                            let func_idx = self.add_func(
-                                name.with(
-                                    method_name,
-                                    b::NameIdentKind::Func,
-                                    Some(b::Loc::from_node(
-                                        self.src_idx,
-                                        &method_name_node,
-                                    )),
-                                ),
-                                method_node,
-                                Some(b::FuncMethodInfo::new(
-                                    method_name.to_string(),
-                                    self.mod_idx,
-                                    ty_idx,
-                                )),
-                                is_virt,
-                            );
+                    self.types.parse_type_decl(name.clone(), sym_node);
 
-                            (method_name, (self.mod_idx, func_idx))
-                        })
-                        .collect();
-                    self.types.parse_type_decl(name, sym_node, methods);
+                    for method_node in body_node.iter_field("methods") {
+                        let method_name_node =
+                            method_node.required_field("name").of_kind("ident");
+                        let method_name = method_name_node.get_text(
+                            &self.ctx.source_manager.source(self.src_idx).content().text,
+                        );
+
+                        self.add_func(
+                            name.with(
+                                method_name,
+                                b::NameIdentKind::Func,
+                                Some(b::Loc::from_node(self.src_idx, &method_name_node)),
+                            ),
+                            method_node,
+                            Some(b::FuncMethodInfo::new(
+                                method_name.to_string(),
+                                self.mod_idx,
+                                ty_idx,
+                            )),
+                            is_virt,
+                        );
+                    }
                 }
                 "typevar_decl" => {
                     let typevar_idx = self.types.typevar_count;
@@ -213,12 +202,40 @@ impl<'a, 't> ModuleParser<'a, 't> {
         &mut self,
         name: b::Name,
         node: ts::Node<'t>,
-        method: Option<b::FuncMethodInfo>,
+        method_info: Option<b::FuncMethodInfo>,
         is_virt: bool,
-    ) -> usize {
-        assert!(matches!(node.kind(), "func_decl" | "method"));
+    ) {
+        assert!(matches!(node.kind(), "func_decl" | "func_sig"));
 
         let loc = b::Loc::from_node(self.src_idx, &node);
+
+        let (name, method_info) = if let Some(parent) = node.field("parent") {
+            assert!(parent.kind() == "ident");
+
+            let parent_ty = self.types.parse_type_ident(parent);
+            let b::TypeBody::TypeRef(ty_ref) = parent_ty else {
+                self.ctx.push_error(errors::Error::new(
+                    errors::Todo::new("method for builtin type".to_string()).into(),
+                    Some(b::Loc::from_node(self.src_idx, &parent)),
+                ));
+                return;
+            };
+
+            let method_name = name.last_ident().to_string();
+
+            let method_info =
+                b::FuncMethodInfo::new(method_name.clone(), ty_ref.mod_idx, ty_ref.idx);
+
+            let modules = self.ctx.lock_modules();
+            (
+                self.types
+                    .get_type_name(ty_ref.mod_idx, ty_ref.idx, &*modules)
+                    .with(method_name, b::NameIdentKind::Func, Some(loc)),
+                Some(method_info),
+            )
+        } else {
+            (name, method_info)
+        };
 
         let params = node
             .iter_field("params")
@@ -267,7 +284,7 @@ impl<'a, 't> ModuleParser<'a, 't> {
             name,
             params: params.iter().map(|x| x.value).collect(),
             ret,
-            method,
+            method: method_info.clone(),
             extrn,
             is_entry: false,
             is_virt,
@@ -290,7 +307,14 @@ impl<'a, 't> ModuleParser<'a, 't> {
             node.field("ret_type"),
         ));
 
-        func_idx
+        if let Some(method_info) = method_info {
+            self.types.add_method(
+                method_info.mod_idx,
+                method_info.ty_idx,
+                method_info.name,
+                b::Method::new((self.mod_idx, func_idx), loc),
+            );
+        }
     }
 
     fn add_global(&mut self, name: b::Name, node: ts::Node<'t>) {
@@ -331,13 +355,9 @@ impl<'a, 't> ModuleParser<'a, 't> {
     fn define_func(&mut self, i: usize) {
         let func = &mut self.funcs[i];
 
-        let old_self_type = self.types.idents.get(SELF_INDENT).cloned();
+        let old_self_type = self.types.idents.get(SELF_TYPE_INDENT).cloned();
 
-        if let Some(method) = &func.func.method {
-            assert_eq!(
-                method.mod_idx, self.mod_idx,
-                "method should be defined in the same module of the type"
-            );
+        let self_ty_ref = if let Some(method) = &func.func.method {
             let type_def = &self.types.typedefs[method.ty_idx].typedef;
 
             let args = type_def.generics.iter().map(|&idx| {
@@ -345,17 +365,26 @@ impl<'a, 't> ModuleParser<'a, 't> {
                 b::Type::new(b::TypeVar::new(self.mod_idx, idx).into(), None)
             });
             let type_ref = b::TypeRef::new(method.mod_idx, method.ty_idx)
-                .with_is_self(true)
                 .with_args(args.collect_vec());
 
             self.types
                 .idents
-                .insert(SELF_INDENT.to_string(), type_ref.into());
-        }
+                .insert(SELF_TYPE_INDENT.to_string(), type_ref.clone().into());
+            Some(type_ref)
+        } else {
+            None
+        };
 
-        for param in &func.params {
+        for (i, param) in func.params.iter().enumerate() {
             if let Some(ty_node) = param.ty_node {
-                let ty = self.types.parse_type_expr(ty_node);
+                let mut ty = self.types.parse_type_expr(ty_node);
+                if let b::TypeBody::TypeRef(ty_ref) = &mut ty.body
+                    && self_ty_ref.as_ref().is_some_and(|x| ty_ref.is_same_of(x))
+                    && i == 0
+                {
+                    ty_ref.is_self = true;
+                }
+
                 self.values[param.value].ty = ty;
             }
         }
@@ -390,9 +419,9 @@ impl<'a, 't> ModuleParser<'a, 't> {
         if let Some(old_self_type) = old_self_type {
             self.types
                 .idents
-                .insert(SELF_INDENT.to_string(), old_self_type);
+                .insert(SELF_TYPE_INDENT.to_string(), old_self_type);
         } else {
-            self.types.idents.remove(SELF_INDENT);
+            self.types.idents.remove(SELF_TYPE_INDENT);
         }
     }
 }

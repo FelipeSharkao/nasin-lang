@@ -1,19 +1,12 @@
-type LinesA : Lines {
-    lines(text, self: Self) = ["LinesA", text]
-}
+type LinesA : Lines {}
 
 type LinesB : Lines {
     data: str
-
-    lines(text, self: Self) = ["LinesB", self.data, text]
 }
 
 type Lines interface {
-    lines(text: str, self: Self): [str]
+    lines(lines: Self, text: str): [str]
 }
-
-lines_with(lines: Lines) =
-    lines.lines("implementation omitted")
 
 a: LinesA = {}
 b: LinesB = {data="LinesB 1"}
@@ -24,3 +17,12 @@ main = [
     lines_with(b)
     lines_with(c)
 ]
+
+lines_with(lines: Lines) =
+    lines.lines("implementation omitted")
+
+LinesA.lines(_: Self, text) =
+    ["LinesA", text]
+
+LinesB.lines(lines: Self, text) =
+    ["LinesB", lines.data, text]

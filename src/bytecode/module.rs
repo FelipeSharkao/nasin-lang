@@ -247,28 +247,30 @@ pub struct TypeVarDef {
 
 pub type TypeVarIdx = usize;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, ctor)]
 pub struct RecordType {
+    #[ctor(default)]
     pub ifaces:  HashSet<(usize, usize)>,
+    #[ctor(default)]
     pub fields:  SortedMap<String, RecordField>,
+    #[ctor(default)]
     pub methods: SortedMap<String, Method>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, ctor)]
 pub struct InterfaceType {
+    #[ctor(default)]
     pub methods: SortedMap<String, Method>,
 }
 
 #[derive(Debug, Clone, ctor)]
 pub struct RecordField {
-    pub name: String,
-    pub ty:   Type,
-    pub loc:  Loc,
+    pub ty:  Type,
+    pub loc: Loc,
 }
 
 #[derive(Debug, Clone, ctor)]
 pub struct Method {
-    pub name:     String,
     pub func_ref: (usize, usize),
     pub loc:      Loc,
 }

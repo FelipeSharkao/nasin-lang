@@ -57,6 +57,7 @@ impl fmt::Display for CompilerError {
 #[derive(Debug, Clone, Display, From)]
 pub enum ErrorDetail {
     ReadError(ReadError),
+    UnexpectedToken(UnexpectedToken),
     ValueNotFound(ValueNotFound),
     TypeNotFound(TypeNotFound),
     TypeVarNotFound(TypeVarNotFound),
@@ -74,6 +75,12 @@ pub enum ErrorDetail {
 pub struct ReadError {
     pub path: PathBuf,
     pub kind: io::ErrorKind,
+}
+
+#[derive(Debug, Clone, Display, ctor)]
+#[display("Unexpected token `{}`", token)]
+pub struct UnexpectedToken {
+    pub token: String,
 }
 
 #[derive(Debug, Clone, Display, ctor)]
@@ -198,7 +205,10 @@ impl Display for TypeNotInterface {
 }
 
 #[derive(Debug, Clone, Display, ctor)]
-#[display("`{name}` requires {expected} arguments, but {found} were provided")]
+#[display(
+    "`{name}` requires {expected} {}, but {found} were provided",
+    if *expected == 1 { "argument" } else { "arguments" }
+)]
 pub struct WrongArgumentCount {
     pub name:     String,
     pub expected: usize,

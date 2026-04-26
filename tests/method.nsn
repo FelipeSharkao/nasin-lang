@@ -1,11 +1,11 @@
 type Foo {
     data: str
-
-    lines(text, self: Self) =
-        [self.data, text]
 }
 
 msg: Foo = {data="Hello from record"}
 
 main =
     msg.lines("Hi method")
+
+Foo.lines(foo: Self, text) =
+    [foo.data, text]

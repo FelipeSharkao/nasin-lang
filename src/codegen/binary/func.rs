@@ -478,7 +478,7 @@ impl<'a> FuncCodegen<'a, '_> {
                         self_value,
                         (func_mod_idx, func_idx),
                     ) => {
-                        args.push(*self_value);
+                        args.insert(0, *self_value);
                         self.call_func(*func_mod_idx, *func_idx, args)
                     }
                     types::ValueSource::AppliedMethodInderect(
@@ -486,7 +486,7 @@ impl<'a> FuncCodegen<'a, '_> {
                         callee,
                         proto,
                     ) => {
-                        args.push(*self_value);
+                        args.insert(0, *self_value);
                         self.call_indirect(proto, *callee, args)
                     }
                     types::ValueSource::FuncAsValue(func_as_value) => {
