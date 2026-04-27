@@ -75,7 +75,7 @@ fn collect_params<'m>(
                 return None;
             };
             let param_ty_def = &modules[param_ty_ref.mod_idx].typedefs[param_ty_ref.idx];
-            if !matches!(&param_ty_def.body, b::TypeDefBody::Interface(_)) {
+            if !matches!(&param_ty_def.body, b::TypeDefBody::Interface) {
                 return None;
             }
             Some((arg, param_ty_ref.mod_idx, param_ty_ref.idx))

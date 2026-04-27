@@ -99,12 +99,16 @@ impl<'a> TypeChecker<'a> {
 
         if let Some(method) = &func.method {
             let parent_funcs = modules[method.mod_idx].typedefs[method.ty_idx]
-                .get_ifaces()
-                .into_iter()
-                .filter_map(|(mod_idx, ty_idx)| {
-                    modules[mod_idx].typedefs[ty_idx].get_method(&method.name)
+                .ifaces
+                .iter()
+                .filter_map(|&(mod_idx, ty_idx)| {
+                    Some(
+                        modules[mod_idx].typedefs[ty_idx]
+                            .methods
+                            .get(&method.name)?
+                            .func_ref,
+                    )
                 })
-                .map(|f| f.func_ref)
                 .collect_vec();
             for (parent_mod_idx, parent_func_idx) in parent_funcs {
                 let func = &modules[self.mod_idx].funcs[idx];
@@ -1205,10 +1209,7 @@ impl<'a> TypeChecker<'a> {
             return vec![];
         };
         let Some(func) = modules.get(ty_ref.mod_idx).and_then(|module| {
-            let method = match &module.typedefs.get(ty_ref.idx)?.body {
-                b::TypeDefBody::Record(rec) => rec.methods.get(name)?,
-                b::TypeDefBody::Interface(iface) => iface.methods.get(name)?,
-            };
+            let method = module.typedefs[ty_ref.idx].methods.get(name)?;
             if method.func_ref.0 == self.mod_idx {
                 module.funcs.get(method.func_ref.1)
             } else {

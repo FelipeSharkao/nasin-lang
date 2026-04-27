@@ -170,35 +170,17 @@ pub trait BlockTransformer {
     fn remap_instr(&mut self, module: &mut Module, instr: &mut Instr);
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, ctor)]
 pub struct TypeDef {
     pub name:     Name,
     pub body:     TypeDefBody,
     pub loc:      Loc,
+    #[ctor(iter(TypeVarIdx))]
     pub generics: Vec<TypeVarIdx>,
-}
-
-impl TypeDef {
-    pub fn get_ifaces(&self) -> Vec<(usize, usize)> {
-        match &self.body {
-            TypeDefBody::Record(rec) => rec.ifaces.iter().cloned().collect(),
-            _ => vec![],
-        }
-    }
-
-    pub fn get_method(&self, name: &str) -> Option<&Method> {
-        match &self.body {
-            TypeDefBody::Record(rec) => rec.methods.get(name),
-            TypeDefBody::Interface(iface) => iface.methods.get(name),
-        }
-    }
-
-    pub fn add_method(&mut self, name: String, method: Method) {
-        match &mut self.body {
-            TypeDefBody::Record(rec) => rec.methods.insert(name, method),
-            TypeDefBody::Interface(iface) => iface.methods.insert(name, method),
-        }
-    }
+    #[ctor(default)]
+    pub ifaces:   HashSet<(usize, usize)>,
+    #[ctor(default)]
+    pub methods:  SortedMap<String, Method>,
 }
 
 #[derive(Debug, Clone)]
@@ -236,7 +218,7 @@ pub struct FuncMethodInfo {
 #[derive(Debug, Clone, From)]
 pub enum TypeDefBody {
     Record(RecordType),
-    Interface(InterfaceType),
+    Interface,
 }
 
 #[derive(Debug, Clone)]
@@ -250,17 +232,7 @@ pub type TypeVarIdx = usize;
 #[derive(Debug, Clone, ctor)]
 pub struct RecordType {
     #[ctor(default)]
-    pub ifaces:  HashSet<(usize, usize)>,
-    #[ctor(default)]
-    pub fields:  SortedMap<String, RecordField>,
-    #[ctor(default)]
-    pub methods: SortedMap<String, Method>,
-}
-
-#[derive(Debug, Clone, ctor)]
-pub struct InterfaceType {
-    #[ctor(default)]
-    pub methods: SortedMap<String, Method>,
+    pub fields: SortedMap<String, RecordField>,
 }
 
 #[derive(Debug, Clone, ctor)]

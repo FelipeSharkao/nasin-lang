@@ -123,13 +123,13 @@ impl<'a> CodegenContext<'a> {
     }
 
     pub fn insert_type(&mut self, mod_idx: usize, idx: usize) {
-        let ty = &self.modules[mod_idx].typedefs[idx];
-        match &ty.body {
-            b::TypeDefBody::Record(rec) => {
-                self.insert_record_type(mod_idx, idx, rec);
+        let typedef = &self.modules[mod_idx].typedefs[idx];
+        match &typedef.body {
+            b::TypeDefBody::Record(..) => {
+                self.insert_record_type(mod_idx, idx, typedef);
             }
-            b::TypeDefBody::Interface(iface) => {
-                self.insert_interface_type(mod_idx, idx, iface);
+            b::TypeDefBody::Interface => {
+                self.insert_interface_type(mod_idx, idx, typedef);
             }
         }
     }
@@ -294,11 +294,12 @@ impl<'a> CodegenContext<'a> {
         &mut self,
         mod_idx: usize,
         idx: usize,
-        rec: &b::RecordType,
+        typedef: &b::TypeDef,
     ) -> Vec<cl::DataId> {
         let key = (mod_idx, idx);
 
-        rec.ifaces
+        typedef
+            .ifaces
             .iter()
             .map(|iface_key| {
                 let key = types::VTableRef::new(*iface_key, key);
@@ -306,9 +307,8 @@ impl<'a> CodegenContext<'a> {
                     return *data_id;
                 }
 
-                let b::TypeDefBody::Interface(iface) =
-                    &self.modules[iface_key.0].typedefs[iface_key.1].body
-                else {
+                let iface_def = &self.modules[iface_key.0].typedefs[iface_key.1];
+                let b::TypeDefBody::Interface = &iface_def.body else {
                     panic!(
                         "type {}-{} should be an interface, I don't know what I got",
                         iface_key.0, iface_key.1
@@ -316,14 +316,14 @@ impl<'a> CodegenContext<'a> {
                 };
 
                 let vtable_desc =
-                    self.insert_interface_type(iface_key.0, iface_key.1, iface);
+                    self.insert_interface_type(iface_key.0, iface_key.1, iface_def);
 
                 let tuple = vtable_desc
                     .methods
                     .clone()
                     .iter()
                     .map(|m| {
-                        let func_ref = rec.methods[m].func_ref;
+                        let func_ref = typedef.methods[m].func_ref;
                         let func_id = self.funcs[&func_ref]
                             .func_id
                             .expect("Function should be defined");
@@ -345,10 +345,10 @@ impl<'a> CodegenContext<'a> {
         &mut self,
         mod_idx: usize,
         idx: usize,
-        iface: &b::InterfaceType,
+        typedef: &b::TypeDef,
     ) -> &types::VTableDesc {
         self.vtables_desc.entry((mod_idx, idx)).or_insert_with(|| {
-            types::VTableDesc::new(iface.methods.keys().cloned().collect())
+            types::VTableDesc::new(typedef.methods.keys().cloned().collect())
         })
     }
 }

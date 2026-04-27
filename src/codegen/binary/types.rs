@@ -338,8 +338,8 @@ pub fn take_value_from_args(
         b::TypeBody::TypeRef(ty_ref) => {
             let typebody = &modules[ty_ref.mod_idx].typedefs[ty_ref.idx].body;
             match typebody {
-                b::TypeDefBody::Interface(_) => DynDispatched::new(next(), next()).into(),
                 b::TypeDefBody::Record(_) => ValueSource::Ptr(next()),
+                b::TypeDefBody::Interface => DynDispatched::new(next(), next()).into(),
             }
         }
         b::TypeBody::String | b::TypeBody::Array(_) => Box::new(Slice::new(
@@ -367,7 +367,7 @@ pub fn get_type_canonical(
         b::TypeBody::TypeRef(t) if t.is_self => vec![cl_module.isa().pointer_type()],
         b::TypeBody::TypeRef(t) => match &modules[t.mod_idx].typedefs[t.idx].body {
             b::TypeDefBody::Record(_) => vec![cl_module.isa().pointer_type()],
-            b::TypeDefBody::Interface(_) => vec![cl_module.isa().pointer_type(); 2],
+            b::TypeDefBody::Interface => vec![cl_module.isa().pointer_type(); 2],
         },
         b::TypeBody::Ptr(_) => vec![cl_module.isa().pointer_type()],
         _ => get_type_by_type(ty, modules, cl_module),
@@ -400,7 +400,7 @@ pub fn get_type_by_type(
                 .values()
                 .flat_map(|field| get_type_by_type(&field.ty, modules, cl_module))
                 .collect_vec(),
-            b::TypeDefBody::Interface(_) => vec![cl_module.isa().pointer_type(); 2],
+            b::TypeDefBody::Interface => vec![cl_module.isa().pointer_type(); 2],
         },
         b::TypeBody::Func(_) | b::TypeBody::String | b::TypeBody::Array(_) => {
             vec![cl_module.isa().pointer_type(); 2]
@@ -431,7 +431,7 @@ pub fn get_size(ty: &b::Type, modules: &[b::Module], cl_module: &impl cl::Module
                 .flat_map(|field| get_type_by_type(&field.ty, modules, cl_module))
                 .map(|ty| ty.bytes())
                 .sum(),
-            b::TypeDefBody::Interface(_) => ptr * 2,
+            b::TypeDefBody::Interface => ptr * 2,
         },
         b::TypeBody::Bool
         | b::TypeBody::I8

@@ -199,24 +199,29 @@ impl<'a> Printer<'a> {
             write!(header, " (type {idx})")?;
         }
 
+        for (i, (mod_idx, ty_idx)) in typedef.ifaces.iter().sorted().enumerate() {
+            if i == 0 {
+                write!(header, ": ")?;
+            } else {
+                write!(header, ", ")?;
+            }
+            self.write_type_ref(header, &TypeRef::new(*mod_idx, *ty_idx))?;
+        }
+
         match &typedef.body {
+            TypeDefBody::Record(_) => {}
+            TypeDefBody::Interface => write!(header, " interface")?,
+        }
+
+        write!(header, " {{")?;
+
+        if !self.reconstruct {
+            let loc_comment = table.push_cell();
+            self.write_loc_comment(loc_comment, Some(&typedef.loc))?;
+        }
+
+        let has_body = match &typedef.body {
             TypeDefBody::Record(rec) => {
-                for (i, (mod_idx, ty_idx)) in rec.ifaces.iter().sorted().enumerate() {
-                    if i == 0 {
-                        write!(header, ": ")?;
-                    } else {
-                        write!(header, ", ")?;
-                    }
-                    self.write_type_ref(header, &TypeRef::new(*mod_idx, *ty_idx))?;
-                }
-
-                write!(header, " {{")?;
-
-                if !self.reconstruct {
-                    let loc_comment = table.push_cell();
-                    self.write_loc_comment(loc_comment, Some(&typedef.loc))?;
-                }
-
                 for (name, field) in &rec.fields {
                     table.start_row();
                     let line = table.push_cell();
@@ -229,76 +234,46 @@ impl<'a> Printer<'a> {
                     }
                 }
 
-                for (name, method) in &rec.methods {
-                    table.start_row();
-                    let line = table.push_cell();
-                    let func = &self.modules[method.func_ref.0].funcs[method.func_ref.1];
-                    write!(line, "{S:indent$}  ")?;
-                    self.write_method_signature(
-                        line,
-                        name,
-                        &self.modules[method.func_ref.0],
-                        func,
-                    )?;
-
-                    if !self.reconstruct && self.show_ids {
-                        write!(
-                            line,
-                            " (func {}-{})",
-                            method.func_ref.0, method.func_ref.1
-                        )?;
-                    }
-
-                    if !self.reconstruct {
-                        let loc_comment = table.push_cell();
-                        self.write_loc_comment(loc_comment, Some(&method.loc))?;
-                    }
-                }
-
-                table.end_row();
-                let line = table.push_cell();
-                write!(line, "{S:indent$}}}")?;
+                !rec.fields.is_empty()
             }
-            TypeDefBody::Interface(iface) => {
-                write!(header, " interface {{")?;
+            TypeDefBody::Interface => false,
+        };
 
-                if !self.reconstruct {
-                    let loc_comment = table.push_cell();
-                    self.write_loc_comment(loc_comment, Some(&typedef.loc))?;
-                }
+        if has_body && !typedef.methods.is_empty() {
+            table.start_row();
+            table.end_row();
+        }
 
-                for (name, method) in &iface.methods {
-                    table.start_row();
-                    let line = table.push_cell();
-                    let func = &self.modules[method.func_ref.0].funcs[method.func_ref.1];
-                    write!(line, "{S:indent$}  ")?;
-                    self.write_method_signature(
-                        line,
-                        name,
-                        &self.modules[method.func_ref.0],
-                        func,
-                    )?;
+        for (name, method) in &typedef.methods {
+            table.start_row();
+            let line = table.push_cell();
+            let func = &self.modules[method.func_ref.0].funcs[method.func_ref.1];
+            write!(line, "{S:indent$}  ")?;
+            self.write_method_signature(
+                line,
+                name,
+                &self.modules[method.func_ref.0],
+                func,
+            )?;
 
-                    if !self.reconstruct && self.show_ids {
-                        let loc_comment = table.push_cell();
-                        write!(
-                            loc_comment,
-                            " (func {}-{})",
-                            method.func_ref.0, method.func_ref.1
-                        )?;
-                    }
+            if !self.reconstruct && self.show_ids {
+                let loc_comment = table.push_cell();
+                write!(
+                    loc_comment,
+                    " (func {}-{})",
+                    method.func_ref.0, method.func_ref.1
+                )?;
+            }
 
-                    if !self.reconstruct {
-                        let loc_comment = table.push_cell();
-                        self.write_loc_comment(loc_comment, Some(&method.loc))?;
-                    }
-                }
-
-                table.end_row();
-                let line = table.push_cell();
-                write!(line, "{S:indent$}}}")?;
+            if !self.reconstruct {
+                let loc_comment = table.push_cell();
+                self.write_loc_comment(loc_comment, Some(&method.loc))?;
             }
         }
+
+        table.start_row();
+        let line = table.push_cell();
+        write!(line, "{S:indent$}}}")?;
 
         write!(f, "{table}")?;
 

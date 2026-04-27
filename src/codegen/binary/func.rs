@@ -611,10 +611,11 @@ impl<'a> FuncCodegen<'a, '_> {
                     panic!("type should be a typeref");
                 };
 
-                match &self.ctx.modules[ty_ref.mod_idx].typedefs[ty_ref.idx].body {
-                    b::TypeDefBody::Record(rec) => {
+                let typedef = &self.ctx.modules[ty_ref.mod_idx].typedefs[ty_ref.idx];
+                match &typedef.body {
+                    b::TypeDefBody::Record(..) => {
                         let value = self.add_by_ref(&source.src.clone());
-                        let method = &rec.methods[name];
+                        let method = &typedef.methods[name];
 
                         self.values.insert(
                             (mod_idx, instr.results[0]),
@@ -625,7 +626,7 @@ impl<'a> FuncCodegen<'a, '_> {
                             ),
                         );
                     }
-                    b::TypeDefBody::Interface(iface) => {
+                    b::TypeDefBody::Interface => {
                         let (src, vtable) = match &source.src {
                             types::ValueSource::DynDispatched(dispatched) => {
                                 (dispatched.src, dispatched.vtable)
@@ -650,7 +651,7 @@ impl<'a> FuncCodegen<'a, '_> {
                             }
                         };
 
-                        let method = &iface.methods[name];
+                        let method = &typedef.methods[name];
 
                         let offset = self
                             .ctx
@@ -1282,7 +1283,7 @@ impl<'a> FuncCodegen<'a, '_> {
             b::TypeBody::TypeRef(t) => {
                 match &self.ctx.modules[t.mod_idx].typedefs[t.idx].body {
                     b::TypeDefBody::Record(_) => vec![self.add_by_ref(src)],
-                    b::TypeDefBody::Interface(_) => self.add_by_value(src, ty),
+                    b::TypeDefBody::Interface => self.add_by_value(src, ty),
                 }
             }
             b::TypeBody::Ptr(_) => vec![self.add_by_ref(src)],

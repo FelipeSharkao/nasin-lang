@@ -189,7 +189,7 @@ impl Type {
         match &self.body {
             TypeBody::String | TypeBody::Array(_) => true,
             TypeBody::TypeRef(t) => match &modules[t.mod_idx].typedefs[t.idx].body {
-                TypeDefBody::Record(_) | TypeDefBody::Interface(_) => true,
+                TypeDefBody::Record(_) | TypeDefBody::Interface => true,
             },
             _ => false,
         }
@@ -711,14 +711,14 @@ impl TypeRef {
                 (_, _, def_body!(TypeDefBody::Record(_))),
             )
             | (
-                (_, _, def_body!(TypeDefBody::Interface(_))),
-                (_, _, def_body!(TypeDefBody::Interface(_))),
+                (_, _, def_body!(TypeDefBody::Interface)),
+                (_, _, def_body!(TypeDefBody::Interface)),
             ) if self.is_same_of(other) => (self.mod_idx, other.idx),
             unordered!(
-                (r_mod_idx, r_ty_idx, def_body!(TypeDefBody::Record(rec))),
-                (i_mod_idx, i_ty_idx, def_body!(TypeDefBody::Interface(..))),
+                (r_mod_idx, r_ty_idx, rec_def @ def_body!(TypeDefBody::Record(..))),
+                (i_mod_idx, i_ty_idx, def_body!(TypeDefBody::Interface)),
             ) => {
-                let extends = rec.ifaces.iter().any(|(mod_idx, ty_idx)| {
+                let extends = rec_def.ifaces.iter().any(|(mod_idx, ty_idx)| {
                     i_mod_idx == *mod_idx && i_ty_idx == *ty_idx
                 });
                 if !extends {
@@ -763,7 +763,7 @@ impl TypeRef {
                     Some(Cow::Borrowed(ty))
                 }
             }
-            TypeDefBody::Interface(_) => None,
+            TypeDefBody::Interface => None,
         }
     }
 
@@ -773,10 +773,7 @@ impl TypeRef {
         modules: &'a [Module],
     ) -> Option<Cow<'a, Type>> {
         let typedef = modules.get(self.mod_idx)?.typedefs.get(self.idx)?;
-        let method = match &typedef.body {
-            TypeDefBody::Record(rec) => rec.methods.get(name),
-            TypeDefBody::Interface(iface) => iface.methods.get(name),
-        }?;
+        let method = typedef.methods.get(name)?;
         let method_mod = modules.get(method.func_ref.0)?;
         let func = &method_mod.funcs[method.func_ref.1];
 
@@ -856,9 +853,9 @@ impl TypeRef {
     pub fn to_inferred(&self, modules: &[Module]) -> InferredType {
         let def = &modules[self.mod_idx].typedefs[self.idx];
 
-        let (fields, methods) = match &def.body {
-            TypeDefBody::Record(rec) => (&rec.fields, &rec.methods),
-            TypeDefBody::Interface(iface) => (&SortedMap::new(), &iface.methods),
+        let fields = match &def.body {
+            TypeDefBody::Record(rec) => &rec.fields,
+            TypeDefBody::Interface => &SortedMap::new(),
         };
 
         let mut members = utils::SortedMap::new();
@@ -871,7 +868,7 @@ impl TypeRef {
             members.insert(name.to_string(), ty.clone().into_owned());
         }
 
-        for name in chain!(fields.keys(), methods.keys()).unique() {
+        for name in chain!(fields.keys(), def.methods.keys()).unique() {
             let Some(ty) = self.property(name, modules) else {
                 continue;
             };

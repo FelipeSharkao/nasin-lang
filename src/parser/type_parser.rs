@@ -134,21 +134,16 @@ impl<'a, 't> TypeParser<'a, 't> {
         let body_node = node.required_field("body");
         let body = match body_node.kind() {
             "record_type" => b::TypeDefBody::Record(b::RecordType::new()),
-            "interface_type" => b::TypeDefBody::Interface(b::InterfaceType::new()),
+            "interface_type" => b::TypeDefBody::Interface,
             v => panic!("Unexpected type body kind: {v}"),
         };
 
-        let generics = node
-            .iter_field("params")
-            .map(|_| b::TypeVarIdx::MAX)
-            .collect_vec();
-
-        let value = b::TypeDef {
+        let value = b::TypeDef::new(
             name,
             body,
-            loc: b::Loc::from_node(self.src_idx, &node),
-            generics,
-        };
+            b::Loc::from_node(self.src_idx, &node),
+            node.iter_field("params").map(|_| b::TypeVarIdx::MAX),
+        );
         self.idents.insert(
             value.name.last_ident().to_string(),
             b::TypeRef::new(self.mod_idx, self.typedefs.len()).into(),
@@ -167,10 +162,10 @@ impl<'a, 't> TypeParser<'a, 't> {
         method: b::Method,
     ) {
         if ty_mod_idx == self.mod_idx {
-            self.typedefs[ty_idx].typedef.add_method(name, method);
+            self.typedefs[ty_idx].typedef.methods.insert(name, method);
         } else {
             let module = &mut self.ctx.lock_modules_mut()[ty_mod_idx];
-            module.typedefs[ty_idx].add_method(name, method);
+            module.typedefs[ty_idx].methods.insert(name, method);
         }
     }
 
@@ -221,6 +216,26 @@ impl<'a, 't> TypeParser<'a, 't> {
             })
             .collect_vec();
 
+        let implements = node
+            .iter_field("assertion")
+            .map(|ty_node| self.parse_type_expr(ty_node))
+            .filter_map(|ty| match ty.body {
+                b::TypeBody::TypeRef(t) => Some((t.mod_idx, t.idx)),
+                _ => {
+                    self.ctx.push_error(errors::Error::new(
+                        errors::TypeNotInterface::new(
+                            &ty,
+                            &self.ctx.lock_modules(),
+                            &self.ctx.cfg,
+                        )
+                        .into(),
+                        Some(b::Loc::from_node(self.src_idx, &node)),
+                    ));
+                    None
+                }
+            })
+            .collect();
+
         let body_node = node.required_field("body");
         let body = match (body_node.kind(), &typedef.typedef.body) {
             ("record_type", b::TypeDefBody::Record(rec)) => {
@@ -246,41 +261,19 @@ impl<'a, 't> TypeParser<'a, 't> {
                     })
                     .collect();
 
-                let implements = node
-                    .iter_field("assertion")
-                    .map(|ty_node| self.parse_type_expr(ty_node))
-                    .filter_map(|ty| match ty.body {
-                        b::TypeBody::TypeRef(t) => Some((t.mod_idx, t.idx)),
-                        _ => {
-                            self.ctx.push_error(errors::Error::new(
-                                errors::TypeNotInterface::new(
-                                    &ty,
-                                    &self.ctx.lock_modules(),
-                                    &self.ctx.cfg,
-                                )
-                                .into(),
-                                Some(b::Loc::from_node(self.src_idx, &node)),
-                            ));
-                            None
-                        }
-                    })
-                    .collect();
-
                 b::TypeDefBody::Record(b::RecordType {
                     fields,
-                    ifaces: implements,
                     ..rec.clone()
                 })
             }
-            ("interface_type", b::TypeDefBody::Interface(iface)) => {
-                b::TypeDefBody::Interface(iface.clone())
-            }
+            ("interface_type", b::TypeDefBody::Interface) => b::TypeDefBody::Interface,
             _ => unreachable!(),
         };
 
         let typedef = &mut self.typedefs[i];
         typedef.typedef.body = body;
         typedef.typedef.generics = generics;
+        typedef.typedef.ifaces = implements;
     }
 }
 
