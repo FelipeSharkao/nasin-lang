@@ -96,6 +96,17 @@ impl<'a> Printer<'a> {
         let prev_mod_idx = self.cur_mod_idx;
         self.cur_mod_idx = Some(mod_idx);
 
+        for (i, _) in module.types_meta.iter().enumerate() {
+            // Skip typedefs that are already printed as part of a typedef
+            if module.typedefs.iter().any(|t| t.meta_idx == i) {
+                continue;
+            }
+
+            writeln!(f)?;
+            self.write_type_meta_in(f, &mut bump, module, i, 2)?;
+            writeln!(f)?;
+        }
+
         for (i, _) in module.typedefs.iter().enumerate() {
             writeln!(f)?;
             self.write_typedef_in(f, &mut bump, module, i, 2)?;
@@ -161,6 +172,96 @@ impl<'a> Printer<'a> {
         Ok(())
     }
 
+    fn write_type_meta_in(
+        &mut self,
+        f: &mut impl Write,
+        bump: &mut BumpScope,
+        module: &Module,
+        idx: usize,
+        indent: usize,
+    ) -> fmt::Result {
+        let mut guard = bump.scope_guard();
+        let bump = guard.scope().by_value();
+
+        let mut table = BumpTable::new_in(&bump);
+
+        let type_meta = &module.types_meta[idx];
+
+        let header = table.push_cell();
+        write!(header, "{S:indent$}type_meta ")?;
+
+        if self.show_ids && !self.reconstruct {
+            write!(header, " (type_meta {idx})")?;
+        }
+
+        self.write_type_meta_ifaces(header, type_meta)?;
+
+        write!(header, " {{")?;
+
+        self.write_type_meta_methods_tabled(&mut table, type_meta, indent + 2)?;
+
+        table.start_row();
+        let line = table.push_cell();
+        write!(line, "{S:indent$}}}")?;
+
+        write!(f, "{table}")?;
+
+        Ok(())
+    }
+
+    fn write_type_meta_ifaces(
+        &mut self,
+        f: &mut impl Write,
+        type_meta: &TypeMeta,
+    ) -> fmt::Result {
+        for (i, (mod_idx, ty_idx)) in type_meta.ifaces.iter().sorted().enumerate() {
+            if i == 0 {
+                write!(f, ": ")?;
+            } else {
+                write!(f, ", ")?;
+            }
+            self.write_type_ref(f, &TypeRef::new(*mod_idx, *ty_idx))?;
+        }
+
+        Ok(())
+    }
+
+    fn write_type_meta_methods_tabled<'t, 'b: 't>(
+        &mut self,
+        table: &'t mut BumpTable<&'b BumpScope<'b>>,
+        type_meta: &TypeMeta,
+        indent: usize,
+    ) -> fmt::Result {
+        for (name, method) in &type_meta.methods {
+            table.start_row();
+            let line = table.push_cell();
+            let func = &self.modules[method.func_ref.0].funcs[method.func_ref.1];
+            write!(line, "{S:indent$}")?;
+            self.write_method_signature(
+                line,
+                name,
+                &self.modules[method.func_ref.0],
+                func,
+            )?;
+
+            if !self.reconstruct && self.show_ids {
+                let loc_comment = table.push_cell();
+                write!(
+                    loc_comment,
+                    " (func {}-{})",
+                    method.func_ref.0, method.func_ref.1
+                )?;
+            }
+
+            if !self.reconstruct {
+                let loc_comment = table.push_cell();
+                self.write_loc_comment(loc_comment, Some(&method.loc))?;
+            }
+        }
+
+        Ok(())
+    }
+
     fn write_typedef_in(
         &mut self,
         f: &mut impl Write,
@@ -175,6 +276,7 @@ impl<'a> Printer<'a> {
         let mut table = BumpTable::new_in(&bump);
 
         let typedef = &module.typedefs[idx];
+        let type_meta = &module.types_meta[typedef.meta_idx];
 
         let header = table.push_cell();
         write!(header, "{S:indent$}type ")?;
@@ -196,17 +298,10 @@ impl<'a> Printer<'a> {
         }
 
         if self.show_ids && !self.reconstruct {
-            write!(header, " (type {idx})")?;
+            write!(header, " (type {idx}, type_meta {})", typedef.meta_idx)?;
         }
 
-        for (i, (mod_idx, ty_idx)) in typedef.ifaces.iter().sorted().enumerate() {
-            if i == 0 {
-                write!(header, ": ")?;
-            } else {
-                write!(header, ", ")?;
-            }
-            self.write_type_ref(header, &TypeRef::new(*mod_idx, *ty_idx))?;
-        }
+        self.write_type_meta_ifaces(header, type_meta)?;
 
         match &typedef.body {
             TypeDefBody::Record(_) => {}
@@ -239,37 +334,12 @@ impl<'a> Printer<'a> {
             TypeDefBody::Interface => false,
         };
 
-        if has_body && !typedef.methods.is_empty() {
+        if has_body && !type_meta.methods.is_empty() {
             table.start_row();
             table.end_row();
         }
 
-        for (name, method) in &typedef.methods {
-            table.start_row();
-            let line = table.push_cell();
-            let func = &self.modules[method.func_ref.0].funcs[method.func_ref.1];
-            write!(line, "{S:indent$}  ")?;
-            self.write_method_signature(
-                line,
-                name,
-                &self.modules[method.func_ref.0],
-                func,
-            )?;
-
-            if !self.reconstruct && self.show_ids {
-                let loc_comment = table.push_cell();
-                write!(
-                    loc_comment,
-                    " (func {}-{})",
-                    method.func_ref.0, method.func_ref.1
-                )?;
-            }
-
-            if !self.reconstruct {
-                let loc_comment = table.push_cell();
-                self.write_loc_comment(loc_comment, Some(&method.loc))?;
-            }
-        }
+        self.write_type_meta_methods_tabled(&mut table, type_meta, indent + 2)?;
 
         table.start_row();
         let line = table.push_cell();

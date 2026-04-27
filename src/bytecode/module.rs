@@ -13,6 +13,7 @@ use super::value::*;
 use crate::utils::SortedMap;
 
 pub type BlockIdx = usize;
+pub type TypeMetaIdx = usize;
 
 #[derive(Debug, Clone, Default, ctor)]
 pub struct Block {
@@ -46,21 +47,23 @@ impl FromIterator<Instr> for Block {
 
 #[derive(Debug, Clone, ctor)]
 pub struct Module {
-    pub idx:      usize,
-    pub name:     Name,
+    pub idx:        usize,
+    pub name:       Name,
     #[ctor(default)]
-    pub values:   Vec<Value>,
+    pub values:     Vec<Value>,
     #[ctor(default)]
-    pub typedefs: Vec<TypeDef>,
+    pub types_meta: Vec<TypeMeta>,
     #[ctor(default)]
-    pub typevars: Vec<TypeVarDef>,
+    pub typedefs:   Vec<TypeDef>,
     #[ctor(default)]
-    pub globals:  Vec<Global>,
+    pub typevars:   Vec<TypeVarDef>,
     #[ctor(default)]
-    pub funcs:    Vec<Func>,
+    pub globals:    Vec<Global>,
     #[ctor(default)]
-    pub blocks:   Vec<Block>,
-    pub sources:  HashSet<Source>,
+    pub funcs:      Vec<Func>,
+    #[ctor(default)]
+    pub blocks:     Vec<Block>,
+    pub sources:    HashSet<Source>,
 }
 
 impl Module {
@@ -171,16 +174,21 @@ pub trait BlockTransformer {
 }
 
 #[derive(Debug, Clone, ctor)]
+pub struct TypeMeta {
+    #[ctor(default)]
+    pub ifaces:  HashSet<(usize, usize)>,
+    #[ctor(default)]
+    pub methods: SortedMap<String, Method>,
+}
+
+#[derive(Debug, Clone, ctor)]
 pub struct TypeDef {
     pub name:     Name,
+    pub meta_idx: TypeMetaIdx,
     pub body:     TypeDefBody,
     pub loc:      Loc,
     #[ctor(iter(TypeVarIdx))]
     pub generics: Vec<TypeVarIdx>,
-    #[ctor(default)]
-    pub ifaces:   HashSet<(usize, usize)>,
-    #[ctor(default)]
-    pub methods:  SortedMap<String, Method>,
 }
 
 #[derive(Debug, Clone)]
@@ -212,7 +220,7 @@ pub struct Func {
 pub struct FuncMethodInfo {
     pub name:    String,
     pub mod_idx: usize,
-    pub ty_idx:  usize,
+    pub ty_idx_: usize,
 }
 
 #[derive(Debug, Clone, From)]

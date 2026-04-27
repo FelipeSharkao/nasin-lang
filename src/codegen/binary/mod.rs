@@ -99,8 +99,8 @@ impl BinaryCodegen<'_> {
                 self.insert_function(mod_idx, idx);
             }
 
-            for idx in 0..self.ctx.modules[mod_idx].typedefs.len() {
-                self.insert_type(mod_idx, idx);
+            for idx in 0..self.ctx.modules[mod_idx].types_meta.len() {
+                self.insert_type_meta(mod_idx, idx);
             }
         }
 
@@ -199,8 +199,8 @@ impl BinaryCodegen<'_> {
         self.declared_funcs.insert((mod_idx, idx), func);
     }
 
-    fn insert_type(&mut self, mod_idx: usize, idx: usize) {
-        self.ctx.insert_type(mod_idx, idx);
+    fn insert_type_meta(&mut self, mod_idx: usize, idx: b::TypeMetaIdx) {
+        self.ctx.insert_type_meta(mod_idx, idx);
     }
 
     fn build_entry(&mut self) {

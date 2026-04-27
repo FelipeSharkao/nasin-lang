@@ -718,7 +718,8 @@ impl TypeRef {
                 (r_mod_idx, r_ty_idx, rec_def @ def_body!(TypeDefBody::Record(..))),
                 (i_mod_idx, i_ty_idx, def_body!(TypeDefBody::Interface)),
             ) => {
-                let extends = rec_def.ifaces.iter().any(|(mod_idx, ty_idx)| {
+                let rec_meta = &modules[r_mod_idx].types_meta[rec_def.meta_idx];
+                let extends = rec_meta.ifaces.iter().any(|(mod_idx, ty_idx)| {
                     i_mod_idx == *mod_idx && i_ty_idx == *ty_idx
                 });
                 if !extends {
@@ -772,8 +773,9 @@ impl TypeRef {
         name: &str,
         modules: &'a [Module],
     ) -> Option<Cow<'a, Type>> {
-        let typedef = modules.get(self.mod_idx)?.typedefs.get(self.idx)?;
-        let method = typedef.methods.get(name)?;
+        let typedef = &modules[self.mod_idx].typedefs[self.idx];
+        let type_meta = &modules[self.mod_idx].types_meta[typedef.meta_idx];
+        let method = type_meta.methods.get(name)?;
         let method_mod = modules.get(method.func_ref.0)?;
         let func = &method_mod.funcs[method.func_ref.1];
 
@@ -851,9 +853,10 @@ impl TypeRef {
     }
 
     pub fn to_inferred(&self, modules: &[Module]) -> InferredType {
-        let def = &modules[self.mod_idx].typedefs[self.idx];
+        let typedef = &modules[self.mod_idx].typedefs[self.idx];
+        let type_meta = &modules[self.mod_idx].types_meta[typedef.meta_idx];
 
-        let fields = match &def.body {
+        let fields = match &typedef.body {
             TypeDefBody::Record(rec) => &rec.fields,
             TypeDefBody::Interface => &SortedMap::new(),
         };
@@ -868,7 +871,7 @@ impl TypeRef {
             members.insert(name.to_string(), ty.clone().into_owned());
         }
 
-        for name in chain!(fields.keys(), def.methods.keys()).unique() {
+        for name in chain!(fields.keys(), type_meta.methods.keys()).unique() {
             let Some(ty) = self.property(name, modules) else {
                 continue;
             };

@@ -14,29 +14,29 @@ use crate::{bytecode as b, config, utils};
 
 #[derive(Debug)]
 pub struct FuncBinding {
-    pub is_extrn: bool,
-    pub is_virt: bool,
+    pub is_extrn:    bool,
+    pub is_virt:     bool,
     pub symbol_name: String,
-    pub func_id: Option<cl::FuncId>,
-    pub proto: types::FuncPrototype,
+    pub func_id:     Option<cl::FuncId>,
+    pub proto:       types::FuncPrototype,
 }
 
 #[derive(Debug, Clone)]
 pub struct GlobalBinding<'a> {
     #[allow(dead_code)]
     pub symbol_name: String,
-    pub value: types::RuntimeValue,
+    pub value:       types::RuntimeValue,
     #[allow(dead_code)]
-    pub ty: Cow<'a, b::Type>,
-    pub is_const: bool,
+    pub ty:          Cow<'a, b::Type>,
+    pub is_const:    bool,
 }
 
 #[derive(Debug)]
 pub struct FuncClosureBinding {
     pub symbol_name: String,
-    pub func_id: cl::FuncId,
-    pub func: cl::Function,
-    pub ret_policy: ReturnPolicy,
+    pub func_id:     cl::FuncId,
+    pub func:        cl::Function,
+    pub ret_policy:  ReturnPolicy,
 }
 impl Into<types::FuncPrototype> for &FuncClosureBinding {
     fn into(self) -> types::FuncPrototype {
@@ -122,14 +122,14 @@ impl<'a> CodegenContext<'a> {
         );
     }
 
-    pub fn insert_type(&mut self, mod_idx: usize, idx: usize) {
-        let typedef = &self.modules[mod_idx].typedefs[idx];
-        match &typedef.body {
+    pub fn insert_type_meta(&mut self, mod_idx: usize, idx: b::TypeMetaIdx) {
+        let type_meta = &self.modules[mod_idx].types_meta[idx];
+        match &type_meta.body {
             b::TypeDefBody::Record(..) => {
-                self.insert_record_type(mod_idx, idx, typedef);
+                self.insert_record_type(mod_idx, idx, type_meta);
             }
             b::TypeDefBody::Interface => {
-                self.insert_interface_type(mod_idx, idx, typedef);
+                self.insert_interface_type(mod_idx, idx, type_meta);
             }
         }
     }
@@ -290,15 +290,15 @@ impl<'a> CodegenContext<'a> {
         (func_id, proto)
     }
 
-    fn insert_record_type(
+    fn insert_type_impl(
         &mut self,
         mod_idx: usize,
         idx: usize,
-        typedef: &b::TypeDef,
+        type_meta: &b::TypeMeta,
     ) -> Vec<cl::DataId> {
         let key = (mod_idx, idx);
 
-        typedef
+        type_meta
             .ifaces
             .iter()
             .map(|iface_key| {
@@ -323,7 +323,7 @@ impl<'a> CodegenContext<'a> {
                     .clone()
                     .iter()
                     .map(|m| {
-                        let func_ref = typedef.methods[m].func_ref;
+                        let func_ref = type_meta.methods[m].func_ref;
                         let func_id = self.funcs[&func_ref]
                             .func_id
                             .expect("Function should be defined");
