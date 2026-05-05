@@ -1,14 +1,17 @@
 use derive_ctor::ctor;
+use nasin_macros::NumberEnum;
 
 use crate::bytecode as b;
-use crate::utils::{SortedMap, number_enum};
+use crate::utils::SortedMap;
 
-number_enum!(pub ConstraintPriority: u8 {
-    NoType = 0,
-    DerivedInferredType = 1,
-    DerivedDefinedType = 2,
-    DefinedType = 3,
-});
+#[derive(Debug, NumberEnum)]
+#[repr(u8)]
+pub enum ConstraintPriority {
+    NoType,
+    DerivedInferredType,
+    DerivedDefinedType,
+    DefinedType,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ConstraintKind {

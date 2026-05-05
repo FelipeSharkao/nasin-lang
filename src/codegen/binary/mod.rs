@@ -14,6 +14,7 @@ use std::mem;
 use cranelift_shim::settings::Configurable;
 use cranelift_shim::{self as cl, InstBuilder, Module};
 use itertools::Itertools;
+use nasin_macros::NumberEnum;
 use target_lexicon::Triple;
 
 use self::context::{CodegenContext, FuncBinding};
@@ -23,16 +24,20 @@ use self::name_mangling::NameMangler;
 use self::types::ReturnPolicy;
 use crate::{bytecode as b, cmd, config, sources, utils};
 
-utils::number_enum!(pub FuncNS: u32 {
-    User = 0,
-    SystemFunc = 1,
-    Helper = 2,
-});
+#[derive(Debug, NumberEnum)]
+#[repr(u32)]
+pub enum FuncNS {
+    User,
+    SystemFunc,
+    Helper,
+}
 
-utils::number_enum!(pub SystemFunc: u32 {
-    Start = 0,
-    Exit = 1,
-});
+#[derive(Debug, NumberEnum)]
+#[repr(u32)]
+pub enum SystemFunc {
+    Start,
+    Exit,
+}
 
 pub struct BinaryCodegen<'a> {
     ctx: CodegenContext<'a>,

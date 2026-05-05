@@ -2,7 +2,6 @@
 
 mod cmd;
 mod deadlock_guard;
-mod enumerate;
 mod paths;
 mod replace_with;
 mod scope_stack;
@@ -15,7 +14,6 @@ mod write_io;
 
 pub use self::cmd::*;
 pub use self::deadlock_guard::*;
-pub use self::enumerate::*;
 pub use self::paths::*;
 pub use self::replace_with::*;
 pub use self::scope_stack::*;

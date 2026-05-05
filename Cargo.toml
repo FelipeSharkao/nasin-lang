@@ -7,7 +7,7 @@ edition = "2024"
 license = "Apache-2.0"
 
 [workspace]
-members = ["cranelift-shim", "tree-sitter-nasin"]
+members = ["cranelift-shim", "nasin-macros", "tree-sitter-nasin"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -26,6 +26,7 @@ genawaiter = "0.99.1"
 gimli = "0.32.1"
 itertools = "0.14.0"
 lazy-init = "0.5.1"
+nasin-macros = { path = "nasin-macros" }
 object = "0.32.2"
 target-lexicon = "0.12.13"
 thiserror = "1.0.62"
