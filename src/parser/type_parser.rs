@@ -149,7 +149,7 @@ impl<'a, 't> TypeParser<'a, 't> {
             b::TypeRef::new(self.mod_idx, self.typedefs.len()).into(),
         );
         self.typedefs.push(DeclaredTypeDef {
-            typedef: value,
+            typedef:        value,
             type_decl_node: Some(node),
         });
     }
@@ -278,7 +278,7 @@ impl<'a, 't> TypeParser<'a, 't> {
 }
 
 pub struct DeclaredTypeDef<'t> {
-    pub typedef: b::TypeDef,
+    pub typedef:        b::TypeDef,
     pub type_decl_node: Option<ts::Node<'t>>,
 }
 

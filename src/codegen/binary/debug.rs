@@ -14,9 +14,9 @@ use crate::{bytecode as b, config, sources, utils};
 
 #[derive(Debug, Clone, ctor)]
 pub struct DebugFunction {
-    pub name: b::Name,
+    pub name:        b::Name,
     pub symbol_name: String,
-    pub loc: Option<b::Loc>,
+    pub loc:         Option<b::Loc>,
 }
 
 #[derive(Debug, Clone, ctor)]
@@ -42,8 +42,8 @@ impl<'a> DebugData<'a> {
 
     pub fn write_debug_sections(&mut self, object: &mut Object) {
         let encoding = gimli::Encoding {
-            format: gimli::Format::Dwarf32,
-            version: 5,
+            format:       gimli::Format::Dwarf32,
+            version:      5,
             address_size: 8,
         };
 
@@ -350,9 +350,9 @@ impl<'a> DebugData<'a> {
 #[derive(Debug, Clone, ctor)]
 struct DwarfSection {
     #[ctor(expr(EndianVec::new(LittleEndian)))]
-    bytes: EndianVec<LittleEndian>,
+    bytes:          EndianVec<LittleEndian>,
     #[ctor(default)]
-    relocs: Vec<Relocation>,
+    relocs:         Vec<Relocation>,
     #[ctor(default)]
     object_section: Option<object::write::SectionId>,
 }

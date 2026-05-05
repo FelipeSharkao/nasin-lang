@@ -167,8 +167,8 @@ const S: &str = "";
 
 #[derive(ctor)]
 struct TreeSitterDisplay<'t, 's> {
-    node: ts::Node<'t>,
-    source: &'s str,
+    node:         ts::Node<'t>,
+    source:       &'s str,
     #[ctor(default)]
     temp_strings: RefCell<Vec<String>>,
 }

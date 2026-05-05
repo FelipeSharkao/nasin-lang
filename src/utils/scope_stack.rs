@@ -131,14 +131,14 @@ impl<T: ScopePayload> ScopeStack<T> {
 pub struct Scope<T> {
     #[deref]
     #[deref_mut]
-    pub payload: T,
-    pub block_idx: b::BlockIdx,
+    pub payload:    T,
+    pub block_idx:  b::BlockIdx,
     #[ctor(expr(1))]
-    branches: usize,
+    branches:       usize,
     #[ctor(expr(0))]
     never_branches: usize,
     #[ctor(expr(false))]
-    is_never: bool,
+    is_never:       bool,
 }
 
 impl<T> Scope<T> {

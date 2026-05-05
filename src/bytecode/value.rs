@@ -6,12 +6,12 @@ use super::{Loc, Type};
 
 #[derive(Debug, Clone, ctor)]
 pub struct Value {
-    pub ty: Type,
-    pub loc: Option<Loc>,
+    pub ty:           Type,
+    pub loc:          Option<Loc>,
     /// Indicates that a value is not in use anymore and could be stripped during
     /// optimizations.
     #[ctor(expr(false))]
-    pub dead: bool,
+    pub dead:         bool,
     /// Indicates that a value was merged with another. Every processing and modification
     /// should be applied to that one instead. If present, this value may be removed and
     /// its uses replaced with the target value.

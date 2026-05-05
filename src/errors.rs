@@ -18,7 +18,7 @@ pub struct Error {
 #[derive(Debug, Clone, Error, ctor)]
 pub struct CompilerError {
     source_manager: Option<Arc<sources::SourceManager>>,
-    errors: Vec<Error>,
+    errors:         Vec<Error>,
 }
 impl fmt::Display for CompilerError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

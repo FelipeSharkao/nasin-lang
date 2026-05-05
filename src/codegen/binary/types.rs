@@ -10,8 +10,8 @@ use crate::bytecode as b;
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Display, ctor)]
 #[display("{value_idx}")]
 pub struct RuntimeValue {
-    pub src: ValueSource,
-    pub mod_idx: usize,
+    pub src:       ValueSource,
+    pub mod_idx:   usize,
     pub value_idx: b::ValueIdx,
 }
 

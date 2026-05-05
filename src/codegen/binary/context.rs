@@ -14,29 +14,29 @@ use crate::{bytecode as b, config, utils};
 
 #[derive(Debug)]
 pub struct FuncBinding {
-    pub is_extrn: bool,
-    pub is_virt: bool,
+    pub is_extrn:    bool,
+    pub is_virt:     bool,
     pub symbol_name: String,
-    pub func_id: Option<cl::FuncId>,
-    pub proto: types::FuncPrototype,
+    pub func_id:     Option<cl::FuncId>,
+    pub proto:       types::FuncPrototype,
 }
 
 #[derive(Debug, Clone)]
 pub struct GlobalBinding<'a> {
     #[allow(dead_code)]
     pub symbol_name: String,
-    pub value: types::RuntimeValue,
+    pub value:       types::RuntimeValue,
     #[allow(dead_code)]
-    pub ty: Cow<'a, b::Type>,
-    pub is_const: bool,
+    pub ty:          Cow<'a, b::Type>,
+    pub is_const:    bool,
 }
 
 #[derive(Debug)]
 pub struct FuncClosureBinding {
     pub symbol_name: String,
-    pub func_id: cl::FuncId,
-    pub func: cl::Function,
-    pub ret_policy: ReturnPolicy,
+    pub func_id:     cl::FuncId,
+    pub func:        cl::Function,
+    pub ret_policy:  ReturnPolicy,
 }
 impl Into<types::FuncPrototype> for &FuncClosureBinding {
     fn into(self) -> types::FuncPrototype {

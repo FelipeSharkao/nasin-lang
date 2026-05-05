@@ -20,22 +20,22 @@ const SELF_TYPE_INDENT: &str = "Self";
 #[derive(ctor)]
 pub struct ModuleParser<'a, 't> {
     #[ctor(expr(TypeParser::new(ctx, src_idx, mod_idx)))]
-    pub types: TypeParser<'a, 't>,
+    pub types:        TypeParser<'a, 't>,
     #[ctor(default)]
-    pub globals: Vec<DeclaredGlobal<'t>>,
+    pub globals:      Vec<DeclaredGlobal<'t>>,
     #[ctor(default)]
-    pub funcs: Vec<DeclaredFunc<'t>>,
+    pub funcs:        Vec<DeclaredFunc<'t>>,
     #[ctor(default)]
-    pub values: Vec<b::Value>,
+    pub values:       Vec<b::Value>,
     #[ctor(default)]
-    pub blocks: Vec<b::Block>,
+    pub blocks:       Vec<b::Block>,
     #[ctor(default)]
-    pub idents: HashMap<String, ValueRef>,
+    pub idents:       HashMap<String, ValueRef>,
     #[ctor(default)]
     pub typevar_defs: Vec<b::TypeVarDef>,
-    pub ctx: &'a context::BuildContext,
-    pub src_idx: usize,
-    pub mod_idx: usize,
+    pub ctx:          &'a context::BuildContext,
+    pub src_idx:      usize,
+    pub mod_idx:      usize,
 }
 
 impl<'a, 't> ModuleParser<'a, 't> {
@@ -447,5 +447,5 @@ pub struct DeclaredParam<'t> {
 pub struct DeclaredGlobal<'t> {
     pub global: b::Global,
     value_node: ts::Node<'t>,
-    ty: b::Type,
+    ty:         b::Type,
 }

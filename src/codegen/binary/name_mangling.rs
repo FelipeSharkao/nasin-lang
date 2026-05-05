@@ -14,7 +14,7 @@ static PFX: &str = "_n";
 /// Therefore, all names are are considered nested
 #[derive(Debug, ctor)]
 pub struct NameMangler<'a> {
-    pub modules: &'a [b::Module],
+    pub modules:        &'a [b::Module],
     #[ctor(default)]
     substitution_table: HashMap<Vec<b::NameNode>, usize>,
 }
