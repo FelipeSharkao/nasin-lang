@@ -79,9 +79,8 @@ impl<'a> CodeTransformStep for InstantiateGenericFuncsStep<'a> {
                     return;
                 };
 
-                let ty_mod_idx = type_ref.mod_idx;
-                let ty_idx = type_ref.idx;
-                let typedef = &modules[ty_mod_idx].typedefs[ty_idx];
+                let type_ref_key = type_ref.key;
+                let typedef = type_ref_key.get_typedef(modules);
 
                 let prop = prop.clone();
                 let Some(method) = typedef.methods.get(&prop) else {
@@ -100,16 +99,21 @@ impl<'a> CodeTransformStep for InstantiateGenericFuncsStep<'a> {
                     return;
                 };
 
-                let typedef = &mut modules[ty_mod_idx].typedefs[ty_idx];
+                let new_prop_name =
+                    b::Name::from_ident(&prop, b::NameIdentKind::Func, None)
+                        .with_type_params(
+                            tys.into_iter().map(|body| b::Type::new(body, None)),
+                            None,
+                        );
+
+                let mut new_prop = String::new();
+                b::Printer::new(&modules, &self.ctx.cfg)
+                    .write_name(&mut new_prop, &new_prop_name)
+                    .unwrap();
+
+                let typedef = &mut type_ref_key.get_typedef_mut(modules);
                 let mut new_method = typedef.methods.get(&prop).unwrap().clone();
                 new_method.func_ref.1 = new_func_idx;
-
-                let new_prop = b::Name::from_ident(prop, b::NameIdentKind::Func, None)
-                    .with_type_params(
-                        tys.into_iter().map(|body| b::Type::new(body, None)),
-                        None,
-                    )
-                    .to_string();
 
                 typedef.methods.insert(new_prop.clone(), new_method);
 

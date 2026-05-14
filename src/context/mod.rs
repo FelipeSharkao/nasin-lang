@@ -1,3 +1,4 @@
+mod builtins;
 mod runtime;
 
 use std::fs;
@@ -50,6 +51,10 @@ impl BuildContext {
     }
 
     pub fn parse(&self, src_idx: usize) -> usize {
+        if self.lock_modules().len() == b::BUILTINS_MODULE_IDX {
+            builtins::BuiltinsBuilder::new(self).build();
+        }
+
         let mut ts_parser = ts::Parser::new();
         ts_parser
             .set_language(&tree_sitter_nasin::LANGUAGE.into())

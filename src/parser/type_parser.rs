@@ -4,7 +4,7 @@ use derive_ctor::ctor;
 use itertools::Itertools;
 use tree_sitter as ts;
 
-use crate::utils::{IntoItem, TreeSitterUtils};
+use crate::utils::TreeSitterUtils;
 use crate::{bytecode as b, context, errors};
 
 pub const UNDEF_TYPEVAR: b::TypeVarIdx = usize::MAX;
@@ -34,7 +34,7 @@ impl<'a, 't> TypeParser<'a, 't> {
             "ident" => self.parse_type_ident_with_args(node, []),
             "array_type" => {
                 let item_ty = self.parse_type_expr(node.required_field("item_type"));
-                b::TypeBody::Array(item_ty.into())
+                b::TypeBody::builtin(b::BuiltinType::Array, [item_ty])
             }
             "generic_type" => {
                 let name_node = node.required_field("name");
@@ -94,17 +94,14 @@ impl<'a, 't> TypeParser<'a, 't> {
         match &mut body {
             b::TypeBody::TypeRef(type_ref) => {
                 let modules = self.ctx.lock_modules();
-                let decl = if type_ref.mod_idx == self.mod_idx {
-                    &self.typedefs[type_ref.idx].typedef
-                } else {
-                    &modules[type_ref.mod_idx].typedefs[type_ref.idx]
+                let decl = match type_ref.key {
+                    b::TypeRefKey::Custom { mod_idx, idx } if mod_idx == self.mod_idx => {
+                        &self.typedefs[idx].typedef
+                    }
+                    _ => type_ref.get_typedef(&*modules),
                 };
                 validate_args!(decl.generics.len() - type_ref.args.len());
                 type_ref.args.extend(args);
-            }
-            b::TypeBody::Ptr(item_ty @ None) => {
-                validate_args!(0, 1);
-                *item_ty = args.into_item(0).map(|ty| ty.into());
             }
             body if body.is_unknown() => {}
             _ => validate_args!(0),
@@ -146,7 +143,11 @@ impl<'a, 't> TypeParser<'a, 't> {
         );
         self.idents.insert(
             value.name.last_ident().to_string(),
-            b::TypeRef::new(self.mod_idx, self.typedefs.len()).into(),
+            b::TypeRef::new(b::TypeRefKey::Custom {
+                mod_idx: self.mod_idx,
+                idx:     self.typedefs.len(),
+            })
+            .into(),
         );
         self.typedefs.push(DeclaredTypeDef {
             typedef:        value,
@@ -154,32 +155,50 @@ impl<'a, 't> TypeParser<'a, 't> {
         });
     }
 
-    pub fn add_method(
-        &mut self,
-        ty_mod_idx: usize,
-        ty_idx: usize,
-        name: String,
-        method: b::Method,
-    ) {
-        if ty_mod_idx == self.mod_idx {
-            self.typedefs[ty_idx].typedef.methods.insert(name, method);
-        } else {
-            let module = &mut self.ctx.lock_modules_mut()[ty_mod_idx];
-            module.typedefs[ty_idx].methods.insert(name, method);
+    pub fn add_method(&mut self, ty: b::TypeRefKey, name: String, method: b::Method) {
+        match ty {
+            b::TypeRefKey::Custom { mod_idx, idx } if mod_idx == self.mod_idx => {
+                self.typedefs[idx].typedef.methods.insert(name, method);
+            }
+            b::TypeRefKey::Custom { mod_idx, idx } => {
+                let module = &mut self.ctx.lock_modules_mut()[mod_idx];
+                module.typedefs[idx].methods.insert(name, method);
+            }
+            b::TypeRefKey::Builtin(builtin_type) => {
+                let module = &mut self.ctx.lock_modules_mut()[b::BUILTINS_MODULE_IDX];
+                let typedef = module
+                    .typedefs
+                    .iter_mut()
+                    .find(|td| {
+                        matches!(&td.body, b::TypeDefBody::Builtin(b) if *b == builtin_type)
+                    })
+                    .expect("builtin type not found");
+                typedef.methods.insert(name, method);
+            }
         }
     }
 
     pub fn get_type_name<'s>(
         &'s self,
-        ty_mod_idx: usize,
-        ty_idx: usize,
+        ty: b::TypeRefKey,
         modules: &'s [b::Module],
     ) -> &'s b::Name {
-        if ty_mod_idx == self.mod_idx {
-            &self.typedefs[ty_idx].typedef.name
-        } else {
-            &modules[ty_mod_idx].typedefs[ty_idx].name
-        }
+        let typedef = match ty {
+            b::TypeRefKey::Custom { mod_idx, idx } if mod_idx == self.mod_idx => {
+                &self.typedefs[idx].typedef
+            }
+            b::TypeRefKey::Builtin(needle) if self.mod_idx == b::BUILTINS_MODULE_IDX => self
+                .typedefs
+                .iter()
+                .map(|x| &x.typedef)
+                .find(
+                    |def| matches!(&def.body, &b::TypeDefBody::Builtin(builtin) if builtin == needle),
+                )
+                .expect("builtin type not found")
+                ,
+            _ => &ty.get_typedef(modules),
+        };
+        &typedef.name
     }
 
     pub fn define_typedefs(&mut self) {
@@ -220,7 +239,7 @@ impl<'a, 't> TypeParser<'a, 't> {
             .iter_field("assertion")
             .map(|ty_node| self.parse_type_expr(ty_node))
             .filter_map(|ty| match ty.body {
-                b::TypeBody::TypeRef(t) => Some((t.mod_idx, t.idx)),
+                b::TypeBody::TypeRef(t) => Some(t.key),
                 _ => {
                     self.ctx.push_error(errors::Error::new(
                         errors::TypeNotInterface::new(
@@ -283,22 +302,23 @@ pub struct DeclaredTypeDef<'t> {
 }
 
 fn default_idents() -> HashMap<String, b::TypeBody> {
+    let builtin = |builtin: b::BuiltinType| b::TypeBody::builtin(builtin, []);
     HashMap::from([
-        ("void".to_string(), b::TypeBody::Void),
-        ("never".to_string(), b::TypeBody::Never),
-        ("bool".to_string(), b::TypeBody::Bool),
-        ("i8".to_string(), b::TypeBody::I8),
-        ("i16".to_string(), b::TypeBody::I16),
-        ("i32".to_string(), b::TypeBody::I32),
-        ("i64".to_string(), b::TypeBody::I64),
-        ("u8".to_string(), b::TypeBody::U8),
-        ("u16".to_string(), b::TypeBody::U16),
-        ("u32".to_string(), b::TypeBody::U32),
-        ("u64".to_string(), b::TypeBody::U64),
-        ("usize".to_string(), b::TypeBody::USize),
-        ("f32".to_string(), b::TypeBody::F32),
-        ("f64".to_string(), b::TypeBody::F64),
-        ("str".to_string(), b::TypeBody::String),
-        ("Ptr".to_string(), b::TypeBody::Ptr(None)),
+        ("void".to_string(), builtin(b::BuiltinType::Void)),
+        ("never".to_string(), builtin(b::BuiltinType::Never)),
+        ("bool".to_string(), builtin(b::BuiltinType::Bool)),
+        ("i8".to_string(), builtin(b::BuiltinType::I8)),
+        ("i16".to_string(), builtin(b::BuiltinType::I16)),
+        ("i32".to_string(), builtin(b::BuiltinType::I32)),
+        ("i64".to_string(), builtin(b::BuiltinType::I64)),
+        ("u8".to_string(), builtin(b::BuiltinType::U8)),
+        ("u16".to_string(), builtin(b::BuiltinType::U16)),
+        ("u32".to_string(), builtin(b::BuiltinType::U32)),
+        ("u64".to_string(), builtin(b::BuiltinType::U64)),
+        ("usize".to_string(), builtin(b::BuiltinType::USize)),
+        ("f32".to_string(), builtin(b::BuiltinType::F32)),
+        ("f64".to_string(), builtin(b::BuiltinType::F64)),
+        ("str".to_string(), builtin(b::BuiltinType::String)),
+        ("Ptr".to_string(), builtin(b::BuiltinType::Ptr)),
     ])
 }

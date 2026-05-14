@@ -80,7 +80,7 @@ impl<'a> BinaryCodegen<'a> {
                 modules,
                 cfg,
                 cl_module,
-                DebugData::new(cfg, source_manager),
+                DebugData::new(modules, cfg, source_manager),
             ),
             module_ctx,
             declared_funcs: HashMap::new(),
@@ -468,7 +468,7 @@ impl BinaryCodegen<'_> {
         {
             Ok(()) => {}
             Err(err) => {
-                panic!("Failed to emit function {name}: {err:?}",);
+                panic!("Failed to emit function {name:?}: {err:?}",);
             }
         }
         self.ctx.cl_module.clear_context(&mut self.module_ctx)

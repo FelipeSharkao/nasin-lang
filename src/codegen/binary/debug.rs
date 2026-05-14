@@ -21,6 +21,7 @@ pub struct DebugFunction {
 
 #[derive(Debug, Clone, ctor)]
 pub struct DebugData<'a> {
+    pub modules: &'a [b::Module],
     pub cfg: &'a config::BuildConfig,
     pub source_manager: &'a sources::SourceManager,
     #[ctor(default)]
@@ -277,9 +278,12 @@ impl<'a> DebugData<'a> {
 
                 let id = dwarf.unit.add(id, tag);
 
-                let name_str = dwarf
-                    .strings
-                    .add(utils::join("", nodes).to_string().into_bytes());
+                let mut name = String::new();
+                b::Printer::new(&self.modules, &self.cfg)
+                    .write_name_nodes(&mut name, nodes)
+                    .unwrap();
+
+                let name_str = dwarf.strings.add(name.into_bytes());
                 dwarf
                     .unit
                     .get_mut(id)

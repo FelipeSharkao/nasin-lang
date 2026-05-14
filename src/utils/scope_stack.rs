@@ -1,4 +1,3 @@
-use std::cmp::min;
 use std::fmt::Debug;
 
 use derive_ctor::ctor;

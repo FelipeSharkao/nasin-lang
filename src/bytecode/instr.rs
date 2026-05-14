@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use derive_ctor::ctor;
 use derive_more::derive::Debug;
 
-use super::{BlockIdx, Loc, Type, ValueIdx};
+use super::{BlockIdx, Loc, Type, TypeRefKey, ValueIdx};
 use crate::utils;
 
 #[derive(Debug, Clone)]
@@ -55,7 +55,7 @@ pub enum InstrBody {
     PtrSet(ValueIdx, ValueIdx),
 
     Type(ValueIdx, Type),
-    Dispatch(ValueIdx, usize, usize),
+    Dispatch(ValueIdx, TypeRefKey),
 
     TypeName(ValueIdx),
 
@@ -82,7 +82,7 @@ impl InstrBody {
             | InstrBody::StrPtr(v)
             | InstrBody::ArrayLen(v)
             | InstrBody::Type(v, _)
-            | InstrBody::Dispatch(v, _, _)
+            | InstrBody::Dispatch(v, _)
             | InstrBody::TypeName(v) => replace(v),
             InstrBody::Add(a, b)
             | InstrBody::Sub(a, b)

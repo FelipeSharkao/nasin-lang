@@ -171,89 +171,93 @@ impl<'a> FuncCodegen<'a, '_> {
                 let builder = expect_builder!(self);
 
                 let cl_value = match &instr.body {
-                    b::InstrBody::Add(..) if ty.is_int() => builder.ins().iadd(lhs, rhs),
-                    b::InstrBody::Add(..) if ty.is_float() => {
+                    b::InstrBody::Add(..) if ty.is_int(self.ctx.modules) => {
+                        builder.ins().iadd(lhs, rhs)
+                    }
+                    b::InstrBody::Add(..) if ty.is_float(self.ctx.modules) => {
                         builder.ins().fadd(lhs, rhs)
                     }
-                    b::InstrBody::Sub(..) if ty.is_int() => builder.ins().isub(lhs, rhs),
-                    b::InstrBody::Sub(..) if ty.is_float() => {
+                    b::InstrBody::Sub(..) if ty.is_int(self.ctx.modules) => {
+                        builder.ins().isub(lhs, rhs)
+                    }
+                    b::InstrBody::Sub(..) if ty.is_float(self.ctx.modules) => {
                         builder.ins().fsub(lhs, rhs)
                     }
-                    b::InstrBody::Mul(..) if ty.is_int() => builder.ins().imul(lhs, rhs),
-                    b::InstrBody::Mul(..) if ty.is_float() => {
+                    b::InstrBody::Mul(..) if ty.is_int(self.ctx.modules) => {
+                        builder.ins().imul(lhs, rhs)
+                    }
+                    b::InstrBody::Mul(..) if ty.is_float(self.ctx.modules) => {
                         builder.ins().fmul(lhs, rhs)
                     }
-                    b::InstrBody::Div(..) if ty.is_uint() => builder.ins().udiv(lhs, rhs),
-                    b::InstrBody::Div(..) if ty.is_sint() => builder.ins().sdiv(lhs, rhs),
-                    b::InstrBody::Div(..) if ty.is_float() => {
+                    b::InstrBody::Div(..) if ty.is_uint(self.ctx.modules) => {
+                        builder.ins().udiv(lhs, rhs)
+                    }
+                    b::InstrBody::Div(..) if ty.is_sint(self.ctx.modules) => {
+                        builder.ins().sdiv(lhs, rhs)
+                    }
+                    b::InstrBody::Div(..) if ty.is_float(self.ctx.modules) => {
                         builder.ins().fdiv(lhs, rhs)
                     }
-                    b::InstrBody::Mod(..) if ty.is_uint() => builder.ins().urem(lhs, rhs),
-                    b::InstrBody::Mod(..) if ty.is_sint() => builder.ins().srem(lhs, rhs),
-                    b::InstrBody::Mod(..) if ty.is_float() => {
+                    b::InstrBody::Mod(..) if ty.is_uint(self.ctx.modules) => {
+                        builder.ins().urem(lhs, rhs)
+                    }
+                    b::InstrBody::Mod(..) if ty.is_sint(self.ctx.modules) => {
+                        builder.ins().srem(lhs, rhs)
+                    }
+                    b::InstrBody::Mod(..) if ty.is_float(self.ctx.modules) => {
                         let x = builder.ins().fdiv(lhs, rhs);
                         let x = builder.ins().trunc(x);
                         let y = builder.ins().fneg(rhs);
                         builder.ins().fma(x, y, lhs)
                     }
-                    b::InstrBody::Eq(..) if ty.is_int() => {
+                    b::InstrBody::Eq(..) if ty.is_int(self.ctx.modules) => {
                         builder.ins().icmp(cl::IntCC::Equal, lhs, rhs)
                     }
-                    b::InstrBody::Eq(..) if ty.is_float() => {
+                    b::InstrBody::Eq(..) if ty.is_float(self.ctx.modules) => {
                         builder.ins().fcmp(cl::FloatCC::Equal, lhs, rhs)
                     }
-                    b::InstrBody::Neq(..) if ty.is_int() => {
+                    b::InstrBody::Neq(..) if ty.is_int(self.ctx.modules) => {
                         builder.ins().icmp(cl::IntCC::NotEqual, lhs, rhs)
                     }
-                    b::InstrBody::Neq(..) if ty.is_float() => {
+                    b::InstrBody::Neq(..) if ty.is_float(self.ctx.modules) => {
                         builder.ins().fcmp(cl::FloatCC::NotEqual, lhs, rhs)
                     }
-                    b::InstrBody::Lt(..) if ty.is_sint() => {
+                    b::InstrBody::Lt(..) if ty.is_sint(self.ctx.modules) => {
                         builder.ins().icmp(cl::IntCC::SignedLessThan, lhs, rhs)
                     }
-                    b::InstrBody::Lt(..) if ty.is_uint() => {
+                    b::InstrBody::Lt(..) if ty.is_uint(self.ctx.modules) => {
                         builder.ins().icmp(cl::IntCC::UnsignedLessThan, lhs, rhs)
                     }
-                    b::InstrBody::Lt(..) if ty.is_float() => {
+                    b::InstrBody::Lt(..) if ty.is_float(self.ctx.modules) => {
                         builder.ins().fcmp(cl::FloatCC::LessThan, lhs, rhs)
                     }
-                    b::InstrBody::Gt(..) if ty.is_sint() => {
+                    b::InstrBody::Gt(..) if ty.is_sint(self.ctx.modules) => {
                         builder.ins().icmp(cl::IntCC::SignedGreaterThan, lhs, rhs)
                     }
-                    b::InstrBody::Gt(..) if ty.is_uint() => {
+                    b::InstrBody::Gt(..) if ty.is_uint(self.ctx.modules) => {
                         builder.ins().icmp(cl::IntCC::UnsignedGreaterThan, lhs, rhs)
                     }
-                    b::InstrBody::Gt(..) if ty.is_float() => {
+                    b::InstrBody::Gt(..) if ty.is_float(self.ctx.modules) => {
                         builder.ins().fcmp(cl::FloatCC::GreaterThan, lhs, rhs)
                     }
-                    b::InstrBody::Lte(..) if ty.is_sint() => {
-                        builder
-                            .ins()
-                            .icmp(cl::IntCC::SignedLessThanOrEqual, lhs, rhs)
-                    }
-                    b::InstrBody::Lte(..) if ty.is_uint() => {
-                        builder
-                            .ins()
-                            .icmp(cl::IntCC::UnsignedLessThanOrEqual, lhs, rhs)
-                    }
-                    b::InstrBody::Lte(..) if ty.is_float() => {
+                    b::InstrBody::Lte(..) if ty.is_sint(self.ctx.modules) => builder
+                        .ins()
+                        .icmp(cl::IntCC::SignedLessThanOrEqual, lhs, rhs),
+                    b::InstrBody::Lte(..) if ty.is_uint(self.ctx.modules) => builder
+                        .ins()
+                        .icmp(cl::IntCC::UnsignedLessThanOrEqual, lhs, rhs),
+                    b::InstrBody::Lte(..) if ty.is_float(self.ctx.modules) => {
                         builder.ins().fcmp(cl::FloatCC::LessThanOrEqual, lhs, rhs)
                     }
-                    b::InstrBody::Gte(..) if ty.is_sint() => {
-                        builder
-                            .ins()
-                            .icmp(cl::IntCC::SignedGreaterThanOrEqual, lhs, rhs)
-                    }
-                    b::InstrBody::Gte(..) if ty.is_uint() => builder.ins().icmp(
-                        cl::IntCC::UnsignedGreaterThanOrEqual,
-                        lhs,
-                        rhs,
-                    ),
-                    b::InstrBody::Gte(..) if ty.is_float() => {
-                        builder
-                            .ins()
-                            .fcmp(cl::FloatCC::GreaterThanOrEqual, lhs, rhs)
-                    }
+                    b::InstrBody::Gte(..) if ty.is_sint(self.ctx.modules) => builder
+                        .ins()
+                        .icmp(cl::IntCC::SignedGreaterThanOrEqual, lhs, rhs),
+                    b::InstrBody::Gte(..) if ty.is_uint(self.ctx.modules) => builder
+                        .ins()
+                        .icmp(cl::IntCC::UnsignedGreaterThanOrEqual, lhs, rhs),
+                    b::InstrBody::Gte(..) if ty.is_float(self.ctx.modules) => builder
+                        .ins()
+                        .fcmp(cl::FloatCC::GreaterThanOrEqual, lhs, rhs),
                     _ => unreachable!(),
                 };
 
@@ -274,7 +278,7 @@ impl<'a> FuncCodegen<'a, '_> {
                 let ty = &self.ctx.modules[mod_idx].values[v].ty;
 
                 let builder = expect_builder!(self);
-                let cl_value = if ty.is_int() {
+                let cl_value = if ty.is_int(self.ctx.modules) {
                     builder.ins().ineg(cl_value)
                 } else {
                     builder.ins().fneg(cl_value)
@@ -555,7 +559,7 @@ impl<'a> FuncCodegen<'a, '_> {
                     panic!("type should be a typeref");
                 };
                 let b::TypeDefBody::Record(rec) =
-                    &self.ctx.modules[ty_ref.mod_idx].typedefs[ty_ref.idx].body
+                    &ty_ref.get_typedef(self.ctx.modules).body
                 else {
                     panic!("type should be a record type");
                 };
@@ -605,90 +609,11 @@ impl<'a> FuncCodegen<'a, '_> {
                 self.values.insert((mod_idx, instr.results[0]), value);
             }
             b::InstrBody::GetMethod(source_v, name) => {
-                let source = &self.values[&(mod_idx, *source_v)];
-                let source_ty = &self.ctx.modules[mod_idx].values[*source_v].ty;
-                let b::TypeBody::TypeRef(ty_ref) = &source_ty.body else {
-                    panic!("type should be a typeref");
-                };
-
-                let typedef = &self.ctx.modules[ty_ref.mod_idx].typedefs[ty_ref.idx];
-                match &typedef.body {
-                    b::TypeDefBody::Record(..) => {
-                        let value = self.add_by_ref(&source.src.clone());
-                        let method = &typedef.methods[name];
-
-                        self.values.insert(
-                            (mod_idx, instr.results[0]),
-                            types::RuntimeValue::new(
-                                types::ValueSource::AppliedMethod(value, method.func_ref),
-                                mod_idx,
-                                instr.results[0],
-                            ),
-                        );
-                    }
-                    b::TypeDefBody::Interface => {
-                        let (src, vtable) = match &source.src {
-                            types::ValueSource::DynDispatched(dispatched) => {
-                                (dispatched.src, dispatched.vtable)
-                            }
-                            _ => {
-                                let ptr = self.add_by_ref(&source.src.clone());
-
-                                let builder = expect_builder!(self);
-                                let src_value = builder.ins().load(
-                                    self.ctx.cl_module.isa().pointer_type(),
-                                    cl::MemFlags::new(),
-                                    ptr,
-                                    0,
-                                );
-                                let vtable_value = builder.ins().load(
-                                    self.ctx.cl_module.isa().pointer_type(),
-                                    cl::MemFlags::new(),
-                                    ptr,
-                                    self.ctx.cl_module.isa().pointer_bytes() as i32,
-                                );
-                                (src_value, vtable_value)
-                            }
-                        };
-
-                        let method = &typedef.methods[name];
-
-                        let offset = self
-                            .ctx
-                            .vtables_desc
-                            .get(&(ty_ref.mod_idx, ty_ref.idx))
-                            .expect("Interface should already be defined")
-                            .method_offset(name, &self.ctx.cl_module)
-                            .unwrap();
-
-                        let builder = expect_builder!(self);
-
-                        let func_ptr = builder.ins().load(
-                            self.ctx.cl_module.isa().pointer_type(),
-                            cl::MemFlags::new(),
-                            vtable,
-                            offset as i32,
-                        );
-
-                        let proto = types::FuncPrototype::from_func(
-                            method.func_ref.0,
-                            method.func_ref.1,
-                            self.ctx.modules,
-                            &self.ctx.cl_module,
-                        );
-
-                        self.values.insert(
-                            (mod_idx, instr.results[0]),
-                            types::RuntimeValue::new(
-                                types::ValueSource::AppliedMethodInderect(
-                                    src, func_ptr, proto,
-                                ),
-                                mod_idx,
-                                instr.results[0],
-                            ),
-                        );
-                    }
-                };
+                let src = self.get_method_inst(mod_idx, *source_v, name);
+                self.values.insert(
+                    (mod_idx, instr.results[0]),
+                    types::RuntimeValue::new(src, mod_idx, instr.results[0]),
+                );
             }
             b::InstrBody::StrLen(source_v) | b::InstrBody::ArrayLen(source_v) => {
                 let value = match &self.values[&(mod_idx, *source_v)].src {
@@ -826,14 +751,21 @@ impl<'a> FuncCodegen<'a, '_> {
                 let offset = offset[0];
 
                 let ptr_ty = &self.ctx.modules[mod_idx].values[*ptr_v].ty;
-                let item_size = match &ptr_ty.body {
-                    b::TypeBody::Ptr(Some(item_ty)) => {
-                        types::get_size(item_ty, self.ctx.modules, &self.ctx.cl_module)
-                            as u64
-                    }
-                    b::TypeBody::Ptr(None) => 1,
-                    _ => panic!("type should be a pointer type"),
+
+                let b::TypeBody::TypeRef(ty_ref) = &ptr_ty.body else {
+                    panic!("type should be a pointer typeref");
                 };
+
+                let item_size = match &ty_ref.args.len() {
+                    0 => 1,
+                    1 => types::get_size(
+                        &ty_ref.args[0],
+                        self.ctx.modules,
+                        &self.ctx.cl_module,
+                    ) as u64,
+                    _ => panic!("pointer type should have only one argument"),
+                };
+
                 let item_size = self
                     .add_const(types::Const::uint_ptr(item_size, &self.ctx.cl_module));
 
@@ -860,15 +792,12 @@ impl<'a> FuncCodegen<'a, '_> {
                     offset += native_ty.bytes() as i32;
                 }
             }
-            b::InstrBody::Dispatch(v, iface_mod_idx, iface_ty_idx) => {
+            b::InstrBody::Dispatch(v, iface_ty_key) => {
                 let ty = &self.ctx.modules[mod_idx].values[*v].ty;
                 let b::TypeBody::TypeRef(ty_ref) = &ty.body else {
                     panic!("type should be a typeref");
                 };
-                let vtable_ref = types::VTableRef::new(
-                    (*iface_mod_idx, *iface_ty_idx),
-                    (ty_ref.mod_idx, ty_ref.idx),
-                );
+                let vtable_ref = types::VTableRef::new(*iface_ty_key, ty_ref.key);
                 let vtable_data = self.ctx.vtables_impl[&vtable_ref];
                 let vtable_gv = self.get_global_value(vtable_data);
                 let vtable = expect_builder!(self)
@@ -940,15 +869,14 @@ impl<'a> FuncCodegen<'a, '_> {
     ) -> Option<types::RuntimeValue> {
         utils::replace_with(self, |mut this| {
             let value = 'match_b: {
+                let to_value = |src: types::ValueSource| {
+                    types::RuntimeValue::new(src, mod_idx, instr.results[0])
+                };
                 match &instr.body {
                     b::InstrBody::CreateNumber(n) => {
-                        Some(this.create_number_inst(mod_idx, instr, n))
+                        Some(to_value(this.create_number_inst(mod_idx, instr, n)))
                     }
-                    b::InstrBody::CreateBool(b) => Some(types::RuntimeValue::new(
-                        (*b as u8).into(),
-                        mod_idx,
-                        instr.results[0],
-                    )),
+                    b::InstrBody::CreateBool(b) => Some(to_value((*b as u8).into())),
                     b::InstrBody::CreateString(s) => {
                         let data = this.ctx.data_for_string(s);
                         let len = types::ValueSource::uint_ptr(
@@ -956,15 +884,13 @@ impl<'a> FuncCodegen<'a, '_> {
                             &this.ctx.cl_module,
                         );
 
-                        Some(types::RuntimeValue::new(
+                        Some(to_value(
                             Box::new(types::Slice::new(data.into(), len.into())).into(),
-                            mod_idx,
-                            instr.results[0],
                         ))
                     }
-                    b::InstrBody::CreateArray(vs) => {
-                        this.create_array_inst(mod_idx, instr, vs)
-                    }
+                    b::InstrBody::CreateArray(vs) => this
+                        .create_array_inst(mod_idx, instr.results[0], vs)
+                        .map(to_value),
                     b::InstrBody::CreateRecord(fields) => {
                         let module = &self.ctx.modules[mod_idx];
                         let ty = &module.values[instr.results[0]].ty;
@@ -979,6 +905,7 @@ impl<'a> FuncCodegen<'a, '_> {
                             ty,
                             this.ctx.modules,
                         );
+
                         let src = if values.len() > 0 {
                             let data = this.ctx.data_for_tuple(
                                 values
@@ -997,7 +924,7 @@ impl<'a> FuncCodegen<'a, '_> {
                         } else {
                             types::ValueSource::UnitPtr
                         };
-                        Some(types::RuntimeValue::new(src, mod_idx, instr.results[0]))
+                        Some(to_value(src))
                     }
                     b::InstrBody::GetGlobal(mod_idx, global_idx) => Some(
                         this.ctx
@@ -1112,6 +1039,99 @@ impl<'a> FuncCodegen<'a, '_> {
         }
     }
 
+    pub fn get_method_inst(
+        &mut self,
+        mod_idx: usize,
+        source_v: b::ValueIdx,
+        name: &str,
+    ) -> types::ValueSource {
+        let source = &self.values[&(mod_idx, source_v)];
+        let source_ty = &self.ctx.modules[mod_idx].values[source_v].ty;
+        let b::TypeBody::TypeRef(ty_ref) = &source_ty.body else {
+            panic!("type should be a typeref");
+        };
+
+        let typedef = ty_ref.get_typedef(self.ctx.modules);
+
+        enum MethodKind {
+            Applied,
+            Dispatched,
+        }
+        let kind = match &typedef.body {
+            b::TypeDefBody::Record(..) => MethodKind::Applied,
+            b::TypeDefBody::Interface => MethodKind::Dispatched,
+            b::TypeDefBody::Builtin(builtin) => {
+                if builtin.is_not_final() {
+                    unreachable!("builtin should be final");
+                }
+                MethodKind::Applied
+            }
+        };
+
+        match kind {
+            MethodKind::Applied => {
+                let value = self.add_by_ref(&source.src.clone());
+                let typedef = ty_ref.get_typedef(self.ctx.modules);
+                let method = &typedef.methods[name];
+                types::ValueSource::AppliedMethod(value, method.func_ref)
+            }
+            MethodKind::Dispatched => {
+                let (src, vtable) = match &source.src {
+                    types::ValueSource::DynDispatched(dispatched) => {
+                        (dispatched.src, dispatched.vtable)
+                    }
+                    _ => {
+                        let ptr = self.add_by_ref(&source.src.clone());
+
+                        let builder = expect_builder!(self);
+                        let src_value = builder.ins().load(
+                            self.ctx.cl_module.isa().pointer_type(),
+                            cl::MemFlags::new(),
+                            ptr,
+                            0,
+                        );
+                        let vtable_value = builder.ins().load(
+                            self.ctx.cl_module.isa().pointer_type(),
+                            cl::MemFlags::new(),
+                            ptr,
+                            self.ctx.cl_module.isa().pointer_bytes() as i32,
+                        );
+                        (src_value, vtable_value)
+                    }
+                };
+
+                let typedef = ty_ref.get_typedef(self.ctx.modules);
+                let method = &typedef.methods[name];
+
+                let offset = self
+                    .ctx
+                    .vtables_desc
+                    .get(&ty_ref.key)
+                    .expect("Interface should already be defined")
+                    .method_offset(name, &self.ctx.cl_module)
+                    .unwrap();
+
+                let builder = expect_builder!(self);
+
+                let func_ptr = builder.ins().load(
+                    self.ctx.cl_module.isa().pointer_type(),
+                    cl::MemFlags::new(),
+                    vtable,
+                    offset as i32,
+                );
+
+                let proto = types::FuncPrototype::from_func(
+                    method.func_ref.0,
+                    method.func_ref.1,
+                    self.ctx.modules,
+                    &self.ctx.cl_module,
+                );
+
+                types::ValueSource::AppliedMethodInderect(src, func_ptr, proto)
+            }
+        }
+    }
+
     pub fn write_global(&mut self, mod_idx: usize, v: b::ValueIdx, data_id: cl::DataId) {
         let cl_values = self.use_value_by_value(mod_idx, v);
         let res_cl = self.add_by_ref(&data_id.into());
@@ -1128,9 +1148,9 @@ impl<'a> FuncCodegen<'a, '_> {
     fn create_array_inst(
         &mut self,
         mod_idx: usize,
-        instr: &b::Instr,
+        result: b::ValueIdx,
         vs: &Vec<usize>,
-    ) -> Option<types::RuntimeValue> {
+    ) -> Option<types::ValueSource> {
         let data = self.ctx.data_for_tuple(
             vs.iter()
                 .map(|v| self.values[&(mod_idx, *v)].src.clone())
@@ -1140,14 +1160,22 @@ impl<'a> FuncCodegen<'a, '_> {
         let ptr = if let Some(data) = data {
             data.into()
         } else if self.builder.is_some() {
-            let b::TypeBody::Array(item_ty) =
-                &self.ctx.modules[mod_idx].values[instr.results[0]].ty.body
+            let b::TypeBody::TypeRef(type_ref) =
+                &self.ctx.modules[mod_idx].values[result].ty.body
             else {
-                panic!("type should be an array type");
+                panic!("type should be an array typeref");
             };
 
-            let item_tys =
-                types::get_type_by_type(&item_ty, self.ctx.modules, &self.ctx.cl_module);
+            assert!(
+                type_ref.args.len() == 1,
+                "array type should have one argument"
+            );
+
+            let item_tys = types::get_type_by_type(
+                &type_ref.args[0],
+                self.ctx.modules,
+                &self.ctx.cl_module,
+            );
 
             let size =
                 item_tys.iter().map(|ty| ty.bytes()).sum::<u32>() * vs.len() as u32;
@@ -1175,11 +1203,7 @@ impl<'a> FuncCodegen<'a, '_> {
 
         let len = types::ValueSource::uint_ptr(vs.len() as u64, &self.ctx.cl_module);
 
-        Some(types::RuntimeValue::new(
-            Box::new(types::Slice::new(ptr, len.into())).into(),
-            mod_idx,
-            instr.results[0],
-        ))
+        Some(Box::new(types::Slice::new(ptr, len.into())).into())
     }
 
     fn break_(&mut self, mod_idx: usize, block_idx: b::BlockIdx, v: Option<b::ValueIdx>) {
@@ -1253,7 +1277,10 @@ impl<'a> FuncCodegen<'a, '_> {
 
                 if let Some(result) = self.scopes.get(scope_idx).unwrap().result {
                     let ty = &self.ctx.modules[mod_idx].values[result].ty;
-                    assert!(matches!(ty.body, b::TypeBody::Void));
+                    assert!(
+                        ty.is_void(self.ctx.modules),
+                        "type should be a void typeref"
+                    );
                 }
             }
             _ => unreachable!(),
@@ -1280,13 +1307,14 @@ impl<'a> FuncCodegen<'a, '_> {
             b::TypeBody::TypeRef(t) if t.is_self => {
                 vec![self.add_by_ref(src)]
             }
-            b::TypeBody::TypeRef(t) => {
-                match &self.ctx.modules[t.mod_idx].typedefs[t.idx].body {
-                    b::TypeDefBody::Record(_) => vec![self.add_by_ref(src)],
-                    b::TypeDefBody::Interface => self.add_by_value(src, ty),
+            b::TypeBody::TypeRef(t) => match &t.get_typedef(self.ctx.modules).body {
+                b::TypeDefBody::Record(_)
+                | b::TypeDefBody::Builtin(b::BuiltinType::Ptr) => {
+                    vec![self.add_by_ref(src)]
                 }
-            }
-            b::TypeBody::Ptr(_) => vec![self.add_by_ref(src)],
+                b::TypeDefBody::Interface => self.add_by_value(src, ty),
+                b::TypeDefBody::Builtin(_) => self.add_by_value(src, ty),
+            },
             _ => self.add_by_value(src, ty),
         }
     }
@@ -1385,10 +1413,10 @@ impl<'a> FuncCodegen<'a, '_> {
                 let ptr_value = self.add_by_ref(&slice.ptr);
 
                 let len_type_body = match self.ctx.cl_module.isa().pointer_bytes() {
-                    1 => b::TypeBody::I8,
-                    2 => b::TypeBody::I16,
-                    4 => b::TypeBody::I32,
-                    8 => b::TypeBody::I64,
+                    1 => b::TypeBody::builtin(b::BuiltinType::I8, []),
+                    2 => b::TypeBody::builtin(b::BuiltinType::I16, []),
+                    4 => b::TypeBody::builtin(b::BuiltinType::I32, []),
+                    8 => b::TypeBody::builtin(b::BuiltinType::I64, []),
                     _ => panic!("how many bytes?"),
                 };
                 let len_values =
@@ -1460,7 +1488,7 @@ impl<'a> FuncCodegen<'a, '_> {
 
     fn save_value(&mut self, mod_idx: usize, v: b::ValueIdx, value: cl::Value) {
         let ty = &self.ctx.modules[mod_idx].values[v].ty;
-        let src = if ty.is_aggregate(self.ctx.modules) || ty.is_ptr() {
+        let src = if ty.is_aggregate(self.ctx.modules) || ty.is_ptr(self.ctx.modules) {
             types::ValueSource::Ptr(value)
         } else {
             types::ValueSource::Primitive(value)
@@ -1474,45 +1502,49 @@ impl<'a> FuncCodegen<'a, '_> {
         mod_idx: usize,
         instr: &b::Instr,
         n: &String,
-    ) -> types::RuntimeValue {
+    ) -> types::ValueSource {
         let module = &self.ctx.modules[mod_idx];
         let ty = &module.values[instr.results[0]].ty;
 
         macro_rules! parse_num {
             ($variant:ident $(, $($cast:tt)+ )?) => {{
                 let value = n.parse().unwrap();
-                let src = types::ValueSource::$variant($( $($cast)+ )? (value));
-                types::RuntimeValue::new(
-                    src,
-                    mod_idx,
-                    instr.results[0],
-                )
+                types::ValueSource::$variant($( $($cast)+ )? (value))
             }};
         }
 
-        match &ty.body {
-            b::TypeBody::I8 => parse_num!(I8, i8::cast_unsigned),
-            b::TypeBody::I16 => parse_num!(I16, i16::cast_unsigned),
-            b::TypeBody::I32 => parse_num!(I32, i32::cast_unsigned),
-            b::TypeBody::I64 => parse_num!(I64, i64::cast_unsigned),
-            b::TypeBody::U8 => parse_num!(I8),
-            b::TypeBody::U16 => parse_num!(I16),
-            b::TypeBody::U32 => parse_num!(I32),
-            b::TypeBody::U64 => parse_num!(I64),
-            b::TypeBody::USize => match self.ctx.cl_module.isa().pointer_bytes() {
+        let b::TypeBody::TypeRef(ty_ref) = &ty.body else {
+            unreachable!("Cannot parse {n} as {:?}", &ty.body);
+        };
+
+        let typedef = ty_ref.get_typedef(self.ctx.modules);
+        let b::TypeDefBody::Builtin(builtin) = &typedef.body else {
+            unreachable!("Cannot parse {n} as {:?}", &ty.body);
+        };
+
+        match builtin {
+            b::BuiltinType::I8 => parse_num!(I8, i8::cast_unsigned),
+            b::BuiltinType::I16 => parse_num!(I16, i16::cast_unsigned),
+            b::BuiltinType::I32 => parse_num!(I32, i32::cast_unsigned),
+            b::BuiltinType::I64 => parse_num!(I64, i64::cast_unsigned),
+            b::BuiltinType::U8 => parse_num!(I8),
+            b::BuiltinType::U16 => parse_num!(I16),
+            b::BuiltinType::U32 => parse_num!(I32),
+            b::BuiltinType::U64 => parse_num!(I64),
+            b::BuiltinType::USize => match self.ctx.cl_module.isa().pointer_bytes() {
                 1 => parse_num!(I8),
                 2 => parse_num!(I16),
                 4 => parse_num!(I32),
                 8 => parse_num!(I64),
                 _ => unreachable!("how many bytes?"),
             },
-            b::TypeBody::F32 => {
+            b::BuiltinType::F32 => {
                 parse_num!(F32, types::F32Bits::from_float)
             }
-            b::TypeBody::F64 => {
+            b::BuiltinType::F64 => {
                 parse_num!(F64, types::F64Bits::from_float)
             }
-            _ => unreachable!("Cannot parse {n} as {ty}"),
+            _ => unreachable!("Cannot parse {n} as {:?}", &ty.body),
         }
     }
 

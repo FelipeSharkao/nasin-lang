@@ -1,4 +1,3 @@
-use std::borrow::Cow;
 use std::cell::RefCell;
 use std::fmt::{self, Display, Write};
 
@@ -149,17 +148,6 @@ impl<'t> Iterator for TreeSitterErrors<'t> {
         self.goto_next_sibling_or_parent();
 
         Some(node)
-    }
-}
-
-pub trait IntoItem<Q> {
-    type Item;
-    fn into_item(self, item: Q) -> Option<Self::Item>;
-}
-impl<T, I: IntoIterator<Item = T>> IntoItem<usize> for I {
-    type Item = T;
-    fn into_item(self, n: usize) -> Option<Self::Item> {
-        self.into_iter().nth(n)
     }
 }
 
