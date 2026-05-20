@@ -115,7 +115,8 @@ impl<'a, 't> ExprParser<'a, 't> {
                                 .content()
                                 .text,
                         ),
-                    ),
+                    )
+                    .to_string(),
                     None => "".to_string(),
                 };
                 let v = self.add_instr_with_result(b::Instr::new(

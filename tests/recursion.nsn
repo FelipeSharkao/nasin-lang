@@ -1,5 +1,5 @@
 rec(i: u8, acc) =
-    let acc = acc ++ "rec: " ++ experimental_u8_to_str(i) ++ "\n"
+    let acc = acc ++ "rec: " ++ i.to_str ++ "\n"
     if i >= 10 then acc
     else rec(i + 1, acc)
 

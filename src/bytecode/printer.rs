@@ -750,13 +750,7 @@ impl<'a> Printer<'a> {
         if let TypeRefKey::Custom { mod_idx, idx } = type_ref.key
             && self.show_ids
         {
-            write!(
-                f,
-                " ({} {}-{})",
-                if type_ref.is_self { "self" } else { "type" },
-                mod_idx,
-                idx,
-            )?;
+            write!(f, " (type {}-{})", mod_idx, idx)?;
         }
 
         Ok(())

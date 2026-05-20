@@ -7,8 +7,6 @@ use tree_sitter as ts;
 use crate::utils::TreeSitterUtils;
 use crate::{bytecode as b, context, errors};
 
-pub const UNDEF_TYPEVAR: b::TypeVarIdx = usize::MAX;
-
 #[derive(ctor)]
 pub struct TypeParser<'a, 't> {
     #[ctor(default)]

@@ -604,11 +604,9 @@ impl TypeRefKey {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Setters, ctor)]
 #[setters(into, prefix = "with_")]
 pub struct TypeRef {
-    pub key:     TypeRefKey,
-    #[ctor(expr(false))]
-    pub is_self: bool,
+    pub key:  TypeRefKey,
     #[ctor(default)]
-    pub args:    Vec<Type>,
+    pub args: Vec<Type>,
 }
 
 impl TypeRef {
@@ -635,13 +633,8 @@ impl TypeRef {
         variance: Variance,
         modules: &[Module],
     ) -> Option<Self> {
-        let result = |key: TypeRefKey, args: Vec<Type>| {
-            Some(
-                TypeRef::new(key)
-                    .with_is_self(other.is_self || self.is_self)
-                    .with_args(args),
-            )
-        };
+        let result =
+            |key: TypeRefKey, args: Vec<Type>| Some(TypeRef::new(key).with_args(args));
 
         if self.is_same_of(other) {
             if self.args.len() != other.args.len() {

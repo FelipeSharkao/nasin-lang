@@ -9,7 +9,6 @@ use super::parser_value::ValueRef;
 use super::type_parser::TypeParser;
 use crate::parser::expr_parser::ExprParser;
 use crate::parser::parser_value::ValueRefBody;
-use crate::parser::type_parser::UNDEF_TYPEVAR;
 use crate::utils::TreeSitterUtils;
 use crate::{bytecode as b, context, errors, utils};
 
@@ -125,6 +124,11 @@ impl<'a, 't> ModuleParser<'a, 't> {
                                     mod_idx: self.mod_idx,
                                     idx:     ty_idx,
                                 },
+                                // FIXME: since in the method's implementations we're not
+                                // handling is_virtual properly, we can't handle it here
+                                // as well to be consistent. As soon as we implement it
+                                // there, we should use `is_virt` here
+                                true,
                             )),
                             is_virt,
                         );
@@ -217,7 +221,7 @@ impl<'a, 't> ModuleParser<'a, 't> {
             let parent_ty = self.types.parse_type_ident(parent);
             let b::TypeBody::TypeRef(ty_ref) = parent_ty else {
                 self.ctx.push_error(errors::Error::new(
-                    errors::Todo::new("method for builtin type".to_string()).into(),
+                    errors::Todo::new("method for internal type".to_string()).into(),
                     Some(b::Loc::from_node(self.src_idx, &parent)),
                 ));
                 return;
@@ -225,7 +229,12 @@ impl<'a, 't> ModuleParser<'a, 't> {
 
             let method_name = name.last_ident().to_string();
 
-            let method_info = b::FuncMethodInfo::new(method_name.clone(), ty_ref.key);
+            let method_info = b::FuncMethodInfo::new(
+                method_name.clone(),
+                ty_ref.key,
+                // FIXME: not all methods are virtual, we should handle this properly
+                true,
+            );
 
             let modules = self.ctx.lock_modules();
             (
@@ -276,7 +285,8 @@ impl<'a, 't> ModuleParser<'a, 't> {
                         args_nodes[0].required_field("content").get_text(
                             &self.ctx.source_manager.source(self.src_idx).content().text,
                         ),
-                    );
+                    )
+                    .to_string();
                     extrn = Some(b::Extern { name: symbol_name });
                 }
                 _ => todo!(),
@@ -359,7 +369,7 @@ impl<'a, 't> ModuleParser<'a, 't> {
 
         let old_self_type = self.types.idents.get(SELF_TYPE_INDENT).cloned();
 
-        let self_ty_ref = if let Some(method) = &func.func.method {
+        if let Some(method) = &func.func.method {
             let modules = self.ctx.lock_modules();
             let type_def = match method.ty {
                 b::TypeRefKey::Custom { mod_idx, idx } if mod_idx == self.mod_idx => {
@@ -369,30 +379,18 @@ impl<'a, 't> ModuleParser<'a, 't> {
             };
 
             let args = type_def.generics.iter().map(|&idx| {
-                assert!(idx < UNDEF_TYPEVAR);
                 b::Type::new(b::TypeVar::new(self.mod_idx, idx).into(), None)
             });
             let type_ref = b::TypeRef::new(method.ty).with_args(args.collect_vec());
 
             self.types
                 .idents
-                .insert(SELF_TYPE_INDENT.to_string(), type_ref.clone().into());
-            Some(type_ref)
-        } else {
-            None
-        };
+                .insert(SELF_TYPE_INDENT.to_string(), type_ref.into());
+        }
 
-        for (i, param) in func.params.iter().enumerate() {
+        for param in &func.params {
             if let Some(ty_node) = param.ty_node {
-                let mut ty = self.types.parse_type_expr(ty_node);
-                if let b::TypeBody::TypeRef(ty_ref) = &mut ty.body
-                    && self_ty_ref.as_ref().is_some_and(|x| ty_ref.is_same_of(x))
-                    && i == 0
-                {
-                    ty_ref.is_self = true;
-                }
-
-                self.values[param.value].ty = ty;
+                self.values[param.value].ty = self.types.parse_type_expr(ty_node);
             }
         }
 

@@ -1,38 +1,66 @@
-pub fn encode_string_lit(s: &str) -> String {
-    let mut result = String::with_capacity(s.len() + 2);
-    result.push('"');
-    for c in s.chars() {
-        match c {
-            '\n' => result.push_str("\\n"),
-            '\r' => result.push_str("\\r"),
-            '\t' => result.push_str("\\t"),
-            '\\' => result.push_str("\\\\"),
-            '\0' => result.push_str("\\0"),
-            '"' => result.push_str("\\\""),
-            c => result.push(c),
-        }
-    }
-    result.push('"');
-    result
+use std::fmt::{self, Display};
+
+use derive_ctor::ctor;
+
+pub fn encode_string_lit(s: &str) -> StringLitEncoder<'_> {
+    StringLitEncoder { string: s }
 }
 
-pub fn decode_string_lit(lit: &str) -> String {
-    let mut result = String::with_capacity(lit.len());
-    let mut chars = lit.chars();
-    while let Some(c) = chars.next() {
-        if c == '\\' {
-            let c = chars.next().unwrap();
+pub fn decode_string_lit(s: &str) -> StringLitDecoder<'_> {
+    StringLitDecoder { lit: s }
+}
+
+#[derive(Clone, Copy, ctor)]
+pub struct StringLitEncoder<'a> {
+    string: &'a str,
+}
+
+impl<'a> Display for StringLitEncoder<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "\"")?;
+
+        for c in self.string.chars() {
             match c {
-                'n' => result.push('\n'),
-                'r' => result.push('\r'),
-                't' => result.push('\t'),
-                '\\' => result.push('\\'),
-                '0' => result.push('\0'),
-                _ => panic!("Unknown escape sequence: \\{c}"),
+                '\n' => write!(f, "\\n")?,
+                '\r' => write!(f, "\\r")?,
+                '\t' => write!(f, "\\t")?,
+                '\\' => write!(f, "\\\\")?,
+                '\0' => write!(f, "\\0")?,
+                '"' => write!(f, "\\\"")?,
+                c => write!(f, "{c}")?,
             }
-        } else {
-            result.push(c);
         }
+
+        write!(f, "\"")?;
+
+        Ok(())
     }
-    result
+}
+
+#[derive(Clone, Copy, ctor)]
+pub struct StringLitDecoder<'a> {
+    lit: &'a str,
+}
+
+impl<'a> Display for StringLitDecoder<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut chars = self.lit.chars();
+        while let Some(c) = chars.next() {
+            if c == '\\' {
+                let c = chars.next().unwrap();
+                match c {
+                    'n' => write!(f, "\n")?,
+                    'r' => write!(f, "\r")?,
+                    't' => write!(f, "\t")?,
+                    '\\' => write!(f, "\\")?,
+                    '0' => write!(f, "\0")?,
+                    _ => panic!("Unknown escape sequence: \\{c}"),
+                }
+            } else {
+                write!(f, "{c}")?;
+            }
+        }
+
+        Ok(())
+    }
 }

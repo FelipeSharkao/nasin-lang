@@ -249,14 +249,9 @@ impl<'a> CodegenContext<'a> {
         }
 
         let func_binding = &self.funcs[&key];
-        let mut sig = func_binding.proto.signature.clone();
+        let env_idx = func_binding.proto.first_param_index();
 
-        // If the function returns a struct, it is strictly required to be the first
-        // argument, so the env will be the second
-        let env_idx = match &func_binding.proto.ret_policy {
-            ReturnPolicy::Struct(_) => 1,
-            _ => 0,
-        };
+        let mut sig = func_binding.proto.signature.clone();
         sig.params.insert(
             env_idx,
             cl::AbiParam::new(self.cl_module.isa().pointer_type()),

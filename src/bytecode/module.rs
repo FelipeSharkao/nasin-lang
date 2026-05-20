@@ -212,8 +212,9 @@ pub struct Func {
 
 #[derive(Debug, Clone, ctor)]
 pub struct FuncMethodInfo {
-    pub name: String,
-    pub ty:   TypeRefKey,
+    pub name:       String,
+    pub ty:         TypeRefKey,
+    pub is_virtual: bool,
 }
 
 #[derive(Debug, Clone, From)]

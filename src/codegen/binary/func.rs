@@ -25,6 +25,8 @@ pub struct FuncCodegen<'a, 'b> {
     pub ret_policy: types::ReturnPolicy,
     #[ctor(default)]
     pub is_global: bool,
+    #[ctor(default)]
+    pub is_virtual: bool,
     #[ctor(expr(utils::ScopeStack::empty()))]
     pub scopes: utils::ScopeStack<ScopePayload<'a>>,
     #[ctor(default)]
@@ -78,7 +80,8 @@ impl<'a> FuncCodegen<'a, '_> {
                 params,
                 &cl_values,
                 &self.ctx.modules,
-                &self.ctx.cl_module
+                &self.ctx.cl_module,
+                self.is_virtual,
             ),
         ));
 
@@ -108,9 +111,12 @@ impl<'a> FuncCodegen<'a, '_> {
         let block = builder.create_block();
 
         if let Some(ty) = ty {
-            for native_ty in
-                types::get_type_canonical(ty, self.ctx.modules, &self.ctx.cl_module)
-            {
+            for native_ty in types::get_type_canonical(
+                ty,
+                self.ctx.modules,
+                &self.ctx.cl_module,
+                false,
+            ) {
                 builder.append_block_param(block, native_ty);
             }
         }
@@ -405,7 +411,8 @@ impl<'a> FuncCodegen<'a, '_> {
                 for (loop_v, initial_v) in inputs {
                     let initial_runtime_value =
                         self.values[&(mod_idx, *initial_v)].clone();
-                    let initial_values = self.use_value_canonical(mod_idx, *initial_v);
+                    let initial_values =
+                        self.use_value_canonical(mod_idx, *initial_v, false);
                     loop_args.extend(initial_values.iter().cloned());
 
                     let loop_values = initial_values
@@ -476,28 +483,34 @@ impl<'a> FuncCodegen<'a, '_> {
 
                 let values = vs
                     .into_iter()
-                    .flat_map(|v| self.use_value_canonical(mod_idx, *v))
+                    .flat_map(|v| self.use_value_canonical(mod_idx, *v, false))
                     .collect_vec();
 
                 expect_builder!(self).ins().jump(block, &values);
                 self.scopes.last_mut().mark_as_never();
             }
-            b::InstrBody::Call(func_mod_idx, func_idx, vs) => {
+            &b::InstrBody::Call(func_mod_idx, func_idx, ref vs) => {
+                let func = &self.ctx.modules[func_mod_idx].funcs[func_idx];
+                let is_virtual = func.method.as_ref().is_some_and(|x| x.is_virtual);
+
                 let args = vs
-                    .into_iter()
-                    .flat_map(|v| self.use_value_canonical(mod_idx, *v))
+                    .iter()
+                    .enumerate()
+                    .flat_map(|(i, &v)| {
+                        self.use_value_canonical(mod_idx, v, is_virtual && i == 0)
+                    })
                     .collect_vec();
 
-                if let Some(value) = self.call_func(*func_mod_idx, *func_idx, args) {
+                if let Some(value) = self.call_func(func_mod_idx, func_idx, args) {
                     self.save_value(mod_idx, instr.results[0], value);
                 }
             }
-            b::InstrBody::IndirectCall(func_v, vs) => {
-                let func = self.values[&(mod_idx, *func_v)].clone();
+            &b::InstrBody::IndirectCall(func_v, ref vs) => {
+                let func = self.values[&(mod_idx, func_v)].clone();
 
                 let mut args = vs
-                    .into_iter()
-                    .flat_map(|v| self.use_value_canonical(mod_idx, *v))
+                    .iter()
+                    .flat_map(|&v| self.use_value_canonical(mod_idx, v, false))
                     .collect_vec();
 
                 let value = match &func.src {
@@ -517,7 +530,7 @@ impl<'a> FuncCodegen<'a, '_> {
                         self.call_indirect(proto, *callee, args)
                     }
                     types::ValueSource::FuncAsValue(func_as_value) => {
-                        args.splice(0..0, [func_as_value.env]);
+                        args.insert(0, func_as_value.env);
                         self.call_indirect(&func_as_value.proto, func_as_value.ptr, args)
                     }
                     src => todo!("call indirect: {src:?}"),
@@ -573,6 +586,7 @@ impl<'a> FuncCodegen<'a, '_> {
                         &v.ty,
                         self.ctx.modules,
                         &self.ctx.cl_module,
+                        false,
                     ) {
                         offset += native_ty.bytes();
                     }
@@ -584,9 +598,12 @@ impl<'a> FuncCodegen<'a, '_> {
                 let ty = &self.ctx.modules[mod_idx].values[v].ty;
 
                 let mut values = vec![];
-                for native_ty in
-                    types::get_type_canonical(ty, self.ctx.modules, &self.ctx.cl_module)
-                {
+                for native_ty in types::get_type_canonical(
+                    ty,
+                    self.ctx.modules,
+                    &self.ctx.cl_module,
+                    false,
+                ) {
                     let value = expect_builder!(self).ins().load(
                         native_ty,
                         cl::MemFlags::new(),
@@ -603,6 +620,7 @@ impl<'a> FuncCodegen<'a, '_> {
                     &values,
                     self.ctx.modules,
                     &self.ctx.cl_module,
+                    false,
                 );
                 assert!(values.len() == n, "we should have consumed all values");
 
@@ -782,7 +800,7 @@ impl<'a> FuncCodegen<'a, '_> {
             }
             b::InstrBody::PtrSet(ptr_v, value_v) => {
                 let ptr = self.use_value_by_ref(mod_idx, *ptr_v);
-                let values = self.use_value_canonical(mod_idx, *value_v);
+                let values = self.use_value_canonical(mod_idx, *value_v, false);
 
                 let builder = expect_builder!(self);
                 let mut offset: i32 = 0;
@@ -1220,7 +1238,7 @@ impl<'a> FuncCodegen<'a, '_> {
 
         match (ret_policy, v) {
             (Some(types::ReturnPolicy::Normal), Some(v)) => {
-                let cl_values = self.use_value_canonical(mod_idx, v);
+                let cl_values = self.use_value_canonical(mod_idx, v, false);
                 expect_builder!(self).ins().return_(&cl_values);
             }
             (Some(types::ReturnPolicy::Struct(_)), Some(v)) => {
@@ -1247,7 +1265,7 @@ impl<'a> FuncCodegen<'a, '_> {
                 expect_builder!(self).ins().return_(&[]);
             }
             (None, Some(v)) => {
-                let cl_values = self.use_value_canonical(mod_idx, v);
+                let cl_values = self.use_value_canonical(mod_idx, v, false);
 
                 let builder = expect_builder!(self);
 
@@ -1262,6 +1280,7 @@ impl<'a> FuncCodegen<'a, '_> {
                         &block_params,
                         self.ctx.modules,
                         &self.ctx.cl_module,
+                        false,
                     );
                     assert_eq!(
                         n,
@@ -1287,13 +1306,18 @@ impl<'a> FuncCodegen<'a, '_> {
         }
     }
 
-    fn use_value_canonical(&mut self, mod_idx: usize, v: b::ValueIdx) -> Vec<cl::Value> {
+    fn use_value_canonical(
+        &mut self,
+        mod_idx: usize,
+        v: b::ValueIdx,
+        is_receiver: bool,
+    ) -> Vec<cl::Value> {
         let runtime_value = unwrap!(
             self.values.get(&(mod_idx, v)),
             "value should be present in scope: {v}"
         );
         let ty = &self.ctx.modules[mod_idx].values[v].ty;
-        self.add_canonical(&runtime_value.src.clone(), ty)
+        self.add_canonical(&runtime_value.src.clone(), ty, is_receiver)
     }
 
     /// Add value to function as multiple Cranelift value, by value or by reference,
@@ -1302,11 +1326,12 @@ impl<'a> FuncCodegen<'a, '_> {
         &mut self,
         src: &types::ValueSource,
         ty: &b::Type,
+        is_receiver: bool,
     ) -> Vec<cl::Value> {
+        if is_receiver {
+            return vec![self.add_by_ref(src)];
+        }
         match &ty.body {
-            b::TypeBody::TypeRef(t) if t.is_self => {
-                vec![self.add_by_ref(src)]
-            }
             b::TypeBody::TypeRef(t) => match &t.get_typedef(self.ctx.modules).body {
                 b::TypeDefBody::Record(_)
                 | b::TypeDefBody::Builtin(b::BuiltinType::Ptr) => {
@@ -1325,7 +1350,7 @@ impl<'a> FuncCodegen<'a, '_> {
     pub fn add_by_ref(&mut self, src: &types::ValueSource) -> cl::Value {
         let builder = expect_builder!(self);
         match src {
-            types::ValueSource::Ptr(v) => *v,
+            &types::ValueSource::Ptr(v) | &types::ValueSource::PrimitiveAsPtr(v) => v,
             types::ValueSource::UnitPtr => {
                 self.add_const(types::Const::uint_ptr(1, &self.ctx.cl_module))
             }
@@ -1346,14 +1371,36 @@ impl<'a> FuncCodegen<'a, '_> {
                     .ins()
                     .stack_addr(self.ctx.cl_module.isa().pointer_type(), *ss, 0)
             }
-            types::ValueSource::I8(..)
-            | types::ValueSource::I16(..)
-            | types::ValueSource::I32(..)
-            | types::ValueSource::I64(..)
-            | types::ValueSource::F32(..)
-            | types::ValueSource::F64(..)
-            | types::ValueSource::Primitive(..) => {
-                todo!("add_by_ref: primitives")
+            types::ValueSource::I8(_)
+            | types::ValueSource::I16(_)
+            | types::ValueSource::I32(_)
+            | types::ValueSource::I64(_)
+            | types::ValueSource::F32(_)
+            | types::ValueSource::F64(_) => {
+                let v = self.add_const(src.try_into().unwrap());
+                self.add_by_ref(&types::ValueSource::Primitive(v))
+            }
+            &types::ValueSource::Primitive(v) => {
+                let native_ty = builder.func.dfg.value_type(v);
+                let ptr_ty = self.ctx.cl_module.isa().pointer_type();
+
+                let v = if native_ty.is_float() {
+                    builder.ins().bitcast(
+                        cl::Type::int(native_ty.bits() as u16).unwrap(),
+                        cl::MemFlags::new(),
+                        v,
+                    )
+                } else {
+                    v
+                };
+
+                if native_ty.bytes() == ptr_ty.bytes() {
+                    v
+                } else if native_ty.bytes() < ptr_ty.bytes() {
+                    builder.ins().uextend(ptr_ty, v)
+                } else {
+                    todo!("pass primitive as pointer")
+                }
             }
             types::ValueSource::Slice(..) => {
                 todo!("add_by_ref: slice")
@@ -1381,7 +1428,7 @@ impl<'a> FuncCodegen<'a, '_> {
         ty: &b::Type,
     ) -> Vec<cl::Value> {
         match src {
-            types::ValueSource::Primitive(v) => vec![*v],
+            &types::ValueSource::Primitive(v) => vec![v],
             types::ValueSource::I8(_)
             | types::ValueSource::I16(_)
             | types::ValueSource::I32(_)
@@ -1408,6 +1455,32 @@ impl<'a> FuncCodegen<'a, '_> {
                     offset += native_ty.bytes() as i32;
                 }
                 values
+            }
+            &types::ValueSource::PrimitiveAsPtr(v) => {
+                let builder = expect_builder!(self);
+
+                let native_tys =
+                    types::get_type_by_type(ty, self.ctx.modules, &self.ctx.cl_module);
+                assert_eq!(native_tys.len(), 1);
+
+                let native_ty = native_tys[0];
+                let ptr_ty = self.ctx.cl_module.isa().pointer_type();
+                assert!(native_ty.bytes() <= ptr_ty.bytes());
+
+                let v = if native_ty.bytes() < ptr_ty.bytes() {
+                    builder
+                        .ins()
+                        .ireduce(cl::Type::int(native_ty.bits() as u16).unwrap(), v)
+                } else {
+                    v
+                };
+
+                if native_ty.is_float() {
+                    let v = builder.ins().bitcast(native_ty, cl::MemFlags::new(), v);
+                    vec![v]
+                } else {
+                    vec![v]
+                }
             }
             types::ValueSource::Slice(slice) => {
                 let ptr_value = self.add_by_ref(&slice.ptr);
@@ -1604,7 +1677,7 @@ impl<'a> FuncCodegen<'a, '_> {
         let mut stored_values = Vec::new();
         for v in tuple {
             let v_ty = &self.ctx.modules[v.mod_idx].values[v.value_idx].ty;
-            for v in self.add_canonical(&v.src, v_ty) {
+            for v in self.add_canonical(&v.src, v_ty, false) {
                 stored_values.push((size, v));
                 size += expect_builder!(self).func.dfg.value_type(v).bytes();
             }

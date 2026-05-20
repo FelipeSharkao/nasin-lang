@@ -330,7 +330,10 @@ impl BinaryCodegen<'_> {
             let mut func_ctx = cl::FunctionBuilderContext::new();
             let func = this.declared_funcs.get_mut(&(mod_idx, idx)).unwrap();
             let func_builder = cl::FunctionBuilder::new(func, &mut func_ctx);
+
             let mut codegen = FuncCodegen::new(this.ctx, Some(func_builder), ret_policy);
+            codegen.is_virtual = decl.method.as_ref().is_some_and(|x| x.is_virtual);
+
             codegen.create_initial_block(
                 &decl.params,
                 Some(decl.ret),
@@ -351,6 +354,9 @@ impl BinaryCodegen<'_> {
                 .func_id
                 .expect("Function should be defined");
 
+            let sig = &binding.func.signature;
+            let env_idx = types::sig_first_param_index(sig);
+
             let mut func_ctx = cl::FunctionBuilderContext::new();
             let mut func_builder =
                 cl::FunctionBuilder::new(&mut binding.func, &mut func_ctx);
@@ -360,12 +366,6 @@ impl BinaryCodegen<'_> {
             func_builder.switch_to_block(block);
 
             let mut params = func_builder.block_params(block).to_vec();
-            // If the function returns a struct, it is strictly required to be the first
-            // argument, so the env will be the second
-            let env_idx = match &binding.ret_policy {
-                ReturnPolicy::Struct(_) => 1,
-                _ => 0,
-            };
             params.splice(env_idx..(env_idx + 1), []);
 
             let target_func_ref = self

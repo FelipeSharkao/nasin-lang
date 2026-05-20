@@ -857,14 +857,16 @@ impl<'a> TypeChecker<'a> {
                 self.validate_value(idx, &mut HashSet::new(), modules);
         }
 
-        for idx in 0..len {
-            if matches!(self.nodes[idx].status, TypeNodeStatus::Unresolved) {
-                let value = &modules[self.mod_idx].values[idx];
-                tracing::trace!(idx, ?value.ty, "is not final");
-                self.ctx.push_error(errors::Error::new(
-                    errors::ErrorDetail::TypeNotFinal,
-                    value.loc,
-                ));
+        if !self.ctx.has_errors() {
+            for idx in 0..len {
+                if self.nodes[idx].status == TypeNodeStatus::Unresolved {
+                    let value = &modules[self.mod_idx].values[idx];
+                    tracing::trace!(idx, ?value.ty, "is not final");
+                    self.ctx.push_error(errors::Error::new(
+                        errors::ErrorDetail::TypeNotFinal,
+                        value.loc,
+                    ));
+                }
             }
         }
 

@@ -81,7 +81,11 @@ impl<'t> Iterator for TreeSitterChildren<'t> {
     type Item = TreeSitterChild<'t>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        while !self.finished && !self.cursor.node().is_named() {
+        while !self.finished
+            && (!self.cursor.node().is_named()
+                || self.cursor.node().is_error()
+                || self.cursor.node().is_missing())
+        {
             self.finished = !self.cursor.goto_next_sibling();
         }
 
