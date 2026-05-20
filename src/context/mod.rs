@@ -1,3 +1,4 @@
+mod builtins;
 mod runtime;
 
 use std::fs;
@@ -50,6 +51,10 @@ impl BuildContext {
     }
 
     pub fn parse(&self, src_idx: usize) -> usize {
+        if self.lock_modules().len() == b::BUILTINS_MODULE_IDX {
+            builtins::BuiltinsBuilder::new(self).build();
+        }
+
         let mut ts_parser = ts::Parser::new();
         ts_parser
             .set_language(&tree_sitter_nasin::LANGUAGE.into())
@@ -83,7 +88,7 @@ impl BuildContext {
         if root_node.has_error() {
             for err in root_node.iter_errors() {
                 let source = &self.source_manager.source(src_idx).content().text;
-                let token = err.child(0).unwrap().get_text(source).to_string();
+                let token = err.get_text(source).to_string();
                 self.push_error(errors::Error::new(
                     errors::UnexpectedToken::new(token).into(),
                     Some(b::Loc::from_node(src_idx, &err)),

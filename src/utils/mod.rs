@@ -1,8 +1,5 @@
-#![allow(unused_imports)]
-
 mod cmd;
 mod deadlock_guard;
-mod enumerate;
 mod paths;
 mod replace_with;
 mod scope_stack;
@@ -13,18 +10,17 @@ mod to_radix;
 mod traits;
 mod write_io;
 
-pub use self::cmd::*;
-pub use self::deadlock_guard::*;
-pub use self::enumerate::*;
-pub use self::paths::*;
-pub use self::replace_with::*;
-pub use self::scope_stack::*;
-pub use self::sorted_map::*;
-pub use self::str::*;
-pub use self::string_lit::*;
-pub use self::to_radix::*;
-pub use self::traits::*;
-pub use self::write_io::*;
+pub(crate) use self::cmd::*;
+pub(crate) use self::deadlock_guard::*;
+pub(crate) use self::paths::*;
+pub(crate) use self::replace_with::*;
+pub(crate) use self::scope_stack::*;
+pub(crate) use self::sorted_map::*;
+pub(crate) use self::str::*;
+pub(crate) use self::string_lit::*;
+pub(crate) use self::to_radix::*;
+pub(crate) use self::traits::*;
+pub(crate) use self::write_io::*;
 
 macro_rules! unordered {
     ($a:pat, $b:pat $(,)?) => {

@@ -14,7 +14,7 @@ static PFX: &str = "_n";
 /// Therefore, all names are are considered nested
 #[derive(Debug, ctor)]
 pub struct NameMangler<'a> {
-    pub modules: &'a [b::Module],
+    pub modules:        &'a [b::Module],
     #[ctor(default)]
     substitution_table: HashMap<Vec<b::NameNode>, usize>,
 }
@@ -95,34 +95,6 @@ impl<'a> NameMangler<'a> {
 
     fn write_type(&mut self, s: &mut String, ty: &b::Type) {
         match &ty.body {
-            b::TypeBody::Void => write!(s, "v").unwrap(),
-            b::TypeBody::Bool => write!(s, "b").unwrap(),
-            b::TypeBody::I8 => write!(s, "a").unwrap(),
-            b::TypeBody::I16 => write!(s, "s").unwrap(),
-            b::TypeBody::I32 => write!(s, "i").unwrap(),
-            b::TypeBody::I64 => write!(s, "x").unwrap(),
-            b::TypeBody::U8 => write!(s, "h").unwrap(),
-            b::TypeBody::U16 => write!(s, "t").unwrap(),
-            b::TypeBody::U32 => write!(s, "j").unwrap(),
-            b::TypeBody::U64 => write!(s, "y").unwrap(),
-            b::TypeBody::USize => self.write_name(
-                s,
-                &b::Name::from_ident("usize", b::NameIdentKind::Type, None),
-            ),
-            b::TypeBody::F32 => write!(s, "f").unwrap(),
-            b::TypeBody::F64 => write!(s, "d").unwrap(),
-            b::TypeBody::String => self
-                .write_name(s, &b::Name::from_ident("str", b::NameIdentKind::Type, None)),
-            b::TypeBody::Array(ty) => {
-                let name = b::Name::from_ident("array", b::NameIdentKind::Type, None)
-                    .with_type_params([ty.as_ref().clone()], None);
-                self.write_name(s, &name);
-            }
-            b::TypeBody::Ptr(None) => write!(s, "Pv").unwrap(),
-            b::TypeBody::Ptr(Some(ty)) => {
-                write!(s, "P").unwrap();
-                self.write_type(s, ty);
-            }
             b::TypeBody::Func(func) => {
                 write!(s, "F").unwrap();
                 for ty in &func.params {
@@ -131,22 +103,61 @@ impl<'a> NameMangler<'a> {
                 write!(s, "E").unwrap();
             }
             b::TypeBody::TypeRef(ty_ref) => {
-                let def = &self.modules[ty_ref.mod_idx].typedefs[ty_ref.idx];
-                let mut name = Cow::Borrowed(&def.name);
-                if !ty_ref.args.is_empty() {
-                    name = Cow::Owned(
-                        name.with_type_params(ty_ref.args.iter().cloned(), None),
-                    );
+                let typedefdef = ty_ref.get_typedef(self.modules);
+                if let &b::TypeDefBody::Builtin(builtin) = &typedefdef.body {
+                    self.write_builtin_type(s, builtin, &ty_ref.args);
+                } else {
+                    let mut name = Cow::Borrowed(&typedefdef.name);
+                    if !ty_ref.args.is_empty() {
+                        name = Cow::Owned(
+                            name.with_type_params(ty_ref.args.iter().cloned(), None),
+                        );
+                    }
+                    self.write_name(s, name.as_ref());
                 }
-                self.write_name(s, name.as_ref());
             }
-            b::TypeBody::Never
-            | b::TypeBody::AnyOpaque
-            | b::TypeBody::AnyNumber
-            | b::TypeBody::AnySignedNumber
-            | b::TypeBody::AnyFloat
-            | b::TypeBody::Inferred(_)
-            | b::TypeBody::TypeVar(_) => panic!("cannot mangle type `{ty}`"),
+            b::TypeBody::Inferred(_) | b::TypeBody::TypeVar(_) => {
+                panic!("cannot mangle type `{:?}`", &ty.body)
+            }
+        }
+    }
+
+    fn write_builtin_type(
+        &mut self,
+        s: &mut String,
+        builtin: b::BuiltinType,
+        args: &[b::Type],
+    ) {
+        match (builtin, args) {
+            (b::BuiltinType::Void, []) => write!(s, "v").unwrap(),
+            (b::BuiltinType::Bool, []) => write!(s, "b").unwrap(),
+            (b::BuiltinType::I8, []) => write!(s, "a").unwrap(),
+            (b::BuiltinType::I16, []) => write!(s, "s").unwrap(),
+            (b::BuiltinType::I32, []) => write!(s, "i").unwrap(),
+            (b::BuiltinType::I64, []) => write!(s, "x").unwrap(),
+            (b::BuiltinType::U8, []) => write!(s, "h").unwrap(),
+            (b::BuiltinType::U16, []) => write!(s, "t").unwrap(),
+            (b::BuiltinType::U32, []) => write!(s, "j").unwrap(),
+            (b::BuiltinType::U64, []) => write!(s, "y").unwrap(),
+            (b::BuiltinType::USize, []) => self.write_name(
+                s,
+                &b::Name::from_ident("usize", b::NameIdentKind::Type, None),
+            ),
+            (b::BuiltinType::F32, []) => write!(s, "f").unwrap(),
+            (b::BuiltinType::F64, []) => write!(s, "d").unwrap(),
+            (b::BuiltinType::String, []) => self
+                .write_name(s, &b::Name::from_ident("str", b::NameIdentKind::Type, None)),
+            (b::BuiltinType::Array, [ty]) => {
+                let name = b::Name::from_ident("array", b::NameIdentKind::Type, None)
+                    .with_type_params([ty.clone()], None);
+                self.write_name(s, &name);
+            }
+            (b::BuiltinType::Ptr, []) => write!(s, "Pv").unwrap(),
+            (b::BuiltinType::Ptr, [ty]) => {
+                write!(s, "P").unwrap();
+                self.write_type(s, ty);
+            }
+            _ => panic!("cannot mangle type {builtin:?}"),
         }
     }
 

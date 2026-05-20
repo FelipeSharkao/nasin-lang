@@ -14,6 +14,7 @@ use std::mem;
 use cranelift_shim::settings::Configurable;
 use cranelift_shim::{self as cl, InstBuilder, Module};
 use itertools::Itertools;
+use nasin_macros::NumberEnum;
 use target_lexicon::Triple;
 
 use self::context::{CodegenContext, FuncBinding};
@@ -23,16 +24,20 @@ use self::name_mangling::NameMangler;
 use self::types::ReturnPolicy;
 use crate::{bytecode as b, cmd, config, sources, utils};
 
-utils::number_enum!(pub FuncNS: u32 {
-    User = 0,
-    SystemFunc = 1,
-    Helper = 2,
-});
+#[derive(Debug, NumberEnum)]
+#[repr(u32)]
+pub enum FuncNS {
+    User,
+    SystemFunc,
+    Helper,
+}
 
-utils::number_enum!(pub SystemFunc: u32 {
-    Start = 0,
-    Exit = 1,
-});
+#[derive(Debug, NumberEnum)]
+#[repr(u32)]
+pub enum SystemFunc {
+    Start,
+    Exit,
+}
 
 pub struct BinaryCodegen<'a> {
     ctx: CodegenContext<'a>,
@@ -75,7 +80,7 @@ impl<'a> BinaryCodegen<'a> {
                 modules,
                 cfg,
                 cl_module,
-                DebugData::new(cfg, source_manager),
+                DebugData::new(modules, cfg, source_manager),
             ),
             module_ctx,
             declared_funcs: HashMap::new(),
@@ -325,7 +330,10 @@ impl BinaryCodegen<'_> {
             let mut func_ctx = cl::FunctionBuilderContext::new();
             let func = this.declared_funcs.get_mut(&(mod_idx, idx)).unwrap();
             let func_builder = cl::FunctionBuilder::new(func, &mut func_ctx);
+
             let mut codegen = FuncCodegen::new(this.ctx, Some(func_builder), ret_policy);
+            codegen.is_virtual = decl.method.as_ref().is_some_and(|x| x.is_virtual);
+
             codegen.create_initial_block(
                 &decl.params,
                 Some(decl.ret),
@@ -346,6 +354,9 @@ impl BinaryCodegen<'_> {
                 .func_id
                 .expect("Function should be defined");
 
+            let sig = &binding.func.signature;
+            let env_idx = types::sig_first_param_index(sig);
+
             let mut func_ctx = cl::FunctionBuilderContext::new();
             let mut func_builder =
                 cl::FunctionBuilder::new(&mut binding.func, &mut func_ctx);
@@ -355,12 +366,6 @@ impl BinaryCodegen<'_> {
             func_builder.switch_to_block(block);
 
             let mut params = func_builder.block_params(block).to_vec();
-            // If the function returns a struct, it is strictly required to be the first
-            // argument, so the env will be the second
-            let env_idx = match &binding.ret_policy {
-                ReturnPolicy::Struct(_) => 1,
-                _ => 0,
-            };
             params.splice(env_idx..(env_idx + 1), []);
 
             let target_func_ref = self
@@ -463,7 +468,7 @@ impl BinaryCodegen<'_> {
         {
             Ok(()) => {}
             Err(err) => {
-                panic!("Failed to emit function {name}: {err:?}",);
+                panic!("Failed to emit function {name:?}: {err:?}",);
             }
         }
         self.ctx.cl_module.clear_context(&mut self.module_ctx)

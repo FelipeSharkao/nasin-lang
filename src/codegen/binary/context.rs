@@ -10,33 +10,34 @@ use super::func::FuncCodegen;
 use super::name_mangling::NameMangler;
 use super::types::ReturnPolicy;
 use super::{FuncNS, types};
+use crate::bytecode::BuiltinType;
 use crate::{bytecode as b, config, utils};
 
 #[derive(Debug)]
 pub struct FuncBinding {
-    pub is_extrn: bool,
-    pub is_virt: bool,
+    pub is_extrn:    bool,
+    pub is_virt:     bool,
     pub symbol_name: String,
-    pub func_id: Option<cl::FuncId>,
-    pub proto: types::FuncPrototype,
+    pub func_id:     Option<cl::FuncId>,
+    pub proto:       types::FuncPrototype,
 }
 
 #[derive(Debug, Clone)]
 pub struct GlobalBinding<'a> {
     #[allow(dead_code)]
     pub symbol_name: String,
-    pub value: types::RuntimeValue,
+    pub value:       types::RuntimeValue,
     #[allow(dead_code)]
-    pub ty: Cow<'a, b::Type>,
-    pub is_const: bool,
+    pub ty:          Cow<'a, b::Type>,
+    pub is_const:    bool,
 }
 
 #[derive(Debug)]
 pub struct FuncClosureBinding {
     pub symbol_name: String,
-    pub func_id: cl::FuncId,
-    pub func: cl::Function,
-    pub ret_policy: ReturnPolicy,
+    pub func_id:     cl::FuncId,
+    pub func:        cl::Function,
+    pub ret_policy:  ReturnPolicy,
 }
 impl Into<types::FuncPrototype> for &FuncClosureBinding {
     fn into(self) -> types::FuncPrototype {
@@ -57,7 +58,7 @@ pub struct CodegenContext<'a> {
     #[ctor(default)]
     pub globals: HashMap<(usize, usize), GlobalBinding<'a>>,
     #[ctor(default)]
-    pub vtables_desc: HashMap<(usize, usize), types::VTableDesc>,
+    pub vtables_desc: HashMap<b::TypeRefKey, types::VTableDesc>,
     #[ctor(default)]
     pub vtables_impl: HashMap<types::VTableRef, cl::DataId>,
     #[ctor(default)]
@@ -124,12 +125,21 @@ impl<'a> CodegenContext<'a> {
 
     pub fn insert_type(&mut self, mod_idx: usize, idx: usize) {
         let typedef = &self.modules[mod_idx].typedefs[idx];
+        let ty_key = match &typedef.body {
+            b::TypeDefBody::Builtin(builtin) => b::TypeRefKey::Builtin(*builtin),
+            _ => b::TypeRefKey::Custom { mod_idx, idx },
+        };
         match &typedef.body {
-            b::TypeDefBody::Record(..) => {
-                self.insert_record_type(mod_idx, idx, typedef);
+            b::TypeDefBody::Record(_) => {
+                self.insert_type_impls(ty_key, typedef);
             }
             b::TypeDefBody::Interface => {
-                self.insert_interface_type(mod_idx, idx, typedef);
+                self.insert_interface_type(ty_key, typedef);
+            }
+            b::TypeDefBody::Builtin(builtin) => {
+                if !builtin.is_not_final() {
+                    self.insert_type_impls(ty_key, typedef);
+                }
             }
         }
     }
@@ -239,14 +249,9 @@ impl<'a> CodegenContext<'a> {
         }
 
         let func_binding = &self.funcs[&key];
-        let mut sig = func_binding.proto.signature.clone();
+        let env_idx = func_binding.proto.first_param_index();
 
-        // If the function returns a struct, it is strictly required to be the first
-        // argument, so the env will be the second
-        let env_idx = match &func_binding.proto.ret_policy {
-            ReturnPolicy::Struct(_) => 1,
-            _ => 0,
-        };
+        let mut sig = func_binding.proto.signature.clone();
         sig.params.insert(
             env_idx,
             cl::AbiParam::new(self.cl_module.isa().pointer_type()),
@@ -265,7 +270,7 @@ impl<'a> CodegenContext<'a> {
                 .iter()
                 .map(|v| &self.modules[mod_idx].values[*v].ty)
                 .collect_vec();
-            let void_ptr = b::Type::new(b::TypeBody::Ptr(None), None);
+            let void_ptr = b::Type::builtin(BuiltinType::Ptr, [], None);
             params.insert(0, &void_ptr);
             NameMangler::new(self.modules).mangle(
                 &func_decl.name.with("closure", b::NameIdentKind::Func, None),
@@ -290,33 +295,28 @@ impl<'a> CodegenContext<'a> {
         (func_id, proto)
     }
 
-    fn insert_record_type(
+    fn insert_type_impls(
         &mut self,
-        mod_idx: usize,
-        idx: usize,
+        ty: b::TypeRefKey,
         typedef: &b::TypeDef,
     ) -> Vec<cl::DataId> {
-        let key = (mod_idx, idx);
-
         typedef
             .ifaces
             .iter()
-            .map(|iface_key| {
-                let key = types::VTableRef::new(*iface_key, key);
+            .map(|&iface_key| {
+                let key = types::VTableRef::new(iface_key, ty);
                 if let Some(data_id) = self.vtables_impl.get(&key) {
                     return *data_id;
                 }
 
-                let iface_def = &self.modules[iface_key.0].typedefs[iface_key.1];
-                let b::TypeDefBody::Interface = &iface_def.body else {
-                    panic!(
-                        "type {}-{} should be an interface, I don't know what I got",
-                        iface_key.0, iface_key.1
-                    );
-                };
+                let iface_def = iface_key.get_typedef(self.modules);
+                assert!(
+                    matches!(iface_def.body, b::TypeDefBody::Interface),
+                    "type {iface_key:?} should be an interface, but got {:?}",
+                    &iface_def.body
+                );
 
-                let vtable_desc =
-                    self.insert_interface_type(iface_key.0, iface_key.1, iface_def);
+                let vtable_desc = self.insert_interface_type(iface_key, iface_def);
 
                 let tuple = vtable_desc
                     .methods
@@ -343,11 +343,10 @@ impl<'a> CodegenContext<'a> {
 
     fn insert_interface_type(
         &mut self,
-        mod_idx: usize,
-        idx: usize,
+        ty: b::TypeRefKey,
         typedef: &b::TypeDef,
     ) -> &types::VTableDesc {
-        self.vtables_desc.entry((mod_idx, idx)).or_insert_with(|| {
+        self.vtables_desc.entry(ty).or_insert_with(|| {
             types::VTableDesc::new(typedef.methods.keys().cloned().collect())
         })
     }

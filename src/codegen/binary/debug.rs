@@ -14,13 +14,14 @@ use crate::{bytecode as b, config, sources, utils};
 
 #[derive(Debug, Clone, ctor)]
 pub struct DebugFunction {
-    pub name: b::Name,
+    pub name:        b::Name,
     pub symbol_name: String,
-    pub loc: Option<b::Loc>,
+    pub loc:         Option<b::Loc>,
 }
 
 #[derive(Debug, Clone, ctor)]
 pub struct DebugData<'a> {
+    pub modules: &'a [b::Module],
     pub cfg: &'a config::BuildConfig,
     pub source_manager: &'a sources::SourceManager,
     #[ctor(default)]
@@ -42,8 +43,8 @@ impl<'a> DebugData<'a> {
 
     pub fn write_debug_sections(&mut self, object: &mut Object) {
         let encoding = gimli::Encoding {
-            format: gimli::Format::Dwarf32,
-            version: 5,
+            format:       gimli::Format::Dwarf32,
+            version:      5,
             address_size: 8,
         };
 
@@ -277,9 +278,12 @@ impl<'a> DebugData<'a> {
 
                 let id = dwarf.unit.add(id, tag);
 
-                let name_str = dwarf
-                    .strings
-                    .add(utils::join("", nodes).to_string().into_bytes());
+                let mut name = String::new();
+                b::Printer::new(&self.modules, &self.cfg)
+                    .write_name_nodes(&mut name, nodes)
+                    .unwrap();
+
+                let name_str = dwarf.strings.add(name.into_bytes());
                 dwarf
                     .unit
                     .get_mut(id)
@@ -350,9 +354,9 @@ impl<'a> DebugData<'a> {
 #[derive(Debug, Clone, ctor)]
 struct DwarfSection {
     #[ctor(expr(EndianVec::new(LittleEndian)))]
-    bytes: EndianVec<LittleEndian>,
+    bytes:          EndianVec<LittleEndian>,
     #[ctor(default)]
-    relocs: Vec<Relocation>,
+    relocs:         Vec<Relocation>,
     #[ctor(default)]
     object_section: Option<object::write::SectionId>,
 }

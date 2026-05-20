@@ -1,4 +1,3 @@
-use std::borrow::Cow;
 use std::cell::RefCell;
 use std::fmt::{self, Display, Write};
 
@@ -82,7 +81,11 @@ impl<'t> Iterator for TreeSitterChildren<'t> {
     type Item = TreeSitterChild<'t>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        while !self.finished && !self.cursor.node().is_named() {
+        while !self.finished
+            && (!self.cursor.node().is_named()
+                || self.cursor.node().is_error()
+                || self.cursor.node().is_missing())
+        {
             self.finished = !self.cursor.goto_next_sibling();
         }
 
@@ -152,23 +155,12 @@ impl<'t> Iterator for TreeSitterErrors<'t> {
     }
 }
 
-pub trait IntoItem<Q> {
-    type Item;
-    fn into_item(self, item: Q) -> Option<Self::Item>;
-}
-impl<T, I: IntoIterator<Item = T>> IntoItem<usize> for I {
-    type Item = T;
-    fn into_item(self, n: usize) -> Option<Self::Item> {
-        self.into_iter().nth(n)
-    }
-}
-
 const S: &str = "";
 
 #[derive(ctor)]
 struct TreeSitterDisplay<'t, 's> {
-    node: ts::Node<'t>,
-    source: &'s str,
+    node:         ts::Node<'t>,
+    source:       &'s str,
     #[ctor(default)]
     temp_strings: RefCell<Vec<String>>,
 }

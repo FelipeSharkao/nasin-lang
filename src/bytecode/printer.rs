@@ -1,3 +1,4 @@
+use std::borrow::{Borrow, Cow};
 use std::fmt::{self, Write};
 use std::mem;
 
@@ -7,10 +8,10 @@ use derive_ctor::ctor;
 use derive_setters::Setters;
 use itertools::Itertools;
 
-use super::Name;
 use super::instr::*;
 use super::module::*;
 use super::ty::*;
+use super::{Name, NameNode};
 use crate::config::BuildConfig;
 use crate::sources::SourceManager;
 use crate::utils;
@@ -66,6 +67,43 @@ impl<'a> Printer<'a> {
         self.write_type_body(f, body)
     }
 
+    pub fn write_name(&mut self, f: &mut impl Write, name: &Name) -> fmt::Result {
+        let name = match self.cur_mod_idx {
+            Some(mod_idx) => name.strip_prefix(&self.modules[mod_idx].name),
+            None => Cow::Borrowed(name),
+        };
+        self.write_name_nodes(f, name.nodes.iter())
+    }
+
+    pub fn write_name_nodes<'b>(
+        &mut self,
+        f: &mut impl Write,
+        nodes: impl IntoIterator<Item = &'b NameNode>,
+    ) -> fmt::Result {
+        for (i, nome) in nodes.into_iter().enumerate() {
+            match nome {
+                NameNode::Ident(ident) => {
+                    if i > 0 {
+                        write!(f, ".")?;
+                    }
+                    write!(f, "{}", ident.ident)?;
+                }
+                NameNode::TypeParams(params) => {
+                    write!(f, "<")?;
+                    for (i, param) in params.params.iter().enumerate() {
+                        if i > 0 {
+                            write!(f, ", ")?;
+                        }
+                        self.write_type_expr(f, &param.body)?;
+                    }
+                    write!(f, ">")?;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     fn write_all_in(&mut self, f: &mut impl Write, bump: &mut BumpScope) -> fmt::Result {
         for (i, _) in self.modules.iter().enumerate() {
             if i > 0 {
@@ -87,7 +125,7 @@ impl<'a> Printer<'a> {
 
         let module = &self.modules[mod_idx];
 
-        write!(f, "{}", module.name)?;
+        self.write_name(f, &module.name)?;
         if self.show_ids {
             write!(f, " (module {mod_idx})")?;
         }
@@ -178,38 +216,49 @@ impl<'a> Printer<'a> {
 
         let header = table.push_cell();
         write!(header, "{S:indent$}type ")?;
-        self.write_name(header, &typedef.name)?;
 
-        if typedef.generics.len() > 0 {
-            write!(header, "(")?;
-            for (i, &idx) in typedef.generics.iter().enumerate() {
-                if i > 0 {
-                    write!(header, ", ")?;
+        if let TypeDefBody::Builtin(builtin) = &typedef.body {
+            self.write_builtin_type(
+                header,
+                builtin,
+                typedef.generics.iter().map(|&idx| {
+                    Type::new(TypeBody::TypeVar(TypeVar::new(module.idx, idx)), None)
+                }),
+            )?;
+        } else {
+            self.write_name(header, &typedef.name)?;
+
+            if typedef.generics.len() > 0 {
+                write!(header, "(")?;
+                for (i, &idx) in typedef.generics.iter().enumerate() {
+                    if i > 0 {
+                        write!(header, ", ")?;
+                    }
+                    let typevar_def = &module.typevars[idx];
+                    self.write_name(header, &typevar_def.name)?;
+                    if self.show_ids {
+                        write!(header, " (typevar {idx})")?;
+                    }
                 }
-                let typevar_def = &module.typevars[idx];
-                self.write_name(header, &typevar_def.name)?;
-                if self.show_ids {
-                    write!(header, " (typevar {idx})")?;
-                }
+                write!(header, ")")?;
             }
-            write!(header, ")")?;
         }
 
         if self.show_ids && !self.reconstruct {
             write!(header, " (type {idx})")?;
         }
 
-        for (i, (mod_idx, ty_idx)) in typedef.ifaces.iter().sorted().enumerate() {
+        for (i, &iface) in typedef.ifaces.iter().sorted().enumerate() {
             if i == 0 {
                 write!(header, ": ")?;
             } else {
                 write!(header, ", ")?;
             }
-            self.write_type_ref(header, &TypeRef::new(*mod_idx, *ty_idx))?;
+            self.write_type_ref(header, &TypeRef::new(iface))?;
         }
 
         match &typedef.body {
-            TypeDefBody::Record(_) => {}
+            TypeDefBody::Record(_) | TypeDefBody::Builtin(_) => {}
             TypeDefBody::Interface => write!(header, " interface")?,
         }
 
@@ -220,7 +269,7 @@ impl<'a> Printer<'a> {
             self.write_loc_comment(loc_comment, Some(&typedef.loc))?;
         }
 
-        let has_body = match &typedef.body {
+        match &typedef.body {
             TypeDefBody::Record(rec) => {
                 for (name, field) in &rec.fields {
                     table.start_row();
@@ -233,16 +282,9 @@ impl<'a> Printer<'a> {
                         self.write_loc_comment(loc_comment, Some(&field.loc))?;
                     }
                 }
-
-                !rec.fields.is_empty()
             }
-            TypeDefBody::Interface => false,
+            TypeDefBody::Interface | TypeDefBody::Builtin(_) => {}
         };
-
-        if has_body && !typedef.methods.is_empty() {
-            table.start_row();
-            table.end_row();
-        }
 
         for (name, method) in &typedef.methods {
             table.start_row();
@@ -257,12 +299,7 @@ impl<'a> Printer<'a> {
             )?;
 
             if !self.reconstruct && self.show_ids {
-                let loc_comment = table.push_cell();
-                write!(
-                    loc_comment,
-                    " (func {}-{})",
-                    method.func_ref.0, method.func_ref.1
-                )?;
+                write!(line, " (func {}-{})", method.func_ref.0, method.func_ref.1)?;
             }
 
             if !self.reconstruct {
@@ -437,13 +474,10 @@ impl<'a> Printer<'a> {
             write!(f, "v{v}: ")?;
             self.write_type_body(f, &module.values[v].ty.body)?;
         }
-        write!(f, ")")?;
+        write!(f, "): ")?;
 
         let ret_ty = &module.values[func.ret].ty.body;
-        if !matches!(ret_ty, TypeBody::Void) {
-            write!(f, ": ")?;
-            self.write_type_body(f, ret_ty)?;
-        }
+        self.write_type_body(f, ret_ty)?;
 
         Ok(())
     }
@@ -642,9 +676,9 @@ impl<'a> Printer<'a> {
             InstrBody::PtrSet(p, val) => write!(f, "PtrSet(v{p}, v{val})"),
             InstrBody::TypeName(v) => write!(f, "TypeName(v{v})"),
             InstrBody::CompileError => write!(f, "CompileError"),
-            InstrBody::Dispatch(v, mod_idx, ty_idx) => {
+            InstrBody::Dispatch(v, ty_key) => {
                 write!(f, "Dispatch(v{v}, ")?;
-                self.write_type_ref(f, &TypeRef::new(*mod_idx, *ty_idx))?;
+                self.write_type_ref(f, &TypeRef::new(*ty_key))?;
                 write!(f, ")")
             }
             InstrBody::Type(v, ty) => {
@@ -669,19 +703,6 @@ impl<'a> Printer<'a> {
                 }
                 write!(f, " }}")?;
             }
-            TypeBody::Array(ty) => {
-                write!(f, "[")?;
-                self.write_type_body(f, &ty.body)?;
-                write!(f, "]")?;
-            }
-            TypeBody::Ptr(ty) => {
-                write!(f, "Ptr")?;
-                if let Some(ty) = ty {
-                    write!(f, "(")?;
-                    self.write_type_body(f, &ty.body)?;
-                    write!(f, ")")?;
-                }
-            }
             TypeBody::Func(func) => {
                 write!(f, "Func(")?;
                 for (i, p) in func.params.iter().enumerate() {
@@ -702,54 +723,87 @@ impl<'a> Printer<'a> {
                     write!(f, " (typevar {}-{})", typevar.mod_idx, typevar.typevar_idx)?;
                 }
             }
-            TypeBody::Void
-            | TypeBody::Never
-            | TypeBody::Bool
-            | TypeBody::AnyNumber
-            | TypeBody::AnySignedNumber
-            | TypeBody::AnyFloat
-            | TypeBody::AnyOpaque
-            | TypeBody::I8
-            | TypeBody::I16
-            | TypeBody::I32
-            | TypeBody::I64
-            | TypeBody::U8
-            | TypeBody::U16
-            | TypeBody::U32
-            | TypeBody::U64
-            | TypeBody::USize
-            | TypeBody::F32
-            | TypeBody::F64
-            | TypeBody::String => write!(f, "{body}")?,
         }
         Ok(())
     }
 
     fn write_type_ref(&mut self, f: &mut impl Write, type_ref: &TypeRef) -> fmt::Result {
-        let typedef = &self.modules[type_ref.mod_idx].typedefs[type_ref.idx];
-        self.write_name(f, &typedef.name)?;
+        let typedef = type_ref.get_typedef(self.modules);
 
-        if !type_ref.args.is_empty() {
+        if let TypeDefBody::Builtin(builtin) = &typedef.body {
+            self.write_builtin_type(f, builtin, &type_ref.args)?;
+        } else {
+            self.write_name(f, &typedef.name)?;
+
+            if !type_ref.args.is_empty() {
+                write!(f, "(")?;
+                for (i, arg) in type_ref.args.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    self.write_type_body(f, &arg.body)?;
+                }
+                write!(f, ")")?;
+            }
+        }
+
+        if let TypeRefKey::Custom { mod_idx, idx } = type_ref.key
+            && self.show_ids
+        {
+            write!(f, " (type {}-{})", mod_idx, idx)?;
+        }
+
+        Ok(())
+    }
+
+    fn write_builtin_type<'b>(
+        &mut self,
+        f: &mut impl Write,
+        builtin: &BuiltinType,
+        args: impl IntoIterator<Item = impl Borrow<Type>>,
+    ) -> fmt::Result {
+        let mut args = args.into_iter().peekable();
+
+        match builtin {
+            BuiltinType::Void => write!(f, "void")?,
+            BuiltinType::Never => write!(f, "never")?,
+            BuiltinType::Bool => write!(f, "bool")?,
+            BuiltinType::AnyOpaque => write!(f, "AnyOpaque")?,
+            BuiltinType::AnyNumber => write!(f, "AnyNumber")?,
+            BuiltinType::AnySignedNumber => write!(f, "AnySignedNumber")?,
+            BuiltinType::AnyFloat => write!(f, "AnyFloat")?,
+            BuiltinType::I8 => write!(f, "i8")?,
+            BuiltinType::I16 => write!(f, "i16")?,
+            BuiltinType::I32 => write!(f, "i32")?,
+            BuiltinType::I64 => write!(f, "i64")?,
+            BuiltinType::U8 => write!(f, "u8")?,
+            BuiltinType::U16 => write!(f, "u16")?,
+            BuiltinType::U32 => write!(f, "u32")?,
+            BuiltinType::U64 => write!(f, "u64")?,
+            BuiltinType::USize => write!(f, "usize")?,
+            BuiltinType::F32 => write!(f, "f32")?,
+            BuiltinType::F64 => write!(f, "f64")?,
+            BuiltinType::String => write!(f, "str")?,
+            BuiltinType::Array => {
+                write!(f, "[")?;
+                match args.next() {
+                    Some(ty) => self.write_type_body(f, &ty.borrow().body)?,
+                    None => write!(f, "_")?,
+                }
+                write!(f, "]")?;
+            }
+            BuiltinType::Ptr => write!(f, "Ptr")?,
+        }
+        if args.peek().is_some() {
             write!(f, "(")?;
-            for (i, arg) in type_ref.args.iter().enumerate() {
+            for (i, ty) in args.enumerate() {
                 if i > 0 {
                     write!(f, ", ")?;
                 }
-                self.write_type_body(f, &arg.body)?;
+                self.write_type_body(f, &ty.borrow().body)?;
             }
             write!(f, ")")?;
         }
-
-        if self.show_ids {
-            write!(
-                f,
-                " ({} {}-{})",
-                if type_ref.is_self { "self" } else { "type" },
-                type_ref.mod_idx,
-                type_ref.idx,
-            )?;
-        }
-
         Ok(())
     }
 
@@ -813,15 +867,6 @@ impl<'a> Printer<'a> {
         let path = self.cfg.strip_base_paths(&source.path).display();
 
         write!(f, "; {path}:{}:{}", loc.start_line, loc.start_col)
-    }
-
-    fn write_name(&mut self, f: &mut impl Write, name: &Name) -> fmt::Result {
-        if let Some(mod_idx) = self.cur_mod_idx {
-            let name = name.strip_prefix(&self.modules[mod_idx].name);
-            write!(f, "{}", name)
-        } else {
-            write!(f, "{}", name)
-        }
     }
 }
 

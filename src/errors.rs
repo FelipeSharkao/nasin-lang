@@ -18,7 +18,7 @@ pub struct Error {
 #[derive(Debug, Clone, Error, ctor)]
 pub struct CompilerError {
     source_manager: Option<Arc<sources::SourceManager>>,
-    errors: Vec<Error>,
+    errors:         Vec<Error>,
 }
 impl fmt::Display for CompilerError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -78,25 +78,34 @@ pub struct ReadError {
 }
 
 #[derive(Debug, Clone, Display, ctor)]
-#[display("Unexpected token `{}`", token)]
+#[display("Unexpected token {}", utils::encode_string_lit(token))]
 pub struct UnexpectedToken {
     pub token: String,
 }
 
 #[derive(Debug, Clone, Display, ctor)]
-#[display("Cannot find value `{ident}` on the current scope")]
+#[display(
+    "Cannot find value {} on the current scope",
+    utils::encode_string_lit(ident)
+)]
 pub struct ValueNotFound {
     pub ident: String,
 }
 
 #[derive(Debug, Clone, Display, ctor)]
-#[display("Cannot find type `{ident}` on the current scope")]
+#[display(
+    "Cannot find type {} on the current scope",
+    utils::encode_string_lit(ident)
+)]
 pub struct TypeNotFound {
     pub ident: String,
 }
 
 #[derive(Debug, Clone, Display, ctor)]
-#[display("Cannot find typevar `{ident}` on the current scope")]
+#[display(
+    "Cannot find typevar {} on the current scope",
+    utils::encode_string_lit(ident)
+)]
 pub struct TypeVarNotFound {
     pub ident: String,
 }

@@ -40,19 +40,15 @@ impl<'a> CodeTransformStep for FinishDispatchStep<'a> {
         let module = &mut modules[mod_idx];
 
         let mut remap = HashMap::new();
-        for (v, iface_mod_idx, iface_idx) in params {
+        for (v, iface_ty) in params {
             remap.entry(v).or_insert_with(|| {
-                let ty =
-                    b::Type::new(b::TypeRef::new(iface_mod_idx, iface_idx).into(), None);
+                let ty = b::Type::new(b::TypeRef::new(iface_ty).into(), None);
 
                 let idx = module.add_value(b::Value::new(ty, loc));
                 cursor.insert_instr(
                     module,
-                    b::Instr::new(
-                        b::InstrBody::Dispatch(v, iface_mod_idx, iface_idx),
-                        loc,
-                    )
-                    .with_results([idx]),
+                    b::Instr::new(b::InstrBody::Dispatch(v, iface_ty), loc)
+                        .with_results([idx]),
                 );
                 cursor.step(module);
 
@@ -68,17 +64,19 @@ fn collect_params<'m>(
     args: impl IntoIterator<Item = &'m b::ValueIdx>,
     params: impl IntoIterator<Item = &'m b::Type>,
     modules: &'m [b::Module],
-) -> Vec<(b::ValueIdx, usize, usize)> {
+) -> Vec<(b::ValueIdx, b::TypeRefKey)> {
     izip!(args, params)
         .filter_map(|(&arg, param_ty)| {
             let b::TypeBody::TypeRef(param_ty_ref) = &param_ty.body else {
                 return None;
             };
-            let param_ty_def = &modules[param_ty_ref.mod_idx].typedefs[param_ty_ref.idx];
-            if !matches!(&param_ty_def.body, b::TypeDefBody::Interface) {
+            if !matches!(
+                &param_ty_ref.get_typedef(modules).body,
+                b::TypeDefBody::Interface
+            ) {
                 return None;
             }
-            Some((arg, param_ty_ref.mod_idx, param_ty_ref.idx))
+            Some((arg, param_ty_ref.key))
         })
         .collect_vec()
 }

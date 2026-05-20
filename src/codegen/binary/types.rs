@@ -3,15 +3,15 @@ use std::collections::HashMap;
 use cranelift_shim as cl;
 use derive_ctor::ctor;
 use derive_more::{Display, From};
-use itertools::Itertools;
+use itertools::{Itertools, enumerate};
 
 use crate::bytecode as b;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Display, ctor)]
 #[display("{value_idx}")]
 pub struct RuntimeValue {
-    pub src: ValueSource,
-    pub mod_idx: usize,
+    pub src:       ValueSource,
+    pub mod_idx:   usize,
     pub value_idx: b::ValueIdx,
 }
 
@@ -31,6 +31,8 @@ pub enum ValueSource {
     F64(F64Bits),
     #[from(skip)]
     Primitive(cl::Value),
+    #[from(skip)]
+    PrimitiveAsPtr(cl::Value),
     #[from(skip)]
     #[display("ptr {}", _0)]
     Ptr(cl::Value),
@@ -95,6 +97,7 @@ impl ValueSource {
                 _ => panic!("how many bytes?"),
             },
             ValueSource::Primitive(..)
+            | ValueSource::PrimitiveAsPtr(..)
             | ValueSource::Ptr(..)
             | ValueSource::Data(..)
             | ValueSource::StackSlot(..)
@@ -115,6 +118,7 @@ impl ValueSource {
     pub fn count_values(&self) -> usize {
         match self {
             ValueSource::Primitive(_)
+            | ValueSource::PrimitiveAsPtr(_)
             | ValueSource::Ptr(_)
             | ValueSource::UnitPtr
             | ValueSource::I8(_)
@@ -152,6 +156,7 @@ impl ValueSource {
             | ValueSource::I64(_)
             | ValueSource::F32(_)
             | ValueSource::F64(_) => ValueSource::Primitive(values[0]),
+            ValueSource::PrimitiveAsPtr(_) => ValueSource::PrimitiveAsPtr(values[0]),
             ValueSource::Ptr(_)
             | ValueSource::UnitPtr
             | ValueSource::Data(_)
@@ -287,8 +292,7 @@ pub fn tuple_from_record<'a>(
     let b::TypeBody::TypeRef(ty_ref) = &ty.body else {
         panic!("type is not a record type");
     };
-    let b::TypeDefBody::Record(rec) = &modules[ty_ref.mod_idx].typedefs[ty_ref.idx].body
-    else {
+    let b::TypeDefBody::Record(rec) = &ty_ref.get_typedef(modules).body else {
         panic!("type is not a record type");
     };
 
@@ -305,14 +309,20 @@ pub fn tuple_from_args(
     cl_values: &[cl::Value],
     modules: &[b::Module],
     cl_module: &impl cl::Module,
+    is_virtual: bool,
 ) -> Vec<RuntimeValue> {
-    let mut i = 0;
-    values
-        .iter()
-        .map(|v| {
-            let (res, n) =
-                take_value_from_args(mod_idx, *v, &cl_values[i..], modules, cl_module);
-            i += n;
+    let mut c = 0;
+    enumerate(values)
+        .map(|(i, &v)| {
+            let (res, n) = take_value_from_args(
+                mod_idx,
+                v,
+                &cl_values[c..],
+                modules,
+                cl_module,
+                is_virtual && i == 0,
+            );
+            c += n;
             res
         })
         .collect_vec()
@@ -324,6 +334,7 @@ pub fn take_value_from_args(
     cl_values: &[cl::Value],
     modules: &[b::Module],
     cl_module: &impl cl::Module,
+    is_receiver: bool,
 ) -> (RuntimeValue, usize) {
     let ty = &modules[mod_idx].values[idx].ty;
 
@@ -334,25 +345,44 @@ pub fn take_value_from_args(
         value
     };
 
-    let src = match &ty.body {
-        b::TypeBody::TypeRef(ty_ref) => {
-            let typebody = &modules[ty_ref.mod_idx].typedefs[ty_ref.idx].body;
-            match typebody {
+    let src = if is_receiver {
+        match &ty.body {
+            b::TypeBody::TypeRef(ty_ref) => match &ty_ref.get_typedef(modules).body {
+                b::TypeDefBody::Record(_) | b::TypeDefBody::Interface => {
+                    ValueSource::Ptr(next())
+                }
+                b::TypeDefBody::Builtin(builtin) => match builtin {
+                    b::BuiltinType::String
+                    | b::BuiltinType::Array
+                    | b::BuiltinType::Ptr => ValueSource::Ptr(next()),
+                    _ => ValueSource::PrimitiveAsPtr(next()),
+                },
+            },
+            _ => ValueSource::Ptr(next()),
+        }
+    } else {
+        match &ty.body {
+            b::TypeBody::TypeRef(ty_ref) => match &ty_ref.get_typedef(modules).body {
                 b::TypeDefBody::Record(_) => ValueSource::Ptr(next()),
                 b::TypeDefBody::Interface => DynDispatched::new(next(), next()).into(),
+                b::TypeDefBody::Builtin(builtin) => match builtin {
+                    b::BuiltinType::String | b::BuiltinType::Array => {
+                        Box::new(Slice::new(
+                            ValueSource::Ptr(next()),
+                            ValueSource::Primitive(next()),
+                        ))
+                        .into()
+                    }
+                    b::BuiltinType::Ptr => ValueSource::Ptr(next()),
+                    _ => ValueSource::Primitive(next()),
+                },
+            },
+            b::TypeBody::Func(func_ty) => {
+                let proto = FuncPrototype::from_closure_type(func_ty, modules, cl_module);
+                FuncAsValue::new(next(), next(), proto).into()
             }
+            _ => ValueSource::Ptr(next()),
         }
-        b::TypeBody::String | b::TypeBody::Array(_) => Box::new(Slice::new(
-            ValueSource::Ptr(next()),
-            ValueSource::Primitive(next()),
-        ))
-        .into(),
-        b::TypeBody::Func(func_ty) => {
-            let proto = FuncPrototype::from_closure_type(func_ty, modules, cl_module);
-            FuncAsValue::new(next(), next(), proto).into()
-        }
-        b::TypeBody::Ptr(_) => ValueSource::Ptr(next()),
-        _ => ValueSource::Primitive(next()),
     };
 
     (RuntimeValue::new(src, mod_idx, idx), n)
@@ -362,14 +392,21 @@ pub fn get_type_canonical(
     ty: &b::Type,
     modules: &[b::Module],
     cl_module: &impl cl::Module,
+    is_receiver: bool,
 ) -> Vec<cl::Type> {
+    if is_receiver {
+        return vec![cl_module.isa().pointer_type()];
+    }
+
     match &ty.body {
-        b::TypeBody::TypeRef(t) if t.is_self => vec![cl_module.isa().pointer_type()],
-        b::TypeBody::TypeRef(t) => match &modules[t.mod_idx].typedefs[t.idx].body {
+        b::TypeBody::TypeRef(t) => match &t.get_typedef(modules).body {
             b::TypeDefBody::Record(_) => vec![cl_module.isa().pointer_type()],
             b::TypeDefBody::Interface => vec![cl_module.isa().pointer_type(); 2],
+            b::TypeDefBody::Builtin(builtin) => match builtin {
+                b::BuiltinType::Ptr => vec![cl_module.isa().pointer_type()],
+                _ => get_type_by_type(ty, modules, cl_module),
+            },
         },
-        b::TypeBody::Ptr(_) => vec![cl_module.isa().pointer_type()],
         _ => get_type_by_type(ty, modules, cl_module),
     }
 }
@@ -380,41 +417,50 @@ pub fn get_type_by_type(
     cl_module: &impl cl::Module,
 ) -> Vec<cl::Type> {
     match &ty.body {
-        b::TypeBody::Bool => vec![cl::types::I8],
-        b::TypeBody::I8 => vec![cl::types::I8],
-        b::TypeBody::I16 => vec![cl::types::I16],
-        b::TypeBody::I32 => vec![cl::types::I32],
-        b::TypeBody::I64 => vec![cl::types::I64],
-        b::TypeBody::U8 => vec![cl::types::I8],
-        b::TypeBody::U16 => vec![cl::types::I16],
-        b::TypeBody::U32 => vec![cl::types::I32],
-        b::TypeBody::U64 => vec![cl::types::I64],
-        b::TypeBody::F32 => vec![cl::types::F32],
-        b::TypeBody::F64 => vec![cl::types::F64],
-        b::TypeBody::USize | b::TypeBody::Ptr(_) => {
-            vec![cl_module.isa().pointer_type()]
-        }
-        b::TypeBody::TypeRef(t) => match &modules[t.mod_idx].typedefs[t.idx].body {
+        b::TypeBody::TypeRef(t) => match &t.get_typedef(modules).body {
             b::TypeDefBody::Record(rec) => rec
                 .fields
                 .values()
                 .flat_map(|field| get_type_by_type(&field.ty, modules, cl_module))
                 .collect_vec(),
             b::TypeDefBody::Interface => vec![cl_module.isa().pointer_type(); 2],
+            b::TypeDefBody::Builtin(builtin) => match builtin {
+                b::BuiltinType::Bool => vec![cl::types::I8],
+                b::BuiltinType::I8 => vec![cl::types::I8],
+                b::BuiltinType::I16 => vec![cl::types::I16],
+                b::BuiltinType::I32 => vec![cl::types::I32],
+                b::BuiltinType::I64 => vec![cl::types::I64],
+                b::BuiltinType::U8 => vec![cl::types::I8],
+                b::BuiltinType::U16 => vec![cl::types::I16],
+                b::BuiltinType::U32 => vec![cl::types::I32],
+                b::BuiltinType::U64 => vec![cl::types::I64],
+                b::BuiltinType::F32 => vec![cl::types::F32],
+                b::BuiltinType::F64 => vec![cl::types::F64],
+                b::BuiltinType::USize | b::BuiltinType::Ptr => {
+                    vec![cl_module.isa().pointer_type()]
+                }
+                b::BuiltinType::String | b::BuiltinType::Array => {
+                    vec![cl_module.isa().pointer_type(); 2]
+                }
+                b::BuiltinType::Void => vec![],
+                b::BuiltinType::AnyNumber
+                | b::BuiltinType::AnySignedNumber
+                | b::BuiltinType::AnyFloat => {
+                    panic!("Type must be resolved before codegen")
+                }
+                b::BuiltinType::Never => panic!("never type cannot be used directly"),
+                b::BuiltinType::AnyOpaque => {
+                    panic!("anyopaque type cannot be used directly")
+                }
+            },
         },
-        b::TypeBody::Func(_) | b::TypeBody::String | b::TypeBody::Array(_) => {
+        b::TypeBody::Func(_) => {
             vec![cl_module.isa().pointer_type(); 2]
         }
-        b::TypeBody::Void => vec![],
-        b::TypeBody::AnyNumber
-        | b::TypeBody::AnySignedNumber
-        | b::TypeBody::AnyFloat
-        | b::TypeBody::Inferred(_) => panic!("Type must be resolved before codegen"),
-        b::TypeBody::Never => panic!("never type cannot be used directly"),
-        b::TypeBody::AnyOpaque => panic!("anyopaque type cannot be used directly"),
         b::TypeBody::TypeVar(_) => {
             panic!("TypeVar should have been instantiated by transform phase")
         }
+        b::TypeBody::Inferred(_) => panic!("Type must be resolved before codegen"),
     }
 }
 
@@ -422,9 +468,7 @@ pub fn get_size(ty: &b::Type, modules: &[b::Module], cl_module: &impl cl::Module
     let ptr = cl_module.isa().pointer_bytes() as u32;
 
     match &ty.body {
-        b::TypeBody::Void | b::TypeBody::Never => 0,
-        b::TypeBody::TypeRef(t) if t.is_self => ptr,
-        b::TypeBody::TypeRef(t) => match &modules[t.mod_idx].typedefs[t.idx].body {
+        b::TypeBody::TypeRef(t) => match &t.get_typedef(modules).body {
             b::TypeDefBody::Record(rec) => rec
                 .fields
                 .values()
@@ -432,30 +476,35 @@ pub fn get_size(ty: &b::Type, modules: &[b::Module], cl_module: &impl cl::Module
                 .map(|ty| ty.bytes())
                 .sum(),
             b::TypeDefBody::Interface => ptr * 2,
+            b::TypeDefBody::Builtin(builtin) => match builtin {
+                b::BuiltinType::Void | b::BuiltinType::Never => 0,
+                b::BuiltinType::Bool
+                | b::BuiltinType::I8
+                | b::BuiltinType::U8
+                | b::BuiltinType::I16
+                | b::BuiltinType::U16
+                | b::BuiltinType::I32
+                | b::BuiltinType::U32
+                | b::BuiltinType::I64
+                | b::BuiltinType::U64
+                | b::BuiltinType::USize
+                | b::BuiltinType::F32
+                | b::BuiltinType::F64
+                | b::BuiltinType::String
+                | b::BuiltinType::Array
+                | b::BuiltinType::Ptr => get_type_by_type(ty, modules, cl_module)
+                    .into_iter()
+                    .map(|ty| ty.bytes())
+                    .sum(),
+                b::BuiltinType::AnyNumber
+                | b::BuiltinType::AnySignedNumber
+                | b::BuiltinType::AnyFloat => {
+                    panic!("Type must be resolved before codegen")
+                }
+                b::BuiltinType::AnyOpaque => panic!("anyopaque cannot be used directly"),
+            },
         },
-        b::TypeBody::Bool
-        | b::TypeBody::I8
-        | b::TypeBody::U8
-        | b::TypeBody::I16
-        | b::TypeBody::U16
-        | b::TypeBody::I32
-        | b::TypeBody::U32
-        | b::TypeBody::I64
-        | b::TypeBody::U64
-        | b::TypeBody::USize
-        | b::TypeBody::F32
-        | b::TypeBody::F64
-        | b::TypeBody::String
-        | b::TypeBody::Array(_)
-        | b::TypeBody::Ptr(_) => get_type_by_type(ty, modules, cl_module)
-            .into_iter()
-            .map(|ty| ty.bytes())
-            .sum(),
-        b::TypeBody::AnyNumber
-        | b::TypeBody::AnySignedNumber
-        | b::TypeBody::AnyFloat
-        | b::TypeBody::Inferred(_) => panic!("Type must be resolved before codegen"),
-        b::TypeBody::AnyOpaque => panic!("anyopaque cannot be used directly"),
+        b::TypeBody::Inferred(_) => panic!("Type must be resolved before codegen"),
         b::TypeBody::Func(_) => todo!("first-class functions are not supported yet"),
         b::TypeBody::TypeVar(_) => {
             panic!("TypeVar should have been instantiated by transform phase")
@@ -491,12 +540,12 @@ impl ReturnPolicy {
         modules: &[b::Module],
         cl_module: &impl cl::Module,
     ) -> Self {
-        if ty.is_never() {
+        if ty.is_never(modules) {
             Self::NoReturn
         } else if ty.is_aggregate(modules) {
             let size = get_size(ty, modules, cl_module);
             Self::Struct(size as u32)
-        } else if matches!(&ty.body, b::TypeBody::Void) {
+        } else if ty.is_void(modules) {
             Self::Void
         } else {
             Self::Normal
@@ -518,6 +567,8 @@ impl FuncPrototype {
         cl_module: &impl cl::Module,
     ) -> Self {
         let func = &modules[mod_idx].funcs[func_idx];
+        let is_method = func.method.as_ref().is_some_and(|x| x.is_virtual);
+
         let mut sig = cl_module.make_signature();
 
         let ret_ty = &modules[mod_idx].values[func.ret].ty;
@@ -531,16 +582,18 @@ impl FuncPrototype {
                 sig.params.push(ret_param);
             }
             ReturnPolicy::Normal => {
-                let native_ty = get_type_canonical(ret_ty, modules, cl_module);
+                let native_ty = get_type_canonical(ret_ty, modules, cl_module, false);
                 assert_eq!(native_ty.len(), 1);
                 sig.returns.push(cl::AbiParam::new(native_ty[0]));
             }
             ReturnPolicy::Void | ReturnPolicy::NoReturn => {}
         }
 
-        for param in &func.params {
+        for (i, param) in enumerate(&func.params) {
             let ty = &modules[mod_idx].values[*param].ty;
-            for native_ty in get_type_canonical(ty, modules, cl_module) {
+            for native_ty in
+                get_type_canonical(ty, modules, cl_module, is_method && i == 0)
+            {
                 sig.params.push(cl::AbiParam::new(native_ty));
             }
         }
@@ -566,7 +619,7 @@ impl FuncPrototype {
                 sig.params.push(ret_param);
             }
             ReturnPolicy::Normal => {
-                let native_ty = get_type_canonical(ret_ty, modules, cl_module);
+                let native_ty = get_type_canonical(ret_ty, modules, cl_module, false);
                 assert_eq!(native_ty.len(), 1);
                 sig.returns.push(cl::AbiParam::new(native_ty[0]));
             }
@@ -574,7 +627,7 @@ impl FuncPrototype {
         }
 
         for param in &func_ty.params {
-            for native_ty in get_type_canonical(param, modules, cl_module) {
+            for native_ty in get_type_canonical(param, modules, cl_module, false) {
                 sig.params.push(cl::AbiParam::new(native_ty));
             }
         }
@@ -588,12 +641,36 @@ impl FuncPrototype {
         cl_module: &impl cl::Module,
     ) -> Self {
         let mut proto = Self::from_func_type(func_ty, modules, cl_module);
+
+        let idx = proto.first_param_index();
         proto
             .signature
             .params
-            .splice(0..0, [cl::AbiParam::new(cl_module.isa().pointer_type())]);
+            .insert(idx, cl::AbiParam::new(cl_module.isa().pointer_type()));
+
         proto
     }
+
+    /// Returns the index of the first parameter of the function after special parameters
+    /// like struct return pointer.
+    pub fn first_param_index(&self) -> usize {
+        sig_first_param_index(&self.signature)
+    }
+}
+
+/// Returns the index of the first parameter of the function after special parameters
+/// like struct return pointer. If the function has none, returns the index where one
+/// would be inserted.
+pub fn sig_first_param_index(sig: &cl::Signature) -> usize {
+    sig.params
+        .iter()
+        .position(|x| {
+            matches!(
+                x.purpose,
+                cl::ArgumentPurpose::Normal | cl::ArgumentPurpose::StructArgument(_)
+            )
+        })
+        .unwrap_or(sig.params.len())
 }
 
 #[derive(ctor)]
@@ -616,6 +693,6 @@ impl VTableDesc {
 
 #[derive(ctor, Hash, PartialEq, Eq, Clone, Copy, Debug)]
 pub struct VTableRef {
-    pub iface: (usize, usize),
-    pub ty:    (usize, usize),
+    pub iface_key: b::TypeRefKey,
+    pub ty_key:    b::TypeRefKey,
 }

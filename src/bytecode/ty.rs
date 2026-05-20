@@ -1,109 +1,23 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::fmt;
+use std::fmt::Debug;
 use std::hash::Hash;
 
 use derive_ctor::ctor;
-use derive_more::{Display, From};
+use derive_more::From;
 use derive_setters::Setters;
 use genawaiter::rc::Gen;
 use itertools::{Itertools, chain, izip};
 
-use super::{Loc, Module, TypeDef, TypeDefBody, TypeVarIdx};
+use super::module::*;
 use crate::utils::{self, SortedMap, unordered};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, From)]
 pub enum TypeBody {
-    Void,
-    Never,
-    Bool,
-    AnyOpaque,
-    // FIXME: use interface/trait for this
-    AnyNumber,
-    // FIXME: use interface/trait for this
-    AnySignedNumber,
-    // FIXME: use interface/trait for this
-    AnyFloat,
-    I8,
-    I16,
-    I32,
-    I64,
-    U8,
-    U16,
-    U32,
-    U64,
-    USize,
-    F32,
-    F64,
     Inferred(InferredType),
-    String,
-    #[from(skip)]
-    Array(Box<Type>),
-    #[from(skip)]
-    Ptr(Option<Box<Type>>),
     Func(Box<FuncType>),
     TypeRef(TypeRef),
     TypeVar(TypeVar),
-}
-
-impl Display for TypeBody {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            TypeBody::Void => write!(f, "void")?,
-            TypeBody::Never => write!(f, "never")?,
-            TypeBody::Bool => write!(f, "bool")?,
-            TypeBody::AnyNumber => write!(f, "AnyNumber")?,
-            TypeBody::AnySignedNumber => write!(f, "AnySignedNumber")?,
-            TypeBody::AnyFloat => write!(f, "AnyFloat")?,
-            TypeBody::AnyOpaque => write!(f, "AnyOpaque")?,
-            TypeBody::I8 => write!(f, "i8")?,
-            TypeBody::I16 => write!(f, "i16")?,
-            TypeBody::I32 => write!(f, "i32")?,
-            TypeBody::I64 => write!(f, "i64")?,
-            TypeBody::U8 => write!(f, "u8")?,
-            TypeBody::U16 => write!(f, "u16")?,
-            TypeBody::U32 => write!(f, "u32")?,
-            TypeBody::U64 => write!(f, "u64")?,
-            TypeBody::USize => write!(f, "usize")?,
-            TypeBody::F32 => write!(f, "f32")?,
-            TypeBody::F64 => write!(f, "f64")?,
-            TypeBody::String => write!(f, "str")?,
-            TypeBody::Inferred(v) => {
-                write!(f, "{{")?;
-                for (name, t) in &v.members {
-                    write!(f, " {name}: {t}")?;
-                }
-                for (name, t) in &v.properties {
-                    write!(f, " .{name}: {t}")?;
-                }
-                write!(f, " }}")?;
-            }
-            TypeBody::Array(v) => write!(f, "[{v}]")?,
-            TypeBody::Ptr(ty) => {
-                write!(f, "Ptr")?;
-                if let Some(ty) = ty {
-                    write!(f, "({ty})")?;
-                }
-            }
-            TypeBody::Func(func) => write!(
-                f,
-                "Func({}): {}",
-                utils::join(", ", &func.params),
-                &func.ret
-            )?,
-            TypeBody::TypeRef(ty_ref) => write!(
-                f,
-                "{} {}-{}",
-                if ty_ref.is_self { "self" } else { "type" },
-                ty_ref.mod_idx,
-                ty_ref.idx,
-            )?,
-            TypeBody::TypeVar(tv) => {
-                write!(f, "typevar {}-{}", tv.mod_idx, tv.typevar_idx)?
-            }
-        }
-        Ok(())
-    }
 }
 
 impl TypeBody {
@@ -114,6 +28,10 @@ impl TypeBody {
         })
     }
 
+    pub fn builtin(builtin: BuiltinType, args: impl IntoIterator<Item = Type>) -> Self {
+        TypeRef::builtin(builtin, args).into()
+    }
+
     pub fn is_unknown(&self) -> bool {
         if let TypeBody::Inferred(i) = self {
             return i.members.is_empty() && i.properties.is_empty();
@@ -121,48 +39,51 @@ impl TypeBody {
         false
     }
 
-    pub fn is_not_final(&self) -> bool {
-        if matches!(
-            self,
-            TypeBody::AnyNumber
-                | TypeBody::AnySignedNumber
-                | TypeBody::AnyFloat
-                | TypeBody::Inferred(_)
-        ) {
-            return true;
-        }
-
+    pub fn is_not_final(&self, modules: &[Module]) -> bool {
         if let TypeBody::Func(func) = self {
-            return func.params.iter().any(|ty| ty.body.is_not_final())
-                || func.ret.body.is_not_final();
-        }
+            func.params.iter().any(|ty| ty.body.is_not_final(modules))
+                || func.ret.body.is_not_final(modules)
+        } else if let TypeBody::TypeRef(type_ref) = self {
+            if type_ref.args.iter().any(|ty| ty.body.is_not_final(modules)) {
+                return true;
+            }
 
-        if let TypeBody::Array(ty) = self {
-            return ty.body.is_not_final();
+            match &type_ref.get_typedef(modules).body {
+                TypeDefBody::Builtin(builtin) => builtin.is_not_final(),
+                TypeDefBody::Record(_) | TypeDefBody::Interface => false,
+            }
+        } else {
+            matches!(self, TypeBody::Inferred(_))
         }
+    }
 
-        if let TypeBody::Ptr(Some(ty)) = self {
-            return ty.body.is_not_final();
+    pub fn is_never(&self, modules: &[Module]) -> bool {
+        match self {
+            TypeBody::TypeRef(t) => match &t.get_typedef(modules).body {
+                TypeDefBody::Builtin(builtin) => matches!(builtin, BuiltinType::Never),
+                TypeDefBody::Record(_) | TypeDefBody::Interface => false,
+            },
+            _ => false,
         }
+    }
 
-        return false;
+    pub fn is_void(&self, modules: &[Module]) -> bool {
+        let TypeBody::TypeRef(type_ref) = &self else {
+            return false;
+        };
+        match &type_ref.get_typedef(modules).body {
+            TypeDefBody::Builtin(builtin) => matches!(builtin, BuiltinType::Void),
+            TypeDefBody::Record(_) | TypeDefBody::Interface => false,
+        }
     }
 }
 
-#[derive(Debug, Display, Clone, ctor)]
-#[display("{body}")]
+#[derive(Debug, Clone, ctor)]
 pub struct Type {
     pub body: TypeBody,
     pub loc:  Option<Loc>,
 }
 
-macro_rules! number {
-    ($var:ident $( , $gen:ident)*) => {
-        unordered!(
-            Type { body: TypeBody::$var, loc: _ },
-            Type { body: TypeBody::AnyNumber $( | TypeBody::$gen )*, loc: _ })
-    };
-}
 macro_rules! body {
     ($pat:pat) => {
         Type {
@@ -177,6 +98,14 @@ impl Type {
         Type::new(TypeBody::unknown(), loc)
     }
 
+    pub fn builtin(
+        builtin: BuiltinType,
+        args: impl IntoIterator<Item = Type>,
+        loc: Option<Loc>,
+    ) -> Self {
+        Type::new(TypeBody::builtin(builtin, args), loc)
+    }
+
     pub fn is_unknown(&self) -> bool {
         self.body.is_unknown()
     }
@@ -187,64 +116,90 @@ impl Type {
 
     pub fn is_aggregate(&self, modules: &[Module]) -> bool {
         match &self.body {
-            TypeBody::String | TypeBody::Array(_) => true,
-            TypeBody::TypeRef(t) => match &modules[t.mod_idx].typedefs[t.idx].body {
+            TypeBody::TypeRef(t) => match &t.get_typedef(modules).body {
                 TypeDefBody::Record(_) | TypeDefBody::Interface => true,
+                TypeDefBody::Builtin(builtin) => builtin.is_aggregate(),
             },
             _ => false,
         }
     }
 
-    pub fn is_primitive(&self) -> bool {
-        self.is_bool() || self.is_number() || matches!(&self.body, TypeBody::Ptr(_))
+    pub fn is_primitive(&self, modules: &[Module]) -> bool {
+        match &self.body {
+            TypeBody::TypeRef(t) => match &t.get_typedef(modules).body {
+                TypeDefBody::Builtin(builtin) => builtin.is_primitive(),
+                TypeDefBody::Record(_) | TypeDefBody::Interface => false,
+            },
+            _ => false,
+        }
     }
 
-    pub fn is_ptr(&self) -> bool {
-        matches!(&self.body, TypeBody::Ptr(_))
+    pub fn is_ptr(&self, modules: &[Module]) -> bool {
+        match &self.body {
+            TypeBody::TypeRef(t) => match &t.get_typedef(modules).body {
+                TypeDefBody::Builtin(builtin) => matches!(builtin, BuiltinType::Ptr),
+                TypeDefBody::Record(_) | TypeDefBody::Interface => false,
+            },
+            _ => false,
+        }
     }
 
-    pub fn is_bool(&self) -> bool {
-        matches!(&self.body, TypeBody::Bool)
+    pub fn is_number(&self, modules: &[Module]) -> bool {
+        match &self.body {
+            TypeBody::TypeRef(t) => match &t.get_typedef(modules).body {
+                TypeDefBody::Builtin(builtin) => builtin.is_number(),
+                TypeDefBody::Record(_) | TypeDefBody::Interface => false,
+            },
+            _ => false,
+        }
     }
 
-    pub fn is_number(&self) -> bool {
-        matches!(&self.body, TypeBody::AnyNumber | TypeBody::AnySignedNumber)
-            || self.is_sint()
-            || self.is_uint()
-            || self.is_float()
+    pub fn is_int(&self, modules: &[Module]) -> bool {
+        match &self.body {
+            TypeBody::TypeRef(t) => match &t.get_typedef(modules).body {
+                TypeDefBody::Builtin(builtin) => builtin.is_int(),
+                TypeDefBody::Record(_) | TypeDefBody::Interface => false,
+            },
+            _ => false,
+        }
     }
 
-    pub fn is_int(&self) -> bool {
-        self.is_sint() || self.is_uint()
+    pub fn is_sint(&self, modules: &[Module]) -> bool {
+        match &self.body {
+            TypeBody::TypeRef(t) => match &t.get_typedef(modules).body {
+                TypeDefBody::Builtin(builtin) => builtin.is_sint(),
+                TypeDefBody::Record(_) | TypeDefBody::Interface => false,
+            },
+            _ => false,
+        }
     }
 
-    pub fn is_sint(&self) -> bool {
-        matches!(
-            &self.body,
-            TypeBody::I8 | TypeBody::I16 | TypeBody::I32 | TypeBody::I64
-        )
+    pub fn is_uint(&self, modules: &[Module]) -> bool {
+        match &self.body {
+            TypeBody::TypeRef(t) => match &t.get_typedef(modules).body {
+                TypeDefBody::Builtin(builtin) => builtin.is_uint(),
+                TypeDefBody::Record(_) | TypeDefBody::Interface => false,
+            },
+            _ => false,
+        }
     }
 
-    pub fn is_uint(&self) -> bool {
-        matches!(
-            &self.body,
-            TypeBody::U8
-                | TypeBody::U16
-                | TypeBody::U32
-                | TypeBody::U64
-                | TypeBody::USize
-        )
+    pub fn is_float(&self, modules: &[Module]) -> bool {
+        match &self.body {
+            TypeBody::TypeRef(t) => match &t.get_typedef(modules).body {
+                TypeDefBody::Builtin(builtin) => builtin.is_float(),
+                TypeDefBody::Record(_) | TypeDefBody::Interface => false,
+            },
+            _ => false,
+        }
     }
 
-    pub fn is_float(&self) -> bool {
-        matches!(
-            &self.body,
-            TypeBody::AnyFloat | TypeBody::F32 | TypeBody::F64
-        )
+    pub fn is_never(&self, modules: &[Module]) -> bool {
+        self.body.is_never(modules)
     }
 
-    pub fn is_never(&self) -> bool {
-        matches!(&self.body, TypeBody::Never)
+    pub fn is_void(&self, modules: &[Module]) -> bool {
+        self.body.is_void(modules)
     }
 
     pub fn field<'a>(
@@ -290,38 +245,10 @@ impl Type {
     ) -> Option<Type> {
         let body = match (self, other) {
             (body!(a), body!(b)) if a == b => a.clone(),
-            // unordered!(body!(TypeBody::Never), body!(a)) => match variance {
-            //     Variance::Covariant => TypeBody::Never,
-            //     Variance::Contravariant => a.clone(),
-            // },
-            unordered!(body!(TypeBody::Never), body!(a)) => a.clone(),
-            number!(U8) => TypeBody::U8,
-            number!(U16) => TypeBody::U16,
-            number!(U32) => TypeBody::U32,
-            number!(U64) => TypeBody::U64,
-            number!(USize) => TypeBody::USize,
-            number!(I8, AnySignedNumber) => TypeBody::I8,
-            number!(I16, AnySignedNumber) => TypeBody::I16,
-            number!(I32, AnySignedNumber) => TypeBody::I32,
-            number!(I64, AnySignedNumber) => TypeBody::I64,
-            number!(F32, AnySignedNumber, AnyFloat) => TypeBody::F32,
-            number!(F64, AnySignedNumber, AnyFloat) => TypeBody::F64,
-            number!(AnySignedNumber) => TypeBody::AnySignedNumber,
-            number!(AnyFloat, AnySignedNumber) => TypeBody::AnyFloat,
-            (body!(TypeBody::Array(a)), body!(TypeBody::Array(b))) => {
-                TypeBody::Array(a.merge(&b, variance, modules)?.into())
-            }
-            (body!(TypeBody::Ptr(a)), body!(TypeBody::Ptr(b))) => {
-                let ty = match (a, b) {
-                    (Some(a), Some(b)) => Some(a.merge(b, variance, modules)?.into()),
-                    (None, None) => None,
-                    unordered!(Some(a), None) => match variance {
-                        Variance::Covariant => Some(a.clone()),
-                        Variance::Contravariant => None,
-                    },
-                };
-                TypeBody::Ptr(ty)
-            }
+            // INFO: the more """correct"" would be that a merge with a never type should
+            // check the variance, returning a never type if the variance is covariant.
+            // That doesn't work with our current implementation of the typechecker tho
+            unordered!(body!(a), body!(b)) if b.is_never(modules) => a.clone(),
             (body!(TypeBody::Func(a)), body!(TypeBody::Func(b))) => {
                 TypeBody::Func(a.merge(b, variance, modules)?.into())
             }
@@ -377,8 +304,7 @@ impl Type {
                 if let TypeBody::TypeRef(type_ref) = &b.body
                     && !type_ref.args.is_empty()
                 {
-                    let generics =
-                        &modules[type_ref.mod_idx].typedefs[type_ref.idx].generics;
+                    let generics = &type_ref.get_typedef(modules).generics;
                     let mut substitutions = HashMap::new();
                     if !type_ref.to_inferred(modules).collect_typevar_substitutions(
                         a,
@@ -509,17 +435,6 @@ impl Type {
                     subs.mix(&func_ty.ret, ret),
                 )))
             }
-            TypeBody::Array(elem_ty) => {
-                let new_elem_ty = subs.substitute(elem_ty.as_ref());
-                validate!(Some(&new_elem_ty));
-                TypeBody::Array(Box::new(subs.mix(elem_ty, new_elem_ty)))
-            }
-            TypeBody::Ptr(Some(elem_ty)) => {
-                let new_elem_ty = subs.substitute(elem_ty.as_ref());
-                validate!(Some(&new_elem_ty));
-                TypeBody::Ptr(Some(Box::new(subs.mix(elem_ty, new_elem_ty))))
-            }
-            _ => return None,
         };
 
         Some(Type::new(body, self.loc))
@@ -557,17 +472,6 @@ impl Type {
                     co.yield_(typevar).await;
                 }
             }
-            TypeBody::Array(elem_ty) => {
-                for typevar in elem_ty.typevars() {
-                    co.yield_(typevar).await;
-                }
-            }
-            TypeBody::Ptr(Some(elem_ty)) => {
-                for typevar in elem_ty.typevars() {
-                    co.yield_(typevar).await;
-                }
-            }
-            _ => {}
         })
         .into_iter()
     }
@@ -632,10 +536,6 @@ impl Type {
                 }
                 rec_or_return!(&a.ret, &b.ret);
             }
-            (body!(TypeBody::Array(a)), body!(TypeBody::Array(b)))
-            | (body!(TypeBody::Ptr(Some(a))), body!(TypeBody::Ptr(Some(b)))) => {
-                rec_or_return!(a, b);
-            }
             _ if self.merge(other, variance, modules).is_none() => return false,
             _ => {}
         }
@@ -671,20 +571,60 @@ impl Hash for Type {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum TypeRefKey {
+    Builtin(BuiltinType),
+    Custom { mod_idx: usize, idx: usize },
+}
+
+impl TypeRefKey {
+    pub fn get_typedef<'a>(&self, modules: &'a [Module]) -> &'a TypeDef {
+        match self {
+            TypeRefKey::Builtin(needle) => modules[BUILTINS_MODULE_IDX]
+                .typedefs
+                .iter()
+                .find(|def| matches!(&def.body, TypeDefBody::Builtin(b) if b == needle))
+                .expect("builtin type not found in builtins module"),
+            TypeRefKey::Custom { mod_idx, idx } => &modules[*mod_idx].typedefs[*idx],
+        }
+    }
+
+    pub fn get_typedef_mut<'a>(&self, modules: &'a mut [Module]) -> &'a mut TypeDef {
+        match self {
+            TypeRefKey::Builtin(needle) => modules[BUILTINS_MODULE_IDX]
+                .typedefs
+                .iter_mut()
+                .find(|def| matches!(&def.body, TypeDefBody::Builtin(b) if b == needle))
+                .expect("builtin type not found in builtins module"),
+            TypeRefKey::Custom { mod_idx, idx } => &mut modules[*mod_idx].typedefs[*idx],
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Setters, ctor)]
 #[setters(into, prefix = "with_")]
 pub struct TypeRef {
-    pub mod_idx: usize,
-    pub idx:     usize,
-    #[ctor(expr(false))]
-    pub is_self: bool,
+    pub key:  TypeRefKey,
     #[ctor(default)]
-    pub args:    Vec<Type>,
+    pub args: Vec<Type>,
 }
 
 impl TypeRef {
+    pub fn builtin(builtin: BuiltinType, args: impl IntoIterator<Item = Type>) -> Self {
+        TypeRef::new(TypeRefKey::Builtin(builtin))
+            .with_args(args.into_iter().collect_vec())
+    }
+
+    pub fn get_typedef<'a>(&self, modules: &'a [Module]) -> &'a TypeDef {
+        self.key.get_typedef(modules)
+    }
+
+    pub fn get_typedef_mut<'a>(&self, modules: &'a mut [Module]) -> &'a mut TypeDef {
+        self.key.get_typedef_mut(modules)
+    }
+
     pub fn is_same_of(&self, other: &TypeRef) -> bool {
-        (self.mod_idx, self.idx) == (other.mod_idx, other.idx)
+        self.key == other.key
     }
 
     pub fn merge(
@@ -693,59 +633,87 @@ impl TypeRef {
         variance: Variance,
         modules: &[Module],
     ) -> Option<Self> {
-        let self_def = &modules[self.mod_idx].typedefs[self.idx];
-        let other_def = &modules[other.mod_idx].typedefs[other.idx];
+        let result =
+            |key: TypeRefKey, args: Vec<Type>| Some(TypeRef::new(key).with_args(args));
 
-        macro_rules! def_body {
-            ($pat:pat) => {
-                TypeDef { body: $pat, .. }
-            };
+        if self.is_same_of(other) {
+            if self.args.len() != other.args.len() {
+                return None;
+            }
+            let args = izip!(&self.args, &other.args)
+                .map(|(self_arg, other_arg)| self_arg.merge(other_arg, variance, modules))
+                .collect::<Option<Vec<_>>>()?;
+            return result(self.key, args);
         }
 
-        let (mod_idx, ty_idx) = match (
-            (self.mod_idx, self.idx, self_def),
-            (other.mod_idx, other.idx, other_def),
-        ) {
-            (
-                (_, _, def_body!(TypeDefBody::Record(_))),
-                (_, _, def_body!(TypeDefBody::Record(_))),
-            )
-            | (
-                (_, _, def_body!(TypeDefBody::Interface)),
-                (_, _, def_body!(TypeDefBody::Interface)),
-            ) if self.is_same_of(other) => (self.mod_idx, other.idx),
-            unordered!(
-                (r_mod_idx, r_ty_idx, rec_def @ def_body!(TypeDefBody::Record(..))),
-                (i_mod_idx, i_ty_idx, def_body!(TypeDefBody::Interface)),
-            ) => {
-                let extends = rec_def.ifaces.iter().any(|(mod_idx, ty_idx)| {
-                    i_mod_idx == *mod_idx && i_ty_idx == *ty_idx
-                });
-                if !extends {
-                    return None;
-                }
+        match (self, other) {
+            unordered!(a, b) if a.implements(b, modules) => match variance {
+                Variance::Covariant => result(a.key, a.args.clone()),
+                Variance::Contravariant => result(b.key, b.args.clone()),
+            },
+            unordered!(a, b) if a.replaces(b, modules) => result(a.key, a.args.clone()),
+            _ => None,
+        }
+    }
 
-                if !self.args.is_empty() && !other.args.is_empty() {
+    /// Returns true if `self` implements `other`, meaning that `self` can be used as a
+    /// type for `other` in dynamic dispatch.
+    pub fn implements(&self, other: &Self, modules: &[Module]) -> bool {
+        if self.is_same_of(other) {
+            todo!("does a type implement itself?");
+        }
+
+        let self_def = self.get_typedef(modules);
+        let other_def = other.get_typedef(modules);
+
+        match (&self_def.body, &other_def.body) {
+            (_, TypeDefBody::Interface) => {
+                if !other.args.is_empty() {
                     todo!("merge of interface and record with generics");
                 }
 
-                match variance {
-                    Variance::Covariant => (r_mod_idx, r_ty_idx),
-                    Variance::Contravariant => (i_mod_idx, i_ty_idx),
-                }
+                self_def.ifaces.contains(&other.key)
             }
-            _ => return None,
-        };
+            _ => false,
+        }
+    }
 
-        let args = izip!(&self.args, &other.args)
-            .map(|(self_arg, other_arg)| self_arg.merge(other_arg, variance, modules))
-            .collect::<Option<Vec<_>>>()?;
+    /// Returns true if `self` replaces `other`, meaning that `other` is not a final type
+    /// and `self` can be used as a type for `other` statically, but not necessarily
+    /// dynamically.
+    pub fn replaces(&self, other: &Self, modules: &[Module]) -> bool {
+        if self.is_same_of(other) || self.implements(other, modules) {
+            return true;
+        }
 
-        Some(
-            TypeRef::new(mod_idx, ty_idx)
-                .with_is_self(other.is_self || self.is_self)
-                .with_args(args),
-        )
+        let self_def = self.get_typedef(modules);
+        let other_def = other.get_typedef(modules);
+
+        macro_rules! number {
+            ($var:ident $( , $gen:ident)* $(,)?) => {
+                (
+                    TypeDefBody::Builtin(BuiltinType::$var),
+                    TypeDefBody::Builtin(BuiltinType::AnyNumber $( | BuiltinType::$gen)*)
+                )
+            };
+        }
+
+        match (&self_def.body, &other_def.body) {
+            number!(U8)
+            | number!(U16)
+            | number!(U32)
+            | number!(U64)
+            | number!(USize)
+            | number!(AnySignedNumber)
+            | number!(I8, AnySignedNumber)
+            | number!(I16, AnySignedNumber)
+            | number!(I32, AnySignedNumber)
+            | number!(I64, AnySignedNumber)
+            | number!(AnyFloat, AnySignedNumber)
+            | number!(F32, AnyFloat, AnySignedNumber)
+            | number!(F64, AnyFloat, AnySignedNumber) => true,
+            _ => false,
+        }
     }
 
     pub fn field<'a>(
@@ -753,7 +721,7 @@ impl TypeRef {
         name: &str,
         modules: &'a [Module],
     ) -> Option<Cow<'a, Type>> {
-        match &modules[self.mod_idx].typedefs[self.idx].body {
+        match &self.get_typedef(modules).body {
             TypeDefBody::Record(rec) => {
                 let ty = &rec.fields.get(name)?.ty;
                 let substitutions = self.typevar_substitutions(modules);
@@ -763,7 +731,7 @@ impl TypeRef {
                     Some(Cow::Borrowed(ty))
                 }
             }
-            TypeDefBody::Interface => None,
+            TypeDefBody::Interface | TypeDefBody::Builtin(_) => None,
         }
     }
 
@@ -772,7 +740,7 @@ impl TypeRef {
         name: &str,
         modules: &'a [Module],
     ) -> Option<Cow<'a, Type>> {
-        let typedef = modules.get(self.mod_idx)?.typedefs.get(self.idx)?;
+        let typedef = self.get_typedef(modules);
         let method = typedef.methods.get(name)?;
         let method_mod = modules.get(method.func_ref.0)?;
         let func = &method_mod.funcs[method.func_ref.1];
@@ -844,18 +812,18 @@ impl TypeRef {
     }
 
     pub fn typevar_substitutions(&self, modules: &[Module]) -> HashMap<TypeVarIdx, Type> {
-        let def = &modules[self.mod_idx].typedefs[self.idx];
+        let def = self.get_typedef(modules);
         izip!(&def.generics, &self.args)
             .map(|(&typevar, arg)| (typevar, arg.clone()))
             .collect()
     }
 
     pub fn to_inferred(&self, modules: &[Module]) -> InferredType {
-        let def = &modules[self.mod_idx].typedefs[self.idx];
+        let def = self.get_typedef(modules);
 
         let fields = match &def.body {
             TypeDefBody::Record(rec) => &rec.fields,
-            TypeDefBody::Interface => &SortedMap::new(),
+            TypeDefBody::Interface | TypeDefBody::Builtin(_) => &SortedMap::new(),
         };
 
         let mut members = utils::SortedMap::new();
@@ -935,8 +903,7 @@ impl InferredType {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Display, ctor)]
-#[display("func({}): {ret}", utils::join(", ", params))]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, ctor)]
 pub struct FuncType {
     pub params: Vec<Type>,
     pub ret:    Type,

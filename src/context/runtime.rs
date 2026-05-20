@@ -22,20 +22,18 @@ impl<'a> RuntimeBuilder<'a> {
         let entry_func_idx = self.entry_func_idx?;
 
         let mut modules = self.ctx.lock_modules_mut();
-
         let idx = modules.len();
-        modules.push(b::Module {
-            name: b::Name::from_ident("runtime", b::NameIdentKind::Module, None),
-            idx,
-            values: self.values,
-            funcs: self.funcs,
-            blocks: self.blocks,
-            globals: vec![],
-            typedefs: vec![],
-            typevars: vec![],
-            sources: HashSet::new(),
-        });
 
+        let mut module = b::Module::new(
+            idx,
+            b::Name::from_ident("runtime", b::NameIdentKind::Module, None),
+            HashSet::new(),
+        );
+        module.values = self.values;
+        module.funcs = self.funcs;
+        module.blocks = self.blocks;
+
+        modules.push(module);
         Some((idx, entry_func_idx))
     }
 
@@ -53,7 +51,7 @@ impl<'a> RuntimeBuilder<'a> {
         let main_global_def = &modules[main_global.0].globals[main_global.1];
         let main_ty = &modules[main_global.0].values[main_global_def.value].ty;
 
-        let ret_v = self.add_value(b::TypeBody::Void);
+        let ret_v = self.add_value(b::TypeBody::builtin(b::BuiltinType::Void, []));
         let main_v = self.add_value(main_ty.body.clone());
 
         let body_block = self.add_block();
@@ -103,9 +101,15 @@ impl<'a> RuntimeBuilder<'a> {
         let main_global_def = &modules[main_global.0].globals[main_global.1];
         let main_ty = &modules[main_global.0].values[main_global_def.value].ty;
 
-        let str_ty = b::Type::new(b::TypeBody::String, None);
-        let array_ty = b::Type::new(b::TypeBody::Array(str_ty.clone().into()), None);
-        let array_2d_ty = b::Type::new(b::TypeBody::Array(array_ty.clone().into()), None);
+        let str_ty = b::Type::new(b::TypeBody::builtin(b::BuiltinType::String, []), None);
+        let array_ty = b::Type::new(
+            b::TypeBody::builtin(b::BuiltinType::Array, [str_ty.clone()]),
+            None,
+        );
+        let array_2d_ty = b::Type::new(
+            b::TypeBody::builtin(b::BuiltinType::Array, [array_ty.clone()]),
+            None,
+        );
 
         if main_ty
             .merge(&str_ty, b::Variance::Covariant, &*modules)
@@ -141,14 +145,29 @@ impl<'a> RuntimeBuilder<'a> {
         modules: &[b::Module],
     ) {
         let ty = &self.values[v].ty;
+        let b::TypeBody::TypeRef(ty_ref) = &ty.body else {
+            unreachable!("type should be a str, [str] or [[str]]");
+        };
 
-        if matches!(ty.body, b::TypeBody::Array(_)) {
-            self.add_print_array(block, result_block, v, &*modules);
-        } else {
-            self.add_print_str(block, v, &*modules);
-            if let Some(result_block) = result_block {
-                self.blocks[block].extend([b::Instr::break_(result_block, None, None)]);
+        let b::TypeDefBody::Builtin(builtin) = &ty_ref.get_typedef(modules).body else {
+            unreachable!("type should be a str, [str] or [[str]]");
+        };
+
+        match builtin {
+            b::BuiltinType::String => {
+                self.add_print_str(block, v, &*modules);
+                if let Some(result_block) = result_block {
+                    self.blocks[block].extend([b::Instr::break_(
+                        result_block,
+                        None,
+                        None,
+                    )]);
+                }
             }
+            b::BuiltinType::Array => {
+                self.add_print_array(block, result_block, v, &*modules)
+            }
+            _ => unreachable!("type should be a str, [str] or [[str]]"),
         }
     }
 
@@ -178,11 +197,11 @@ impl<'a> RuntimeBuilder<'a> {
         v: usize,
         modules: &[b::Module],
     ) {
-        let len_v = self.add_value(b::TypeBody::USize);
-        let zero_v = self.add_value(b::TypeBody::USize);
-        let one_v = self.add_value(b::TypeBody::USize);
-        let idx_v = self.add_value(b::TypeBody::USize);
-        let cond_v = self.add_value(b::TypeBody::Bool);
+        let len_v = self.add_value(b::TypeBody::builtin(b::BuiltinType::USize, []));
+        let zero_v = self.add_value(b::TypeBody::builtin(b::BuiltinType::USize, []));
+        let one_v = self.add_value(b::TypeBody::builtin(b::BuiltinType::USize, []));
+        let idx_v = self.add_value(b::TypeBody::builtin(b::BuiltinType::USize, []));
+        let cond_v = self.add_value(b::TypeBody::builtin(b::BuiltinType::Bool, []));
 
         let loop_block = self.add_block();
         let then_block = self.add_block();
@@ -200,12 +219,20 @@ impl<'a> RuntimeBuilder<'a> {
             b::Instr::if_(cond_v, then_block, else_block, None, None),
         ]);
 
-        let b::TypeBody::Array(item_ty) = &self.values[v].ty.body else {
-            panic!("type should be an array type");
+        let b::TypeBody::TypeRef(ty_ref) = &self.values[v].ty.body else {
+            panic!("type should be an array typeref");
         };
 
-        let str_v = self.add_value(item_ty.body.clone());
-        let new_idx_v = self.add_value(b::TypeBody::USize);
+        assert!(
+            matches!(
+                &ty_ref.get_typedef(modules).body,
+                b::TypeDefBody::Builtin(b::BuiltinType::Array)
+            ) && ty_ref.args.len() == 1,
+            "type should be an array typeref"
+        );
+
+        let str_v = self.add_value(ty_ref.args[0].body.clone());
+        let new_idx_v = self.add_value(b::TypeBody::builtin(b::BuiltinType::USize, []));
 
         self.blocks[then_block].extend([b::Instr::array_index(v, idx_v, str_v, None)]);
 

@@ -1,9 +1,9 @@
-use std::cmp;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use derive_ctor::ctor;
 use derive_more::{Debug, Display, From};
+use nasin_macros::NumberEnum;
 use tree_sitter as ts;
 
 use super::instr::*;
@@ -11,6 +11,8 @@ use super::name::*;
 use super::ty::*;
 use super::value::*;
 use crate::utils::SortedMap;
+
+pub const BUILTINS_MODULE_IDX: usize = 0;
 
 pub type BlockIdx = usize;
 
@@ -178,7 +180,7 @@ pub struct TypeDef {
     #[ctor(iter(TypeVarIdx))]
     pub generics: Vec<TypeVarIdx>,
     #[ctor(default)]
-    pub ifaces:   HashSet<(usize, usize)>,
+    pub ifaces:   HashSet<TypeRefKey>,
     #[ctor(default)]
     pub methods:  SortedMap<String, Method>,
 }
@@ -210,18 +212,19 @@ pub struct Func {
 
 #[derive(Debug, Clone, ctor)]
 pub struct FuncMethodInfo {
-    pub name:    String,
-    pub mod_idx: usize,
-    pub ty_idx:  usize,
+    pub name:       String,
+    pub ty:         TypeRefKey,
+    pub is_virtual: bool,
 }
 
 #[derive(Debug, Clone, From)]
 pub enum TypeDefBody {
     Record(RecordType),
     Interface,
+    Builtin(BuiltinType),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, ctor)]
 pub struct TypeVarDef {
     pub name: Name,
     pub loc:  Loc,
@@ -239,6 +242,76 @@ pub struct RecordType {
 pub struct RecordField {
     pub ty:  Type,
     pub loc: Loc,
+}
+
+/// Builtin types. Every compilation has a module 0 (`BUILTINS_MODULE_IDX`) with TypeDefs
+/// for these types so they can have methods and interfaces.
+#[derive(Debug, Hash, NumberEnum)]
+#[repr(usize)]
+pub enum BuiltinType {
+    Void,
+    Never,
+    Bool,
+    AnyOpaque,
+    AnyNumber,
+    AnySignedNumber,
+    AnyFloat,
+    I8,
+    I16,
+    I32,
+    I64,
+    U8,
+    U16,
+    U32,
+    U64,
+    USize,
+    F32,
+    F64,
+    String,
+    Array,
+    Ptr,
+}
+
+impl BuiltinType {
+    pub fn is_primitive(&self) -> bool {
+        matches!(self, Self::Bool | Self::Ptr) || self.is_number()
+    }
+
+    pub fn is_aggregate(&self) -> bool {
+        matches!(self, Self::String | Self::Array)
+    }
+
+    pub fn is_number(&self) -> bool {
+        matches!(self, Self::AnyNumber | Self::AnySignedNumber)
+            || self.is_int()
+            || self.is_float()
+    }
+
+    pub fn is_int(&self) -> bool {
+        self.is_sint() || self.is_uint()
+    }
+
+    pub fn is_sint(&self) -> bool {
+        matches!(self, Self::I8 | Self::I16 | Self::I32 | Self::I64)
+    }
+
+    pub fn is_uint(&self) -> bool {
+        matches!(
+            self,
+            Self::U8 | Self::U16 | Self::U32 | Self::U64 | Self::USize
+        )
+    }
+
+    pub fn is_float(&self) -> bool {
+        matches!(self, Self::AnyFloat | Self::F32 | Self::F64)
+    }
+
+    pub fn is_not_final(&self) -> bool {
+        matches!(
+            self,
+            Self::AnyNumber | Self::AnySignedNumber | Self::AnyFloat
+        )
+    }
 }
 
 #[derive(Debug, Clone, ctor)]
@@ -283,16 +356,17 @@ impl Loc {
             end_byte:   node.end_byte(),
         }
     }
+
     pub fn merge(&self, other: &Loc) -> Loc {
         assert!(self.source_idx == other.source_idx);
         Loc {
             source_idx: self.source_idx,
-            start_byte: cmp::min(self.start_byte, other.start_byte),
-            start_line: cmp::min(self.start_line, other.start_line),
-            start_col:  cmp::min(self.start_col, other.start_col),
-            end_byte:   cmp::max(self.end_byte, other.end_byte),
-            end_line:   cmp::max(self.end_line, other.end_line),
-            end_col:    cmp::max(self.end_col, other.end_col),
+            start_byte: usize::min(self.start_byte, other.start_byte),
+            start_line: usize::min(self.start_line, other.start_line),
+            start_col:  usize::min(self.start_col, other.start_col),
+            end_byte:   usize::max(self.end_byte, other.end_byte),
+            end_line:   usize::max(self.end_line, other.end_line),
+            end_col:    usize::max(self.end_col, other.end_col),
         }
     }
 }

@@ -33,6 +33,7 @@ impl<T: Display, I: Iterator<Item = T> + Clone> Display for Indented<T, I> {
     }
 }
 
+#[allow(unused)]
 pub fn join<'a, I: IntoIterator>(sep: &'a str, items: I) -> Join<'a, I::Item, I::IntoIter>
 where
     I::Item: Display,

@@ -1,15 +1,13 @@
 use std::borrow::Cow;
-use std::fmt;
 use std::path::{Component, Path};
 
 use derive_ctor::ctor;
-use derive_more::{Debug, Display, From};
+use derive_more::{Debug, From};
 use itertools::{Itertools, izip};
 
 use super::module::*;
 use super::ty::*;
 use crate::config::BuildConfig;
-use crate::utils;
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, ctor)]
 pub struct Name {
@@ -131,27 +129,13 @@ impl Name {
     }
 }
 
-impl Display for Name {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut iter = self.nodes.iter().peekable();
-        while let Some(node) = iter.next() {
-            write!(f, "{node}")?;
-            if let Some(NameNode::Ident(_)) = iter.peek() {
-                write!(f, ".")?;
-            }
-        }
-        Ok(())
-    }
-}
-
-#[derive(Display, Debug, Clone, PartialEq, Eq, Hash, From)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, From)]
 pub enum NameNode {
     Ident(NameIdent),
     TypeParams(NameTypeParams),
 }
 
-#[derive(Display, Debug, Clone, PartialEq, Eq, Hash, ctor)]
-#[display("{ident}")]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, ctor)]
 pub struct NameIdent {
     pub ident: String,
     pub kind:  NameIdentKind,
@@ -165,8 +149,7 @@ pub enum NameIdentKind {
     Func,
 }
 
-#[derive(Display, Debug, Clone, PartialEq, Eq, Hash, ctor)]
-#[display("<{}>", utils::join(", ", params))]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, ctor)]
 pub struct NameTypeParams {
     pub params: Vec<Type>,
 }

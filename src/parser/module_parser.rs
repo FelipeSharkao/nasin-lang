@@ -9,7 +9,6 @@ use super::parser_value::ValueRef;
 use super::type_parser::TypeParser;
 use crate::parser::expr_parser::ExprParser;
 use crate::parser::parser_value::ValueRefBody;
-use crate::parser::type_parser::UNDEF_TYPEVAR;
 use crate::utils::TreeSitterUtils;
 use crate::{bytecode as b, context, errors, utils};
 
@@ -20,22 +19,22 @@ const SELF_TYPE_INDENT: &str = "Self";
 #[derive(ctor)]
 pub struct ModuleParser<'a, 't> {
     #[ctor(expr(TypeParser::new(ctx, src_idx, mod_idx)))]
-    pub types: TypeParser<'a, 't>,
+    pub types:        TypeParser<'a, 't>,
     #[ctor(default)]
-    pub globals: Vec<DeclaredGlobal<'t>>,
+    pub globals:      Vec<DeclaredGlobal<'t>>,
     #[ctor(default)]
-    pub funcs: Vec<DeclaredFunc<'t>>,
+    pub funcs:        Vec<DeclaredFunc<'t>>,
     #[ctor(default)]
-    pub values: Vec<b::Value>,
+    pub values:       Vec<b::Value>,
     #[ctor(default)]
-    pub blocks: Vec<b::Block>,
+    pub blocks:       Vec<b::Block>,
     #[ctor(default)]
-    pub idents: HashMap<String, ValueRef>,
+    pub idents:       HashMap<String, ValueRef>,
     #[ctor(default)]
     pub typevar_defs: Vec<b::TypeVarDef>,
-    pub ctx: &'a context::BuildContext,
-    pub src_idx: usize,
-    pub mod_idx: usize,
+    pub ctx:          &'a context::BuildContext,
+    pub src_idx:      usize,
+    pub mod_idx:      usize,
 }
 
 impl<'a, 't> ModuleParser<'a, 't> {
@@ -121,8 +120,15 @@ impl<'a, 't> ModuleParser<'a, 't> {
                             method_node,
                             Some(b::FuncMethodInfo::new(
                                 method_name.to_string(),
-                                self.mod_idx,
-                                ty_idx,
+                                b::TypeRefKey::Custom {
+                                    mod_idx: self.mod_idx,
+                                    idx:     ty_idx,
+                                },
+                                // FIXME: since in the method's implementations we're not
+                                // handling is_virtual properly, we can't handle it here
+                                // as well to be consistent. As soon as we implement it
+                                // there, we should use `is_virt` here
+                                true,
                             )),
                             is_virt,
                         );
@@ -156,7 +162,7 @@ impl<'a, 't> ModuleParser<'a, 't> {
         let module = &self.ctx.lock_modules()[mod_idx];
 
         for (i, item) in enumerate(&module.typedefs) {
-            let ty_ref = b::TypeRef::new(mod_idx, i);
+            let ty_ref = b::TypeRef::new(b::TypeRefKey::Custom { mod_idx, idx: i });
             self.types
                 .idents
                 .insert(item.name.last_ident().to_string(), ty_ref.into());
@@ -215,7 +221,7 @@ impl<'a, 't> ModuleParser<'a, 't> {
             let parent_ty = self.types.parse_type_ident(parent);
             let b::TypeBody::TypeRef(ty_ref) = parent_ty else {
                 self.ctx.push_error(errors::Error::new(
-                    errors::Todo::new("method for builtin type".to_string()).into(),
+                    errors::Todo::new("method for internal type".to_string()).into(),
                     Some(b::Loc::from_node(self.src_idx, &parent)),
                 ));
                 return;
@@ -223,14 +229,20 @@ impl<'a, 't> ModuleParser<'a, 't> {
 
             let method_name = name.last_ident().to_string();
 
-            let method_info =
-                b::FuncMethodInfo::new(method_name.clone(), ty_ref.mod_idx, ty_ref.idx);
+            let method_info = b::FuncMethodInfo::new(
+                method_name.clone(),
+                ty_ref.key,
+                // FIXME: not all methods are virtual, we should handle this properly
+                true,
+            );
 
             let modules = self.ctx.lock_modules();
             (
-                self.types
-                    .get_type_name(ty_ref.mod_idx, ty_ref.idx, &*modules)
-                    .with(method_name, b::NameIdentKind::Func, Some(loc)),
+                self.types.get_type_name(ty_ref.key, &*modules).with(
+                    method_name,
+                    b::NameIdentKind::Func,
+                    Some(loc),
+                ),
                 Some(method_info),
             )
         } else {
@@ -273,7 +285,8 @@ impl<'a, 't> ModuleParser<'a, 't> {
                         args_nodes[0].required_field("content").get_text(
                             &self.ctx.source_manager.source(self.src_idx).content().text,
                         ),
-                    );
+                    )
+                    .to_string();
                     extrn = Some(b::Extern { name: symbol_name });
                 }
                 _ => todo!(),
@@ -309,8 +322,7 @@ impl<'a, 't> ModuleParser<'a, 't> {
 
         if let Some(method_info) = method_info {
             self.types.add_method(
-                method_info.mod_idx,
-                method_info.ty_idx,
+                method_info.ty,
                 method_info.name,
                 b::Method::new((self.mod_idx, func_idx), loc),
             );
@@ -357,35 +369,28 @@ impl<'a, 't> ModuleParser<'a, 't> {
 
         let old_self_type = self.types.idents.get(SELF_TYPE_INDENT).cloned();
 
-        let self_ty_ref = if let Some(method) = &func.func.method {
-            let type_def = &self.types.typedefs[method.ty_idx].typedef;
+        if let Some(method) = &func.func.method {
+            let modules = self.ctx.lock_modules();
+            let type_def = match method.ty {
+                b::TypeRefKey::Custom { mod_idx, idx } if mod_idx == self.mod_idx => {
+                    &self.types.typedefs[idx].typedef
+                }
+                _ => method.ty.get_typedef(&*modules),
+            };
 
             let args = type_def.generics.iter().map(|&idx| {
-                assert!(idx < UNDEF_TYPEVAR);
                 b::Type::new(b::TypeVar::new(self.mod_idx, idx).into(), None)
             });
-            let type_ref = b::TypeRef::new(method.mod_idx, method.ty_idx)
-                .with_args(args.collect_vec());
+            let type_ref = b::TypeRef::new(method.ty).with_args(args.collect_vec());
 
             self.types
                 .idents
-                .insert(SELF_TYPE_INDENT.to_string(), type_ref.clone().into());
-            Some(type_ref)
-        } else {
-            None
-        };
+                .insert(SELF_TYPE_INDENT.to_string(), type_ref.into());
+        }
 
-        for (i, param) in func.params.iter().enumerate() {
+        for param in &func.params {
             if let Some(ty_node) = param.ty_node {
-                let mut ty = self.types.parse_type_expr(ty_node);
-                if let b::TypeBody::TypeRef(ty_ref) = &mut ty.body
-                    && self_ty_ref.as_ref().is_some_and(|x| ty_ref.is_same_of(x))
-                    && i == 0
-                {
-                    ty_ref.is_self = true;
-                }
-
-                self.values[param.value].ty = ty;
+                self.values[param.value].ty = self.types.parse_type_expr(ty_node);
             }
         }
 
@@ -447,5 +452,5 @@ pub struct DeclaredParam<'t> {
 pub struct DeclaredGlobal<'t> {
     pub global: b::Global,
     value_node: ts::Node<'t>,
-    ty: b::Type,
+    ty:         b::Type,
 }
