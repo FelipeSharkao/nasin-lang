@@ -75,17 +75,17 @@ impl<'a, 't> ModuleParser<'a, 't> {
     pub fn add_root(&mut self, node: ts::Node<'t>) {
         node.of_kind("root");
 
-        for sym_node in node.iter_children() {
-            let name_node = sym_node.required_field("name").of_kind("ident");
+        for decl_node in node.iter_children() {
+            let get_name = || {
+                let name_node = decl_node.required_field("name").of_kind("ident");
 
-            let name_kind = match sym_node.kind() {
-                "global_decl" => b::NameIdentKind::Value,
-                "func_decl" => b::NameIdentKind::Func,
-                "type_decl" | "typevar_decl" => b::NameIdentKind::Type,
-                _ => panic!("Unexpected symbol kind: {}", sym_node.kind()),
-            };
+                let name_kind = match decl_node.kind() {
+                    "global_decl" => b::NameIdentKind::Value,
+                    "func_decl" => b::NameIdentKind::Func,
+                    "type_decl" | "typevar_decl" | "impl_decl" => b::NameIdentKind::Type,
+                    _ => panic!("Unexpected declaration kind: {}", decl_node.kind()),
+                };
 
-            let name = {
                 self.ctx.lock_modules()[self.mod_idx].name.with(
                     name_node.get_text(
                         &self.ctx.source_manager.source(self.src_idx).content().text,
@@ -95,65 +95,13 @@ impl<'a, 't> ModuleParser<'a, 't> {
                 )
             };
 
-            match sym_node.kind() {
-                "type_decl" => {
-                    let ty_idx = self.types.typedefs.len();
-
-                    let body_node = sym_node.required_field("body");
-                    let is_virt = body_node.kind() == "interface_type";
-
-                    self.types.parse_type_decl(name.clone(), sym_node);
-
-                    for method_node in body_node.iter_field("methods") {
-                        let method_name_node =
-                            method_node.required_field("name").of_kind("ident");
-                        let method_name = method_name_node.get_text(
-                            &self.ctx.source_manager.source(self.src_idx).content().text,
-                        );
-
-                        self.add_func(
-                            name.with(
-                                method_name,
-                                b::NameIdentKind::Func,
-                                Some(b::Loc::from_node(self.src_idx, &method_name_node)),
-                            ),
-                            method_node,
-                            Some(b::FuncMethodInfo::new(
-                                method_name.to_string(),
-                                b::TypeRefKey::Custom {
-                                    mod_idx: self.mod_idx,
-                                    idx:     ty_idx,
-                                },
-                                // FIXME: since in the method's implementations we're not
-                                // handling is_virtual properly, we can't handle it here
-                                // as well to be consistent. As soon as we implement it
-                                // there, we should use `is_virt` here
-                                true,
-                            )),
-                            is_virt,
-                        );
-                    }
-                }
-                "typevar_decl" => {
-                    let typevar_idx = self.types.typevar_count;
-                    self.types.typevar_count += 1;
-                    let typevar_def = b::TypeVarDef {
-                        name: name.clone(),
-                        loc:  b::Loc::from_node(self.src_idx, &sym_node),
-                    };
-                    self.typevar_defs.push(typevar_def);
-                    self.types.idents.insert(
-                        name.last_ident().to_string(),
-                        b::TypeVar::new(self.mod_idx, typevar_idx).into(),
-                    );
-                }
-                "func_decl" => {
-                    self.add_func(name, sym_node, None, false);
-                }
-                "global_decl" => {
-                    self.add_global(name, sym_node);
-                }
-                _ => panic!("Unexpected symbol kind: {}", sym_node.kind()),
+            match decl_node.kind() {
+                "type_decl" => self.declare_type(get_name(), decl_node),
+                "typevar_decl" => self.declare_typevar(get_name(), decl_node),
+                "func_decl" => self.declare_func(get_name(), decl_node, None, false),
+                "global_decl" => self.declare_global(get_name(), decl_node),
+                "impl_decl" => self.declare_impl(decl_node),
+                _ => panic!("Unexpected declaration kind: {}", decl_node.kind()),
             }
         }
     }
@@ -204,7 +152,7 @@ impl<'a, 't> ModuleParser<'a, 't> {
         self.blocks.len() - 1
     }
 
-    fn add_func(
+    fn declare_func(
         &mut self,
         name: b::Name,
         node: ts::Node<'t>,
@@ -238,7 +186,7 @@ impl<'a, 't> ModuleParser<'a, 't> {
 
             let modules = self.ctx.lock_modules();
             (
-                self.types.get_type_name(ty_ref.key, &*modules).with(
+                self.types.get_typedef(ty_ref.key, &*modules).name.with(
                     method_name,
                     b::NameIdentKind::Func,
                     Some(loc),
@@ -329,7 +277,7 @@ impl<'a, 't> ModuleParser<'a, 't> {
         }
     }
 
-    fn add_global(&mut self, name: b::Name, node: ts::Node<'t>) {
+    fn declare_global(&mut self, name: b::Name, node: ts::Node<'t>) {
         assert_eq!(node.kind(), "global_decl");
 
         let ty = match node.field("type") {
@@ -361,6 +309,109 @@ impl<'a, 't> ModuleParser<'a, 't> {
         if is_main {
             let mut main = self.ctx.main.write().unwrap();
             *main = Some((self.mod_idx, self.globals.len() - 1));
+        }
+    }
+
+    fn declare_type(&mut self, name: b::Name, node: ts::Node<'t>) {
+        let ty_idx = self.types.typedefs.len();
+
+        let body_node = node.required_field("body");
+        let is_virt = body_node.kind() == "interface_type";
+
+        self.types.parse_type_decl(name.clone(), node);
+
+        for method_node in body_node.iter_field("methods") {
+            let method_name_node = method_node.required_field("name").of_kind("ident");
+            let method_name = method_name_node
+                .get_text(&self.ctx.source_manager.source(self.src_idx).content().text);
+
+            self.declare_func(
+                name.with(
+                    method_name,
+                    b::NameIdentKind::Func,
+                    Some(b::Loc::from_node(self.src_idx, &method_name_node)),
+                ),
+                method_node,
+                Some(b::FuncMethodInfo::new(
+                    method_name.to_string(),
+                    b::TypeRefKey::Custom {
+                        mod_idx: self.mod_idx,
+                        idx:     ty_idx,
+                    },
+                    // FIXME: since in the method's implementations we're not
+                    // handling is_virtual properly, we can't handle it here
+                    // as well to be consistent. As soon as we implement it
+                    // there, we should use `is_virt` here
+                    true,
+                )),
+                is_virt,
+            );
+        }
+    }
+
+    fn declare_typevar(&mut self, name: b::Name, node: ts::Node<'t>) {
+        let typevar_idx = self.types.typevar_count;
+        self.types.typevar_count += 1;
+        let typevar_def = b::TypeVarDef {
+            name: name.clone(),
+            loc:  b::Loc::from_node(self.src_idx, &node),
+        };
+        self.typevar_defs.push(typevar_def);
+        self.types.idents.insert(
+            name.last_ident().to_string(),
+            b::TypeVar::new(self.mod_idx, typevar_idx).into(),
+        );
+    }
+
+    fn declare_impl(&mut self, node: ts::Node<'t>) {
+        let name_node = node.required_field("name").of_kind("ident");
+
+        let ty = self.types.parse_type_ident(name_node);
+        if ty.is_unknown() {
+            // parse_type_ident already pushed an error
+            return;
+        }
+
+        let b::TypeBody::TypeRef(ty_ref) = ty else {
+            self.ctx.push_error(errors::Error::new(
+                errors::Todo::new("impl for internal type".to_string()).into(),
+                Some(b::Loc::from_node(self.src_idx, &name_node)),
+            ));
+            return;
+        };
+
+        let ifaces = {
+            let modules = &self.ctx.lock_modules();
+            node.iter_field("implements")
+                .filter_map(|iface_node| {
+                    let iface_ty = self.types.parse_type_ident(iface_node);
+                    if iface_ty.is_unknown() {
+                        // parse_type_ident already pushed an error
+                        return None;
+                    }
+
+                    let b::TypeBody::TypeRef(iface_ty_ref) = iface_ty else {
+                        self.ctx.push_error(errors::Error::new(
+                            errors::TypeNotInterface::new(
+                                &iface_ty,
+                                modules,
+                                &self.ctx.cfg,
+                            )
+                            .into(),
+                            Some(b::Loc::from_node(self.src_idx, &iface_node)),
+                        ));
+                        return None;
+                    };
+
+                    Some(iface_ty_ref.key)
+                })
+                .collect_vec()
+        };
+
+        {
+            let modules = &mut self.ctx.lock_modules_mut();
+            let typedef = self.types.get_typedef_mut(ty_ref.key, modules);
+            typedef.ifaces.extend(ifaces);
         }
     }
 

@@ -40,3 +40,21 @@ macro_rules! unwrap {
     };
 }
 pub(crate) use unwrap;
+
+/// Same as `matches!(expr, pat if guard)`. This only exists because rustfmt breaks with
+/// matches with guards
+macro_rules! matches_if {
+    ($expr:expr, $pat:pat, $guard:expr) => {
+        match $expr {
+            $pat if $guard => true,
+            _ => false,
+        }
+    };
+    ($expr:expr, $pat:pat) => {
+        match $expr {
+            $pat => true,
+            _ => false,
+        }
+    };
+}
+pub(crate) use matches_if;

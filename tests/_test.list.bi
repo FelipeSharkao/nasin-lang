@@ -121,8 +121,9 @@ Hi method
 :b shell 33
 ./bin/nasin r tests/interface.nsn
 :i returncode 0
-:b stdout 108
+:b stdout 110
 LinesA
+1
 implementation omitted
 LinesB
 LinesB 1

@@ -4,7 +4,7 @@ use derive_ctor::ctor;
 use itertools::Itertools;
 use tree_sitter as ts;
 
-use crate::utils::TreeSitterUtils;
+use crate::utils::{TreeSitterUtils, matches_if};
 use crate::{bytecode as b, context, errors};
 
 #[derive(ctor)]
@@ -168,7 +168,11 @@ impl<'a, 't> TypeParser<'a, 't> {
                     .typedefs
                     .iter_mut()
                     .find(|td| {
-                        matches!(&td.body, b::TypeDefBody::Builtin(b) if *b == builtin_type)
+                        matches_if!(
+                            &td.body,
+                            b::TypeDefBody::Builtin(b),
+                            *b == builtin_type
+                        )
                     })
                     .expect("builtin type not found");
                 typedef.methods.insert(name, method);
@@ -176,27 +180,57 @@ impl<'a, 't> TypeParser<'a, 't> {
         }
     }
 
-    pub fn get_type_name<'s>(
+    pub fn get_typedef<'s>(
         &'s self,
         ty: b::TypeRefKey,
         modules: &'s [b::Module],
-    ) -> &'s b::Name {
-        let typedef = match ty {
+    ) -> &'s b::TypeDef {
+        match ty {
             b::TypeRefKey::Custom { mod_idx, idx } if mod_idx == self.mod_idx => {
                 &self.typedefs[idx].typedef
             }
-            b::TypeRefKey::Builtin(needle) if self.mod_idx == b::BUILTINS_MODULE_IDX => self
-                .typedefs
-                .iter()
-                .map(|x| &x.typedef)
-                .find(
-                    |def| matches!(&def.body, &b::TypeDefBody::Builtin(builtin) if builtin == needle),
-                )
-                .expect("builtin type not found")
-                ,
-            _ => &ty.get_typedef(modules),
-        };
-        &typedef.name
+            b::TypeRefKey::Builtin(needle) if self.mod_idx == b::BUILTINS_MODULE_IDX => {
+                self.typedefs
+                    .iter()
+                    .map(|x| &x.typedef)
+                    .find(|def| {
+                        matches_if!(
+                            &def.body,
+                            &b::TypeDefBody::Builtin(builtin),
+                            builtin == needle
+                        )
+                    })
+                    .expect("builtin type not found")
+            }
+
+            _ => ty.get_typedef(modules),
+        }
+    }
+
+    pub fn get_typedef_mut<'s>(
+        &'s mut self,
+        ty: b::TypeRefKey,
+        modules: &'s mut [b::Module],
+    ) -> &'s mut b::TypeDef {
+        match ty {
+            b::TypeRefKey::Custom { mod_idx, idx } if mod_idx == self.mod_idx => {
+                &mut self.typedefs[idx].typedef
+            }
+            b::TypeRefKey::Builtin(needle) if self.mod_idx == b::BUILTINS_MODULE_IDX => {
+                self.typedefs
+                    .iter_mut()
+                    .map(|x| &mut x.typedef)
+                    .find(|def| {
+                        matches_if!(
+                            &def.body,
+                            &b::TypeDefBody::Builtin(builtin),
+                            builtin == needle
+                        )
+                    })
+                    .expect("builtin type not found")
+            }
+            _ => ty.get_typedef_mut(modules),
+        }
     }
 
     pub fn define_typedefs(&mut self) {
@@ -233,15 +267,15 @@ impl<'a, 't> TypeParser<'a, 't> {
             })
             .collect_vec();
 
-        let implements = node
-            .iter_field("assertion")
+        let ifaces = node
+            .iter_field("implements")
             .map(|ty_node| self.parse_type_expr(ty_node))
             .filter_map(|ty| match ty.body {
                 b::TypeBody::TypeRef(t) => Some(t.key),
                 _ => {
                     self.ctx.push_error(errors::Error::new(
                         errors::TypeNotInterface::new(
-                            &ty,
+                            &ty.body,
                             &self.ctx.lock_modules(),
                             &self.ctx.cfg,
                         )
@@ -251,7 +285,7 @@ impl<'a, 't> TypeParser<'a, 't> {
                     None
                 }
             })
-            .collect();
+            .collect_vec();
 
         let body_node = node.required_field("body");
         let body = match (body_node.kind(), &typedef.typedef.body) {
@@ -290,7 +324,7 @@ impl<'a, 't> TypeParser<'a, 't> {
         let typedef = &mut self.typedefs[i];
         typedef.typedef.body = body;
         typedef.typedef.generics = generics;
-        typedef.typedef.ifaces = implements;
+        typedef.typedef.ifaces.extend(ifaces);
     }
 }
 

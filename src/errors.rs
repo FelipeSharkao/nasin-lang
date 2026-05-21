@@ -197,11 +197,11 @@ pub struct TypeNotInterface {
 }
 
 impl TypeNotInterface {
-    pub fn new(ty: &b::Type, modules: &[b::Module], cfg: &BuildConfig) -> Self {
+    pub fn new(ty: &b::TypeBody, modules: &[b::Module], cfg: &BuildConfig) -> Self {
         let mut s = String::new();
         b::Printer::new(modules, cfg)
             .with_reconstruct(true)
-            .write_type_expr(&mut s, &ty.body)
+            .write_type_expr(&mut s, ty)
             .unwrap();
         Self { ty: s }
     }

@@ -1,6 +1,8 @@
-type LinesA : Lines {}
+type LinesA : Lines {
+    num: u8
+}
 
-type LinesB : Lines {
+type LinesB {
     data: str
 }
 
@@ -8,7 +10,7 @@ type Lines interface {
     lines(lines: Self, text: str): [str]
 }
 
-a: LinesA = {}
+a: LinesA = {num=1}
 b: LinesB = {data="LinesB 1"}
 c: LinesB = {data="LinesB 2"}
 
@@ -21,8 +23,10 @@ main = [
 lines_with(lines: Lines) =
     lines.lines("implementation omitted")
 
-LinesA.lines(_: Self, text) =
-    ["LinesA", text]
+LinesA.lines(lines: Self, text) =
+    ["LinesA", lines.num.to_str, text]
 
 LinesB.lines(lines: Self, text) =
     ["LinesB", lines.data, text]
+
+impl LinesB : Lines
