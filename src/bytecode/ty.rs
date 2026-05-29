@@ -10,7 +10,7 @@ use genawaiter::rc::Gen;
 use itertools::{Itertools, chain, izip};
 
 use super::module::*;
-use crate::utils::{self, SortedMap, unordered};
+use crate::utils::{self, SortedMap, matches_if, unordered};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, From)]
 pub enum TypeBody {
@@ -74,6 +74,144 @@ impl TypeBody {
         match &type_ref.get_typedef(modules).body {
             TypeDefBody::Builtin(builtin) => matches!(builtin, BuiltinType::Void),
             TypeDefBody::Record(_) | TypeDefBody::Interface => false,
+        }
+    }
+
+    pub fn field<'a>(
+        &'a self,
+        name: &str,
+        modules: &'a [Module],
+    ) -> Option<Cow<'a, Type>> {
+        match self {
+            Self::Inferred(v) => v.members.get(name).map(|ty| Cow::Borrowed(ty)),
+            Self::TypeRef(type_ref) => type_ref.field(name, modules),
+            _ => None,
+        }
+    }
+
+    pub fn method<'a>(
+        &'a self,
+        name: &str,
+        modules: &'a [Module],
+    ) -> Option<Cow<'a, Type>> {
+        match self {
+            Self::TypeRef(type_ref) => type_ref.method(name, modules),
+            _ => None,
+        }
+    }
+
+    pub fn property<'a>(
+        &'a self,
+        name: &str,
+        modules: &'a [Module],
+    ) -> Option<Cow<'a, Type>> {
+        match self {
+            Self::Inferred(v) => v.properties.get(name).map(|v| Cow::Borrowed(v)),
+            Self::TypeRef(type_ref) => type_ref.property(name, modules),
+            _ => None,
+        }
+    }
+
+    pub fn merge(
+        &self,
+        other: &Self,
+        variance: Variance,
+        modules: &[Module],
+    ) -> Option<Self> {
+        match (self, other) {
+            (a, b) if a == b => Some(a.clone()),
+            // INFO: the more """correct"" would be that a merge with a never type should
+            // check the variance, returning a never type if the variance is covariant.
+            // That doesn't work with our current implementation of the typechecker tho
+            unordered!(a, b) if b.is_never(modules) => Some(a.clone()),
+            (Self::Func(a), Self::Func(b)) => {
+                Some(Self::Func(a.merge(b, variance, modules)?.into()))
+            }
+            (Self::Inferred(a), Self::Inferred(b)) => {
+                let mut members = SortedMap::new();
+                for name in chain!(a.members.keys(), b.members.keys()).unique() {
+                    let ty = match (a.members.get(name), b.members.get(name)) {
+                        (Some(a_member), Some(b_member)) => {
+                            a_member.merge(b_member, variance, modules)?
+                        }
+                        // TODO: optional fields
+                        unordered!(Some(_), None) => return None,
+                        _ => unreachable!(),
+                    };
+                    members.insert(name.to_string(), ty);
+                }
+
+                let mut properties = SortedMap::new();
+                for name in chain!(a.properties.keys(), b.properties.keys()).unique() {
+                    let ty = match (a.properties.get(name), b.properties.get(name)) {
+                        (Some(a_prop), Some(b_prop)) => {
+                            a_prop.merge(b_prop, variance, modules)?
+                        }
+                        unordered!(Some(prop), None) => match variance {
+                            Variance::Covariant => prop.clone(),
+                            Variance::Contravariant => continue,
+                        },
+                        _ => unreachable!(),
+                    };
+                    properties.insert(name.to_string(), ty);
+                }
+
+                Some(Self::Inferred(InferredType {
+                    members,
+                    properties,
+                }))
+            }
+            unordered!(Self::Inferred(a), b) => {
+                let has_all_members = a.members.iter().all(|(name, a_ty)| {
+                    other.field(name, modules).is_some_and(|b_ty| {
+                        a_ty.merge(b_ty.as_ref(), variance, modules).is_some()
+                    })
+                });
+                let has_all_props = a.properties.iter().all(|(name, a_ty)| {
+                    other.property(name, modules).is_some_and(|b_ty| {
+                        a_ty.merge(&b_ty, variance, modules).is_some()
+                    })
+                });
+                if !has_all_members || !has_all_props {
+                    return None;
+                }
+
+                if let Self::TypeRef(type_ref) = b
+                    && !type_ref.args.is_empty()
+                {
+                    let generics = &type_ref.get_typedef(modules).generics;
+                    let mut substitutions = HashMap::new();
+                    if !type_ref.to_inferred(modules).collect_typevar_substitutions(
+                        a,
+                        variance,
+                        &mut substitutions,
+                        modules,
+                    ) {
+                        return None;
+                    }
+                    let args = izip!(generics, &type_ref.args)
+                        .map(|(typevar, arg)| substitutions.get(typevar).unwrap_or(arg))
+                        .cloned()
+                        .collect_vec();
+                    Some(
+                        TypeRef {
+                            args,
+                            ..type_ref.clone()
+                        }
+                        .into(),
+                    )
+                } else {
+                    Some(b.clone())
+                }
+            }
+            (Self::TypeRef(a), Self::TypeRef(b)) => {
+                Some(a.merge(b, variance, modules)?.into())
+            }
+            // TODO: when we add constraints to generics, we will have to intersect with
+            // that. Since we don't have that yet, all typevars are blanket, they don't
+            // change the type at all
+            unordered!(Self::TypeVar(_), a) => Some(a.clone()),
+            _ => None,
         }
     }
 }
@@ -202,140 +340,13 @@ impl Type {
         self.body.is_void(modules)
     }
 
-    pub fn field<'a>(
-        &'a self,
-        name: &str,
-        modules: &'a [Module],
-    ) -> Option<Cow<'a, Type>> {
-        match &self.body {
-            TypeBody::Inferred(v) => v.members.get(name).map(|ty| Cow::Borrowed(ty)),
-            TypeBody::TypeRef(type_ref) => type_ref.field(name, modules),
-            _ => None,
-        }
-    }
-
-    pub fn method<'a>(
-        &'a self,
-        name: &str,
-        modules: &'a [Module],
-    ) -> Option<Cow<'a, Type>> {
-        match &self.body {
-            TypeBody::TypeRef(type_ref) => type_ref.method(name, modules),
-            _ => None,
-        }
-    }
-
-    pub fn property<'a>(
-        &'a self,
-        name: &str,
-        modules: &'a [Module],
-    ) -> Option<Cow<'a, Type>> {
-        match &self.body {
-            TypeBody::Inferred(v) => v.properties.get(name).map(|v| Cow::Borrowed(v)),
-            TypeBody::TypeRef(type_ref) => type_ref.property(name, modules),
-            _ => None,
-        }
-    }
-
     pub fn merge(
         &self,
         other: &Type,
         variance: Variance,
         modules: &[Module],
     ) -> Option<Type> {
-        let body = match (self, other) {
-            (body!(a), body!(b)) if a == b => a.clone(),
-            // INFO: the more """correct"" would be that a merge with a never type should
-            // check the variance, returning a never type if the variance is covariant.
-            // That doesn't work with our current implementation of the typechecker tho
-            unordered!(body!(a), body!(b)) if b.is_never(modules) => a.clone(),
-            (body!(TypeBody::Func(a)), body!(TypeBody::Func(b))) => {
-                TypeBody::Func(a.merge(b, variance, modules)?.into())
-            }
-            (body!(TypeBody::Inferred(a)), body!(TypeBody::Inferred(b))) => {
-                let mut members = SortedMap::new();
-                for name in chain!(a.members.keys(), b.members.keys()).unique() {
-                    let ty = match (a.members.get(name), b.members.get(name)) {
-                        (Some(a_member), Some(b_member)) => {
-                            a_member.merge(b_member, variance, modules)?
-                        }
-                        // TODO: optional fields
-                        unordered!(Some(_), None) => return None,
-                        _ => unreachable!(),
-                    };
-                    members.insert(name.to_string(), ty);
-                }
-
-                let mut properties = SortedMap::new();
-                for name in chain!(a.properties.keys(), b.properties.keys()).unique() {
-                    let ty = match (a.properties.get(name), b.properties.get(name)) {
-                        (Some(a_prop), Some(b_prop)) => {
-                            a_prop.merge(b_prop, variance, modules)?
-                        }
-                        unordered!(Some(prop), None) => match variance {
-                            Variance::Covariant => prop.clone(),
-                            Variance::Contravariant => continue,
-                        },
-                        _ => unreachable!(),
-                    };
-                    properties.insert(name.to_string(), ty);
-                }
-
-                TypeBody::Inferred(InferredType {
-                    members,
-                    properties,
-                })
-            }
-            unordered!(body!(TypeBody::Inferred(a)), b) => {
-                let has_all_members = a.members.iter().all(|(name, a_ty)| {
-                    other.field(name, modules).is_some_and(|b_ty| {
-                        a_ty.merge(b_ty.as_ref(), variance, modules).is_some()
-                    })
-                });
-                let has_all_props = a.properties.iter().all(|(name, a_ty)| {
-                    other.property(name, modules).is_some_and(|b_ty| {
-                        a_ty.merge(&b_ty, variance, modules).is_some()
-                    })
-                });
-                if !has_all_members || !has_all_props {
-                    return None;
-                }
-
-                if let TypeBody::TypeRef(type_ref) = &b.body
-                    && !type_ref.args.is_empty()
-                {
-                    let generics = &type_ref.get_typedef(modules).generics;
-                    let mut substitutions = HashMap::new();
-                    if !type_ref.to_inferred(modules).collect_typevar_substitutions(
-                        a,
-                        variance,
-                        &mut substitutions,
-                        modules,
-                    ) {
-                        return None;
-                    }
-                    let args = izip!(generics, &type_ref.args)
-                        .map(|(typevar, arg)| substitutions.get(typevar).unwrap_or(arg))
-                        .cloned()
-                        .collect_vec();
-                    TypeRef {
-                        args,
-                        ..type_ref.clone()
-                    }
-                    .into()
-                } else {
-                    b.body.clone()
-                }
-            }
-            (body!(TypeBody::TypeRef(a)), body!(TypeBody::TypeRef(b))) => {
-                a.merge(b, variance, modules)?.into()
-            }
-            // TODO: when we add constraints to generics, we will have to intersect with
-            // that. Since we don't have that yet, all typevars are blanket, they don't
-            // change the type at all
-            unordered!(body!(TypeBody::TypeVar(_)), body!(a)) => a.clone(),
-            _ => return None,
-        };
+        let body = self.body.merge(&other.body, variance, modules)?;
         let loc = match (&self.loc, &other.loc) {
             unordered!(Some(loc), None) => Some(*loc),
             (Some(a), Some(b)) => {
@@ -672,7 +683,13 @@ impl TypeRef {
                     todo!("merge of interface and record with generics");
                 }
 
-                self_def.ifaces.contains(&other.key)
+                let args: Vec<TypeBody> =
+                    self.args.iter().map(|arg| arg.body.clone()).collect();
+
+                self_def.impls.iter().any(|impl_decl| {
+                    impl_decl.iface == other.key
+                        && impl_decl.constraints_satisfied(&args, modules)
+                })
             }
             _ => false,
         }
@@ -765,6 +782,38 @@ impl TypeRef {
             TypeBody::Func(Box::new(FuncType::new(params_tys, ret_ty))),
             Some(method.loc),
         )))
+    }
+
+    pub fn method_instanced_ref(
+        &self,
+        name: &str,
+        modules: &[Module],
+    ) -> Option<(usize, usize)> {
+        let typedef = self.get_typedef(modules);
+        let base_method = &typedef.methods[name];
+
+        let func = &modules[base_method.func_ref.0].funcs[base_method.func_ref.1];
+        let instantiated_funcs = func
+            .generic_instantiations
+            .values()
+            .map(|&func_idx| (base_method.func_ref.0, func_idx));
+
+        chain!(Some(base_method.func_ref), instantiated_funcs).find_map(|func_ref| {
+            let func = &modules[func_ref.0].funcs[func_ref.1];
+            let recv_ty = &modules[base_method.func_ref.0].values[func.params[0]].ty;
+            if recv_ty.typevars().next().is_some()
+                || !matches_if!(
+                    &recv_ty.body,
+                    TypeBody::TypeRef(recv_ty_ref),
+                    recv_ty_ref
+                        .merge(self, Variance::Covariant, modules)
+                        .is_some()
+                )
+            {
+                return None;
+            }
+            Some(func_ref)
+        })
     }
 
     pub fn property<'a>(
@@ -909,6 +958,17 @@ pub struct FuncType {
     pub ret:    Type,
 }
 impl FuncType {
+    pub fn from_func(mod_idx: usize, func_idx: usize, modules: &[Module]) -> Self {
+        let func = &modules[mod_idx].funcs[func_idx];
+        let params = func
+            .params
+            .iter()
+            .map(|&v| modules[mod_idx].values[v].ty.clone())
+            .collect_vec();
+        let ret = modules[mod_idx].values[func.ret].ty.clone();
+        Self { params, ret }
+    }
+
     pub fn merge(
         &self,
         other: &FuncType,

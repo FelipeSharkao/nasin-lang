@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use derive_ctor::ctor;
 
@@ -80,7 +80,7 @@ impl<'a> RuntimeBuilder<'a> {
             is_virt: false,
             loc: None,
             generics: vec![],
-            generic_instantiations: std::collections::HashMap::new(),
+            generic_instantiations: HashMap::new(),
         });
 
         self.entry_func_idx = Some(entry_idx);

@@ -6,7 +6,6 @@ use bump_scope::traits::BumpAllocatorTyped;
 use bump_scope::{Bump, BumpScope, BumpString, BumpVec, bump_vec};
 use derive_ctor::ctor;
 use derive_setters::Setters;
-use itertools::Itertools;
 
 use super::instr::*;
 use super::module::*;
@@ -104,6 +103,24 @@ impl<'a> Printer<'a> {
         Ok(())
     }
 
+    pub fn write_signature(
+        &mut self,
+        f: &mut impl Write,
+        params: impl IntoIterator<Item = &'a TypeBody>,
+        ret: &'a TypeBody,
+    ) -> fmt::Result {
+        write!(f, "(")?;
+        for (i, ty) in params.into_iter().enumerate() {
+            if i > 0 {
+                write!(f, ", ")?;
+            }
+            self.write_type_body(f, ty)?;
+        }
+        write!(f, "): ")?;
+        self.write_type_body(f, ret)?;
+        Ok(())
+    }
+
     fn write_all_in(&mut self, f: &mut impl Write, bump: &mut BumpScope) -> fmt::Result {
         for (i, _) in self.modules.iter().enumerate() {
             if i > 0 {
@@ -138,6 +155,12 @@ impl<'a> Printer<'a> {
             writeln!(f)?;
             self.write_typedef_in(f, &mut bump, module, i, 2)?;
             writeln!(f)?;
+
+            if !self.reconstruct && !module.typedefs[i].impls.is_empty() {
+                writeln!(f)?;
+                self.write_impl_decls_in(f, &mut bump, module, i, 2)?;
+                writeln!(f)?;
+            }
         }
 
         if module.typevars.len() > 0 {
@@ -221,9 +244,10 @@ impl<'a> Printer<'a> {
             self.write_builtin_type(
                 header,
                 builtin,
-                typedef.generics.iter().map(|&idx| {
-                    Type::new(TypeBody::TypeVar(TypeVar::new(module.idx, idx)), None)
-                }),
+                typedef
+                    .generics
+                    .iter()
+                    .map(|&idx| TypeBody::TypeVar(TypeVar::new(module.idx, idx))),
             )?;
         } else {
             self.write_name(header, &typedef.name)?;
@@ -234,11 +258,7 @@ impl<'a> Printer<'a> {
                     if i > 0 {
                         write!(header, ", ")?;
                     }
-                    let typevar_def = &module.typevars[idx];
-                    self.write_name(header, &typevar_def.name)?;
-                    if self.show_ids {
-                        write!(header, " (typevar {idx})")?;
-                    }
+                    self.write_typevar(header, module, idx)?;
                 }
                 write!(header, ")")?;
             }
@@ -246,15 +266,6 @@ impl<'a> Printer<'a> {
 
         if self.show_ids && !self.reconstruct {
             write!(header, " (type {idx})")?;
-        }
-
-        for (i, &iface) in typedef.ifaces.iter().sorted().enumerate() {
-            if i == 0 {
-                write!(header, ": ")?;
-            } else {
-                write!(header, ", ")?;
-            }
-            self.write_type_ref(header, &TypeRef::new(iface))?;
         }
 
         match &typedef.body {
@@ -317,6 +328,29 @@ impl<'a> Printer<'a> {
         Ok(())
     }
 
+    fn write_impl_decls_in(
+        &mut self,
+        f: &mut impl Write,
+        bump: &mut BumpScope,
+        module: &Module,
+        idx: usize,
+        indent: usize,
+    ) -> fmt::Result {
+        let mut guard = bump.scope_guard();
+        let bump = guard.scope().by_value();
+
+        let mut table = BumpTable::new_in(&bump);
+
+        let typedef = &module.typedefs[idx];
+        for impl_decl in &typedef.impls {
+            self.write_impl_decl_tabled(&mut table, typedef, impl_decl, indent)?;
+        }
+
+        write!(f, "{table}")?;
+
+        Ok(())
+    }
+
     fn write_global_in(
         &mut self,
         f: &mut impl Write,
@@ -371,13 +405,13 @@ impl<'a> Printer<'a> {
 
         let mut table = BumpTable::new_in(&bump);
 
-        self.write_func_signature_tabled(&mut table, module.idx, idx, indent)?;
+        self.write_func_decl_tabled(&mut table, module.idx, idx, indent)?;
         self.write_block_tabled(&mut table, module, module.funcs[idx].body, indent + 2)?;
 
         write!(f, "{table}")
     }
 
-    fn write_func_signature(
+    fn write_func_decl(
         &mut self,
         f: &mut impl Write,
         module: &Module,
@@ -434,7 +468,7 @@ impl<'a> Printer<'a> {
         Ok(())
     }
 
-    fn write_func_signature_tabled<'t, 'b: 't>(
+    fn write_func_decl_tabled<'t, 'b: 't>(
         &mut self,
         table: &'t mut BumpTable<&'b BumpScope<'b>>,
         mod_idx: usize,
@@ -447,7 +481,7 @@ impl<'a> Printer<'a> {
         table.start_row();
 
         let line = table.push_cell();
-        self.write_func_signature(line, module, func_idx, indent)?;
+        self.write_func_decl(line, module, func_idx, indent)?;
 
         if !self.reconstruct {
             let loc_comment = table.push_cell();
@@ -557,6 +591,48 @@ impl<'a> Printer<'a> {
                 self.write_block_tabled(table, module, *body_block, indent + 2)?;
             }
             _ => {}
+        }
+
+        Ok(())
+    }
+
+    fn write_impl_decl_tabled<'t, 'b: 't>(
+        &mut self,
+        table: &'t mut BumpTable<&'b BumpScope<'b>>,
+        typedef: &TypeDef,
+        impl_decl: &ImplDecl,
+        indent: usize,
+    ) -> fmt::Result {
+        table.start_row();
+        let line = table.push_cell();
+
+        write!(line, "{S:indent$}impl ")?;
+
+        let constraints = impl_decl.type_args_constraints.iter().flatten();
+
+        if let TypeDefBody::Builtin(builtin) = &typedef.body {
+            self.write_builtin_type(line, builtin, constraints)?;
+        } else {
+            self.write_name(line, &typedef.name)?;
+
+            if typedef.generics.len() > 0 {
+                write!(line, "(")?;
+                for (i, ty) in constraints.enumerate() {
+                    if i > 0 {
+                        write!(line, ", ")?;
+                    }
+                    self.write_type_body(line, ty)?;
+                }
+                write!(line, ")")?;
+            }
+        }
+
+        write!(line, " : ")?;
+        self.write_type_ref(line, &TypeRef::new(impl_decl.iface))?;
+
+        if !self.reconstruct {
+            let loc_comment = table.push_cell();
+            self.write_loc_comment(loc_comment, Some(&impl_decl.loc))?;
         }
 
         Ok(())
@@ -731,7 +807,11 @@ impl<'a> Printer<'a> {
         let typedef = type_ref.get_typedef(self.modules);
 
         if let TypeDefBody::Builtin(builtin) = &typedef.body {
-            self.write_builtin_type(f, builtin, &type_ref.args)?;
+            self.write_builtin_type(
+                f,
+                builtin,
+                type_ref.args.iter().map(|arg| &arg.body),
+            )?;
         } else {
             self.write_name(f, &typedef.name)?;
 
@@ -760,7 +840,7 @@ impl<'a> Printer<'a> {
         &mut self,
         f: &mut impl Write,
         builtin: &BuiltinType,
-        args: impl IntoIterator<Item = impl Borrow<Type>>,
+        args: impl IntoIterator<Item = impl Borrow<TypeBody>>,
     ) -> fmt::Result {
         let mut args = args.into_iter().peekable();
 
@@ -787,7 +867,7 @@ impl<'a> Printer<'a> {
             BuiltinType::Array => {
                 write!(f, "[")?;
                 match args.next() {
-                    Some(ty) => self.write_type_body(f, &ty.borrow().body)?,
+                    Some(ty) => self.write_type_body(f, ty.borrow())?,
                     None => write!(f, "_")?,
                 }
                 write!(f, "]")?;
@@ -800,9 +880,23 @@ impl<'a> Printer<'a> {
                 if i > 0 {
                     write!(f, ", ")?;
                 }
-                self.write_type_body(f, &ty.borrow().body)?;
+                self.write_type_body(f, ty.borrow())?;
             }
             write!(f, ")")?;
+        }
+        Ok(())
+    }
+
+    fn write_typevar(
+        &mut self,
+        f: &mut impl Write,
+        module: &Module,
+        typevar_idx: usize,
+    ) -> fmt::Result {
+        let typevar_def = &module.typevars[typevar_idx];
+        self.write_name(f, &typevar_def.name)?;
+        if self.show_ids {
+            write!(f, " (typevar {typevar_idx})")?;
         }
         Ok(())
     }

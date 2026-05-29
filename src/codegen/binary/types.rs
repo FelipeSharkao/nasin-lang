@@ -417,43 +417,52 @@ pub fn get_type_by_type(
     cl_module: &impl cl::Module,
 ) -> Vec<cl::Type> {
     match &ty.body {
-        b::TypeBody::TypeRef(t) => match &t.get_typedef(modules).body {
-            b::TypeDefBody::Record(rec) => rec
-                .fields
-                .values()
-                .flat_map(|field| get_type_by_type(&field.ty, modules, cl_module))
-                .collect_vec(),
-            b::TypeDefBody::Interface => vec![cl_module.isa().pointer_type(); 2],
-            b::TypeDefBody::Builtin(builtin) => match builtin {
-                b::BuiltinType::Bool => vec![cl::types::I8],
-                b::BuiltinType::I8 => vec![cl::types::I8],
-                b::BuiltinType::I16 => vec![cl::types::I16],
-                b::BuiltinType::I32 => vec![cl::types::I32],
-                b::BuiltinType::I64 => vec![cl::types::I64],
-                b::BuiltinType::U8 => vec![cl::types::I8],
-                b::BuiltinType::U16 => vec![cl::types::I16],
-                b::BuiltinType::U32 => vec![cl::types::I32],
-                b::BuiltinType::U64 => vec![cl::types::I64],
-                b::BuiltinType::F32 => vec![cl::types::F32],
-                b::BuiltinType::F64 => vec![cl::types::F64],
-                b::BuiltinType::USize | b::BuiltinType::Ptr => {
-                    vec![cl_module.isa().pointer_type()]
-                }
-                b::BuiltinType::String | b::BuiltinType::Array => {
-                    vec![cl_module.isa().pointer_type(); 2]
-                }
-                b::BuiltinType::Void => vec![],
-                b::BuiltinType::AnyNumber
-                | b::BuiltinType::AnySignedNumber
-                | b::BuiltinType::AnyFloat => {
-                    panic!("Type must be resolved before codegen")
-                }
-                b::BuiltinType::Never => panic!("never type cannot be used directly"),
-                b::BuiltinType::AnyOpaque => {
-                    panic!("anyopaque type cannot be used directly")
-                }
-            },
-        },
+        b::TypeBody::TypeRef(t) => {
+            let substitutions = t.typevar_substitutions(modules);
+            match &t.get_typedef(modules).body {
+                b::TypeDefBody::Record(rec) => rec
+                    .fields
+                    .values()
+                    .flat_map(|field| {
+                        let field_ty = field
+                            .ty
+                            .substitute_typevar(&substitutions)
+                            .unwrap_or_else(|| field.ty.clone());
+                        get_type_by_type(&field_ty, modules, cl_module)
+                    })
+                    .collect_vec(),
+                b::TypeDefBody::Interface => vec![cl_module.isa().pointer_type(); 2],
+                b::TypeDefBody::Builtin(builtin) => match builtin {
+                    b::BuiltinType::Bool => vec![cl::types::I8],
+                    b::BuiltinType::I8 => vec![cl::types::I8],
+                    b::BuiltinType::I16 => vec![cl::types::I16],
+                    b::BuiltinType::I32 => vec![cl::types::I32],
+                    b::BuiltinType::I64 => vec![cl::types::I64],
+                    b::BuiltinType::U8 => vec![cl::types::I8],
+                    b::BuiltinType::U16 => vec![cl::types::I16],
+                    b::BuiltinType::U32 => vec![cl::types::I32],
+                    b::BuiltinType::U64 => vec![cl::types::I64],
+                    b::BuiltinType::F32 => vec![cl::types::F32],
+                    b::BuiltinType::F64 => vec![cl::types::F64],
+                    b::BuiltinType::USize | b::BuiltinType::Ptr => {
+                        vec![cl_module.isa().pointer_type()]
+                    }
+                    b::BuiltinType::String | b::BuiltinType::Array => {
+                        vec![cl_module.isa().pointer_type(); 2]
+                    }
+                    b::BuiltinType::Void => vec![],
+                    b::BuiltinType::AnyNumber
+                    | b::BuiltinType::AnySignedNumber
+                    | b::BuiltinType::AnyFloat => {
+                        panic!("Type must be resolved before codegen")
+                    }
+                    b::BuiltinType::Never => panic!("never type cannot be used directly"),
+                    b::BuiltinType::AnyOpaque => {
+                        panic!("anyopaque type cannot be used directly")
+                    }
+                },
+            }
+        }
         b::TypeBody::Func(_) => {
             vec![cl_module.isa().pointer_type(); 2]
         }
@@ -465,51 +474,10 @@ pub fn get_type_by_type(
 }
 
 pub fn get_size(ty: &b::Type, modules: &[b::Module], cl_module: &impl cl::Module) -> u32 {
-    let ptr = cl_module.isa().pointer_bytes() as u32;
-
-    match &ty.body {
-        b::TypeBody::TypeRef(t) => match &t.get_typedef(modules).body {
-            b::TypeDefBody::Record(rec) => rec
-                .fields
-                .values()
-                .flat_map(|field| get_type_by_type(&field.ty, modules, cl_module))
-                .map(|ty| ty.bytes())
-                .sum(),
-            b::TypeDefBody::Interface => ptr * 2,
-            b::TypeDefBody::Builtin(builtin) => match builtin {
-                b::BuiltinType::Void | b::BuiltinType::Never => 0,
-                b::BuiltinType::Bool
-                | b::BuiltinType::I8
-                | b::BuiltinType::U8
-                | b::BuiltinType::I16
-                | b::BuiltinType::U16
-                | b::BuiltinType::I32
-                | b::BuiltinType::U32
-                | b::BuiltinType::I64
-                | b::BuiltinType::U64
-                | b::BuiltinType::USize
-                | b::BuiltinType::F32
-                | b::BuiltinType::F64
-                | b::BuiltinType::String
-                | b::BuiltinType::Array
-                | b::BuiltinType::Ptr => get_type_by_type(ty, modules, cl_module)
-                    .into_iter()
-                    .map(|ty| ty.bytes())
-                    .sum(),
-                b::BuiltinType::AnyNumber
-                | b::BuiltinType::AnySignedNumber
-                | b::BuiltinType::AnyFloat => {
-                    panic!("Type must be resolved before codegen")
-                }
-                b::BuiltinType::AnyOpaque => panic!("anyopaque cannot be used directly"),
-            },
-        },
-        b::TypeBody::Inferred(_) => panic!("Type must be resolved before codegen"),
-        b::TypeBody::Func(_) => todo!("first-class functions are not supported yet"),
-        b::TypeBody::TypeVar(_) => {
-            panic!("TypeVar should have been instantiated by transform phase")
-        }
-    }
+    get_type_by_type(ty, modules, cl_module)
+        .into_iter()
+        .map(|ty| ty.bytes())
+        .sum()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Display)]
@@ -691,8 +659,9 @@ impl VTableDesc {
     }
 }
 
-#[derive(ctor, Hash, PartialEq, Eq, Clone, Copy, Debug)]
+#[derive(ctor, Hash, PartialEq, Eq, Clone, Debug)]
 pub struct VTableRef {
     pub iface_key: b::TypeRefKey,
     pub ty_key:    b::TypeRefKey,
+    pub type_args: Vec<b::TypeBody>,
 }

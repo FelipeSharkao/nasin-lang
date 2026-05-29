@@ -30,8 +30,8 @@ impl<'a> CodeTransformStep for FinishGetPropertyStep<'a> {
         let result_ty = &module.values[instr.results[0]].ty;
         let parent_ty = &module.values[source_v].ty;
         let is_func = matches!(&result_ty.body, b::TypeBody::Func(..));
-        let is_field = parent_ty.field(&key, &modules).is_some();
-        let is_method = parent_ty.method(&key, &modules).is_some();
+        let is_field = parent_ty.body.field(&key, &modules).is_some();
+        let is_method = parent_ty.body.method(&key, &modules).is_some();
 
         let Some(instr) = cursor.instr_mut(&mut modules[mod_idx]) else {
             return;
@@ -45,7 +45,7 @@ impl<'a> CodeTransformStep for FinishGetPropertyStep<'a> {
                 let result = instr.results[0];
 
                 let parent_ty = &modules[mod_idx].values[source_v].ty;
-                let method = parent_ty.method(&key, &modules).unwrap().into_owned();
+                let method = parent_ty.body.method(&key, &modules).unwrap().into_owned();
 
                 let method_v = modules[mod_idx].add_value(b::Value::new(method, loc));
                 let instr = cursor.instr_mut(&mut modules[mod_idx]).unwrap();

@@ -3,14 +3,41 @@ use std::path::PathBuf;
 
 use derive_ctor::ctor;
 use derive_more::{Debug, Display, From};
+use itertools::izip;
 use nasin_macros::NumberEnum;
 use tree_sitter as ts;
 
+use super::Printer;
 use super::instr::*;
 use super::name::*;
 use super::ty::*;
 use super::value::*;
+use crate::config::BuildConfig;
 use crate::utils::SortedMap;
+
+#[derive(Debug, Clone, ctor)]
+pub struct ImplDecl {
+    pub iface: TypeRefKey,
+    pub type_args_constraints: Option<Vec<TypeBody>>,
+    pub loc: Loc,
+    #[ctor(default)]
+    pub used_type_args: HashSet<Vec<TypeBody>>,
+}
+
+impl ImplDecl {
+    pub fn constraints_satisfied(&self, args: &[TypeBody], modules: &[Module]) -> bool {
+        let Some(constraints) = self.type_args_constraints.as_ref() else {
+            return true;
+        };
+        if args.len() != constraints.len() {
+            return false;
+        }
+        izip!(args, constraints).all(|(arg, constraint)| {
+            arg.merge(constraint, Variance::Covariant, modules)
+                .is_some()
+        })
+    }
+}
 
 pub const BUILTINS_MODULE_IDX: usize = 0;
 
@@ -180,7 +207,7 @@ pub struct TypeDef {
     #[ctor(iter(TypeVarIdx))]
     pub generics: Vec<TypeVarIdx>,
     #[ctor(default)]
-    pub ifaces:   HashSet<TypeRefKey>,
+    pub impls:    Vec<ImplDecl>,
     #[ctor(default)]
     pub methods:  SortedMap<String, Method>,
 }
@@ -210,11 +237,36 @@ pub struct Func {
     pub generic_instantiations: HashMap<Vec<TypeBody>, usize>,
 }
 
+impl Func {
+    pub fn formated_signature(
+        &self,
+        mod_idx: usize,
+        modules: &[Module],
+        cfg: &BuildConfig,
+        base_module: Option<usize>,
+    ) -> String {
+        let params = self
+            .params
+            .iter()
+            .map(|v| &modules[mod_idx].values[*v].ty.body);
+        let ret = &modules[mod_idx].values[self.ret].ty.body;
+        let mut s = String::new();
+        let mut printer = Printer::new(modules, cfg);
+        if let Some(base_module) = base_module {
+            printer = printer.with_cur_mod_idx(base_module);
+        }
+        printer.write_signature(&mut s, params, ret).unwrap();
+        s
+    }
+}
+
 #[derive(Debug, Clone, ctor)]
 pub struct FuncMethodInfo {
     pub name:       String,
     pub ty:         TypeRefKey,
     pub is_virtual: bool,
+    #[ctor(default)]
+    pub ty_args:    Vec<Type>,
 }
 
 #[derive(Debug, Clone, From)]

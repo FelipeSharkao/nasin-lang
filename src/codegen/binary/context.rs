@@ -297,57 +297,95 @@ impl<'a> CodegenContext<'a> {
 
     fn insert_type_impls(
         &mut self,
-        ty: b::TypeRefKey,
+        ty_key: b::TypeRefKey,
         typedef: &b::TypeDef,
     ) -> Vec<cl::DataId> {
-        typedef
-            .ifaces
-            .iter()
-            .map(|&iface_key| {
-                let key = types::VTableRef::new(iface_key, ty);
-                if let Some(data_id) = self.vtables_impl.get(&key) {
-                    return *data_id;
+        let mut result = Vec::new();
+
+        for impl_decl in &typedef.impls {
+            let iface_key = impl_decl.iface;
+            let iface_def = iface_key.get_typedef(self.modules);
+            assert!(
+                matches!(iface_def.body, b::TypeDefBody::Interface),
+                "type {iface_key:?} should be an interface, but got {:?}",
+                &iface_def.body
+            );
+
+            if !self.vtables_desc.contains_key(&iface_key) {
+                let method_names = iface_def.methods.keys().cloned().collect_vec();
+                self.vtables_desc
+                    .insert(iface_key, types::VTableDesc::new(method_names));
+            }
+
+            if typedef.generics.is_empty() {
+                let data_id = self.insert_type_impls_for_args(ty_key, iface_key, &[]);
+                result.push(data_id);
+            } else {
+                for args in &impl_decl.used_type_args {
+                    let data_id =
+                        self.insert_type_impls_for_args(ty_key, iface_key, args);
+                    result.push(data_id);
                 }
+            }
+        }
 
-                let iface_def = iface_key.get_typedef(self.modules);
-                assert!(
-                    matches!(iface_def.body, b::TypeDefBody::Interface),
-                    "type {iface_key:?} should be an interface, but got {:?}",
-                    &iface_def.body
-                );
+        result
+    }
 
-                let vtable_desc = self.insert_interface_type(iface_key, iface_def);
+    fn insert_type_impls_for_args(
+        &mut self,
+        ty_key: b::TypeRefKey,
+        iface_key: b::TypeRefKey,
+        args: &[b::TypeBody],
+    ) -> cl::DataId {
+        let key = types::VTableRef::new(iface_key, ty_key, args.to_vec());
+        if let Some(&data_id) = self.vtables_impl.get(&key) {
+            return data_id;
+        }
 
-                let tuple = vtable_desc
-                    .methods
-                    .clone()
-                    .iter()
-                    .map(|m| {
-                        let func_ref = typedef.methods[m].func_ref;
-                        let func_id = self.funcs[&func_ref]
-                            .func_id
-                            .expect("Function should be defined");
-                        types::ValueSource::Func(func_id)
-                    })
-                    .collect();
-
-                let data_id = self
-                    .data_for_tuple(tuple)
-                    .expect("vtable should be serializable");
-
-                self.vtables_impl.insert(key, data_id);
-                data_id
+        let vtable_desc = &self.vtables_desc[&iface_key];
+        let tuple: Vec<types::ValueSource> = vtable_desc
+            .methods
+            .iter()
+            .map(|method_name| {
+                let func_ref = self.find_instantiated_method(ty_key, method_name, args);
+                let func_id = self.funcs[&func_ref]
+                    .func_id
+                    .expect("Function should be defined");
+                types::ValueSource::Func(func_id)
             })
-            .collect()
+            .collect();
+        let data_id = self
+            .data_for_tuple(tuple)
+            .expect("vtable should be serializable");
+        self.vtables_impl.insert(key, data_id);
+
+        data_id
     }
 
     fn insert_interface_type(
         &mut self,
-        ty: b::TypeRefKey,
+        ty_key: b::TypeRefKey,
         typedef: &b::TypeDef,
     ) -> &types::VTableDesc {
-        self.vtables_desc.entry(ty).or_insert_with(|| {
+        self.vtables_desc.entry(ty_key).or_insert_with(|| {
             types::VTableDesc::new(typedef.methods.keys().cloned().collect())
         })
+    }
+
+    fn find_instantiated_method(
+        &self,
+        ty_key: b::TypeRefKey,
+        method_name: &str,
+        args: &[b::TypeBody],
+    ) -> (usize, usize) {
+        let args = args
+            .iter()
+            .map(|arg| b::Type::new(arg.clone(), None))
+            .collect_vec();
+        let ty_ref = b::TypeRef::new(ty_key).with_args(args);
+        ty_ref
+            .method_instanced_ref(method_name, &*self.modules)
+            .unwrap()
     }
 }

@@ -16,4 +16,6 @@
 ./bin/nasin r tests/generic_func.nsn
 ./bin/nasin r tests/generic_record.nsn
 ./bin/nasin r tests/generic_method.nsn
+./bin/nasin r tests/conditional_impl.nsn
+./bin/nasin r tests/conditional_impl_error.nsn
 ./bin/nasin r tests/readme_example.nsn

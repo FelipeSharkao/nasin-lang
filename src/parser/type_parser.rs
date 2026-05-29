@@ -267,22 +267,25 @@ impl<'a, 't> TypeParser<'a, 't> {
             })
             .collect_vec();
 
-        let ifaces = node
+        let impls = node
             .iter_field("implements")
-            .map(|ty_node| self.parse_type_expr(ty_node))
-            .filter_map(|ty| match ty.body {
-                b::TypeBody::TypeRef(t) => Some(t.key),
-                _ => {
-                    self.ctx.push_error(errors::Error::new(
-                        errors::TypeNotInterface::new(
-                            &ty.body,
-                            &self.ctx.lock_modules(),
-                            &self.ctx.cfg,
-                        )
-                        .into(),
-                        Some(b::Loc::from_node(self.src_idx, &node)),
-                    ));
-                    None
+            .filter_map(|ty_node| {
+                let loc = b::Loc::from_node(self.src_idx, &ty_node);
+                let ty = self.parse_type_expr(ty_node);
+                match ty.body {
+                    b::TypeBody::TypeRef(t) => Some(b::ImplDecl::new(t.key, None, loc)),
+                    _ => {
+                        self.ctx.push_error(errors::Error::new(
+                            errors::TypeNotInterface::new(
+                                &ty.body,
+                                &self.ctx.lock_modules(),
+                                &self.ctx.cfg,
+                            )
+                            .into(),
+                            Some(b::Loc::from_node(self.src_idx, &node)),
+                        ));
+                        None
+                    }
                 }
             })
             .collect_vec();
@@ -324,7 +327,7 @@ impl<'a, 't> TypeParser<'a, 't> {
         let typedef = &mut self.typedefs[i];
         typedef.typedef.body = body;
         typedef.typedef.generics = generics;
-        typedef.typedef.ifaces.extend(ifaces);
+        typedef.typedef.impls.extend(impls);
     }
 }
 

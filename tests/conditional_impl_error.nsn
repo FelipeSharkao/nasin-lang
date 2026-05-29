@@ -1,0 +1,25 @@
+; This test should error with a type mismatch error
+; FAIL: compiling but crashing when running, crashing the compiler, or compiling and
+;       running successfully (black magic)
+
+typevar T
+
+type Container(T) {
+    data: T
+}
+
+Container(T).value(x: Self) =
+    x.data
+
+type StringValue interface {
+    value(x: Self): str
+}
+
+impl Container(str) : StringValue
+
+int_value: Container(u8) = {data=42}
+
+main = string_with(int_value) ; ERROR: int_value cannot be used as StringValue
+
+string_with(x: StringValue) =
+    x.value
