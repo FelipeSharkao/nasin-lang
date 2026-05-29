@@ -8,7 +8,7 @@ use derive_ctor::ctor;
 use itertools::{Itertools, enumerate, izip};
 
 use self::constraints::{Constraint, ConstraintKind};
-use crate::utils::SortedMap;
+use crate::utils::{SortedMap, matches_if};
 use crate::{bytecode as b, context, errors, utils};
 
 #[derive(Debug, Clone, ctor)]
@@ -86,6 +86,7 @@ impl<'a> TypeChecker<'a> {
         }
 
         self.validate(modules);
+        self.validate_impls(modules);
     }
 
     #[tracing::instrument(level = "trace", skip(self, modules))]
@@ -95,60 +96,6 @@ impl<'a> TypeChecker<'a> {
         // FIXME: use per-module locks instead of locking the entire module list
         modules: &mut [b::Module],
     ) {
-        let func = &modules[self.mod_idx].funcs[idx];
-
-        if let Some(method) = &func.method {
-            let parent_funcs = method
-                .ty
-                .get_typedef(modules)
-                .ifaces
-                .iter()
-                .filter_map(|iface| {
-                    Some(
-                        iface
-                            .get_typedef(modules)
-                            .methods
-                            .get(&method.name)?
-                            .func_ref,
-                    )
-                })
-                .collect_vec();
-            for (parent_mod_idx, parent_func_idx) in parent_funcs {
-                let func = &modules[self.mod_idx].funcs[idx];
-                let parent_func = &modules[parent_mod_idx].funcs[parent_func_idx];
-                let pairs: Vec<_> = izip!(&func.params, &parent_func.params)
-                    .map(|(p, pp)| (*p, *pp))
-                    .collect();
-                let method_ty = &func.method.as_ref().unwrap().ty;
-                let parent_mod_idx_is_mod_idx = match method_ty {
-                    b::TypeRefKey::Custom { mod_idx, .. } => *mod_idx == parent_mod_idx,
-                    b::TypeRefKey::Builtin(_) => parent_mod_idx == b::BUILTINS_MODULE_IDX,
-                };
-                for (param, parent_param) in pairs {
-                    if parent_mod_idx_is_mod_idx {
-                        self.add_constraint(
-                            param,
-                            Constraint::new(
-                                ConstraintKind::TypeOf(parent_param),
-                                modules[parent_mod_idx].funcs[parent_func_idx].loc,
-                            ),
-                            modules,
-                        );
-                    } else {
-                        let v = &modules[parent_mod_idx].values[parent_param];
-                        self.add_constraint(
-                            param,
-                            Constraint::new(
-                                ConstraintKind::Is(v.ty.clone()),
-                                modules[parent_mod_idx].funcs[parent_func_idx].loc,
-                            ),
-                            modules,
-                        );
-                    }
-                }
-            }
-        }
-
         let func = &modules[self.mod_idx].funcs[idx];
         let ret = func.ret;
 
@@ -1283,7 +1230,121 @@ impl<'a> TypeChecker<'a> {
     ) -> Option<b::Type> {
         let module = &modules[self.mod_idx];
         let parent = &module.values[v].ty;
-        return parent.property(key, modules).map(|ty| ty.into_owned());
+        return parent.body.property(key, modules).map(|ty| ty.into_owned());
+    }
+
+    fn validate_impls(&self, modules: &[b::Module]) {
+        let module = &modules[self.mod_idx];
+
+        for typedef in &module.typedefs {
+            for impl_decl in &typedef.impls {
+                self.validate_impl(modules, typedef, impl_decl);
+            }
+        }
+    }
+
+    fn validate_impl(
+        &self,
+        modules: &[b::Module],
+        typedef: &b::TypeDef,
+        impl_decl: &b::ImplDecl,
+    ) {
+        let iface_key = impl_decl.iface;
+        let iface_typedef = iface_key.get_typedef(modules);
+
+        macro_rules! type_name {
+            () => {
+                typedef
+                    .name
+                    .formated(modules, &self.ctx.cfg, Some(self.mod_idx))
+            };
+        }
+
+        macro_rules! iface_name {
+            () => {
+                iface_typedef
+                    .name
+                    .formated(modules, &self.ctx.cfg, Some(self.mod_idx))
+            };
+        }
+
+        for (method_name, iface_method) in &iface_typedef.methods {
+            let Some(typedef_method) = typedef.methods.get(method_name) else {
+                self.ctx.push_error(errors::Error::new(
+                    errors::MethodNotImplemented::new(
+                        method_name.clone(),
+                        type_name!(),
+                        iface_name!(),
+                    )
+                    .into(),
+                    Some(impl_decl.loc),
+                ));
+
+                continue;
+            };
+
+            let (impl_mod_idx, impl_func_idx) = typedef_method.func_ref;
+            let (iface_mod_idx, iface_func_idx) = iface_method.func_ref;
+
+            let impl_method_func = &modules[impl_mod_idx].funcs[impl_func_idx];
+            let iface_method_func = &modules[iface_mod_idx].funcs[iface_func_idx];
+
+            let ok = iface_method_func.params.len() == impl_method_func.params.len()
+                && izip!(&iface_method_func.params, &impl_method_func.params)
+                    .enumerate()
+                    .all(|(i, (&iface_param, &impl_param))| {
+                        let iface_param =
+                            &modules[iface_mod_idx].values[iface_param].ty.body;
+                        let impl_param =
+                            &modules[impl_mod_idx].values[impl_param].ty.body;
+
+                        // FIXME: Self in interface should be a special type since it's the
+                        // implementor not the interface
+                        let variance = if !matches_if!(
+                            &iface_param,
+                            b::TypeBody::TypeRef(t),
+                            i == 0 && t.key == iface_key
+                        ) {
+                            b::Variance::Covariant
+                        } else {
+                            b::Variance::Contravariant
+                        };
+                        iface_param.merge(impl_param, variance, modules).is_some()
+                    })
+                && modules[iface_mod_idx].values[iface_method_func.ret]
+                    .ty
+                    .body
+                    .merge(
+                        &modules[impl_mod_idx].values[impl_method_func.ret].ty.body,
+                        b::Variance::Covariant,
+                        modules,
+                    )
+                    .is_some();
+
+            if !ok {
+                self.ctx.push_error(errors::Error::new(
+                    errors::MethodTypeMismatch::new(
+                        method_name.clone(),
+                        type_name!(),
+                        iface_name!(),
+                        iface_method_func.formated_signature(
+                            iface_mod_idx,
+                            modules,
+                            &self.ctx.cfg,
+                            Some(self.mod_idx),
+                        ),
+                        impl_method_func.formated_signature(
+                            impl_mod_idx,
+                            modules,
+                            &self.ctx.cfg,
+                            Some(self.mod_idx),
+                        ),
+                    )
+                    .into(),
+                    impl_method_func.loc,
+                ));
+            }
+        }
     }
 }
 

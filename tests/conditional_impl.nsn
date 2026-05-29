@@ -1,0 +1,40 @@
+typevar T
+
+type Container(T) {
+    data: T
+}
+
+Container(T).value(x: Self) = x.data
+Container(str).str_value(x: Self) = x.data
+Container(u8).int_value(x: Self) = x.data
+
+type StringValue interface {
+    value(x: Self): str
+    str_value(x: Self): str
+}
+
+type IntValue interface {
+    value(x: Self): u8
+    int_value(x: Self): u8
+}
+
+impl Container(str) : StringValue
+impl Container(u8)  : IntValue
+
+string_with(x: StringValue) = [
+    x.value
+    x.str_value
+]
+
+int_with(x: IntValue) = [
+    x.value.to_str
+    x.int_value.to_str
+]
+
+str_value: Container(str) = {data="hello"}
+int_value: Container(u8)  = {data=42}
+
+main = [
+    string_with(str_value)
+    int_with(int_value)
+]

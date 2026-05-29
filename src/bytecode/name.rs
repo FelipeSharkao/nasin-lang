@@ -5,6 +5,7 @@ use derive_ctor::ctor;
 use derive_more::{Debug, From};
 use itertools::{Itertools, izip};
 
+use super::Printer;
 use super::module::*;
 use super::ty::*;
 use crate::config::BuildConfig;
@@ -126,6 +127,21 @@ impl Name {
             nodes: self.nodes[prefix.nodes.len()..].to_vec(),
             ..self.clone()
         })
+    }
+
+    pub fn formated(
+        &self,
+        modules: &[Module],
+        cfg: &BuildConfig,
+        base_module: Option<usize>,
+    ) -> String {
+        let mut s = String::new();
+        let mut printer = Printer::new(modules, cfg);
+        if let Some(base_module) = base_module {
+            printer = printer.with_cur_mod_idx(base_module);
+        }
+        printer.write_name(&mut s, self).unwrap();
+        s
     }
 }
 

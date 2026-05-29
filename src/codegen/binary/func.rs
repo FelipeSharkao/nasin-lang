@@ -815,7 +815,9 @@ impl<'a> FuncCodegen<'a, '_> {
                 let b::TypeBody::TypeRef(ty_ref) = &ty.body else {
                     panic!("type should be a typeref");
                 };
-                let vtable_ref = types::VTableRef::new(*iface_ty_key, ty_ref.key);
+                let type_args = ty_ref.args.iter().map(|t| t.body.clone()).collect();
+                let vtable_ref =
+                    types::VTableRef::new(*iface_ty_key, ty_ref.key, type_args);
                 let vtable_data = self.ctx.vtables_impl[&vtable_ref];
                 let vtable_gv = self.get_global_value(vtable_data);
                 let vtable = expect_builder!(self)

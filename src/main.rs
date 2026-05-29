@@ -38,8 +38,6 @@ enum CliCommand {
 }
 
 fn main() {
-    //unsafe { compact_debug::enable(true) };
-
     prepare_tracing();
 
     let cli = Cli::parse();

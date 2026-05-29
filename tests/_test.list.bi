@@ -1,4 +1,4 @@
-:i count 19
+:i count 21
 :b shell 29
 ./bin/nasin r tests/hello.nsn
 :i returncode 0
@@ -177,6 +177,31 @@ str
 bool
 
 :b stderr 0
+
+:b shell 40
+./bin/nasin r tests/conditional_impl.nsn
+:i returncode 0
+:b stdout 18
+hello
+hello
+42
+42
+
+:b stderr 0
+
+:b shell 46
+./bin/nasin r tests/conditional_impl_error.nsn
+:i returncode 1
+:b stdout 0
+
+:b stderr 569
+/home/felipe/Projects/nasin/nasin/tests/conditional_impl_error.nsn:22:8 - error: Expected type conditional_impl_error.StringValue, but found conditional_impl_error.Container(u8) instead
+22 | main = string_with(int_value) ; ERROR: int_value cannot be used as StringValue
+            ^
+/home/felipe/Projects/nasin/nasin/tests/conditional_impl_error.nsn:22:8 - error: Expected type conditional_impl_error.StringValue, but found conditional_impl_error.Container(u8) instead
+22 | main = string_with(int_value) ; ERROR: int_value cannot be used as StringValue
+            ^
+
 
 :b shell 38
 ./bin/nasin r tests/readme_example.nsn

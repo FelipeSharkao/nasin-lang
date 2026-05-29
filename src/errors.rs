@@ -67,6 +67,8 @@ pub enum ErrorDetail {
     TypeNotFinal,
     TypeNotInterface(TypeNotInterface),
     WrongArgumentCount(WrongArgumentCount),
+    MethodNotImplemented(MethodNotImplemented),
+    MethodTypeMismatch(MethodTypeMismatch),
     Todo(Todo),
 }
 
@@ -222,6 +224,28 @@ pub struct WrongArgumentCount {
     pub name:     String,
     pub expected: usize,
     pub found:    usize,
+}
+
+#[derive(Debug, Clone, Display, ctor)]
+#[display(
+    "Type `{ty}` does not implement method `{method}` required by interface `{iface}`"
+)]
+pub struct MethodNotImplemented {
+    pub method: String,
+    pub ty:     String,
+    pub iface:  String,
+}
+
+#[derive(Debug, Clone, Display, ctor)]
+#[display(
+    "Method `{method}` has an incompatible type for interface `{iface}`\nExpected `{method}{expected}`\n   Found `{method}{found}`"
+)]
+pub struct MethodTypeMismatch {
+    pub method:   String,
+    pub ty:       String,
+    pub iface:    String,
+    pub expected: String,
+    pub found:    String,
 }
 
 #[derive(Debug, Clone, Display, ctor)]

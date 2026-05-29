@@ -101,6 +101,7 @@ impl<'a, 't> ModuleParser<'a, 't> {
                 "func_decl" => self.declare_func(get_name(), decl_node, None, false),
                 "global_decl" => self.declare_global(get_name(), decl_node),
                 "impl_decl" => self.declare_impl(decl_node),
+                "comment" => {}
                 _ => panic!("Unexpected declaration kind: {}", decl_node.kind()),
             }
         }
@@ -164,10 +165,10 @@ impl<'a, 't> ModuleParser<'a, 't> {
         let loc = b::Loc::from_node(self.src_idx, &node);
 
         let (name, method_info) = if let Some(parent) = node.field("parent") {
-            assert!(parent.kind() == "ident");
+            assert!(parent.kind() == "type_expr");
 
-            let parent_ty = self.types.parse_type_ident(parent);
-            let b::TypeBody::TypeRef(ty_ref) = parent_ty else {
+            let parent_ty = self.types.parse_type_expr(parent);
+            let b::TypeBody::TypeRef(ty_ref) = &parent_ty.body else {
                 self.ctx.push_error(errors::Error::new(
                     errors::Todo::new("method for internal type".to_string()).into(),
                     Some(b::Loc::from_node(self.src_idx, &parent)),
@@ -177,20 +178,21 @@ impl<'a, 't> ModuleParser<'a, 't> {
 
             let method_name = name.last_ident().to_string();
 
-            let method_info = b::FuncMethodInfo::new(
+            let mut method_info = b::FuncMethodInfo::new(
                 method_name.clone(),
                 ty_ref.key,
                 // FIXME: not all methods are virtual, we should handle this properly
                 true,
             );
+            method_info.ty_args = ty_ref.args.clone();
 
             let modules = self.ctx.lock_modules();
+            let typedef = self.types.get_typedef(ty_ref.key, &*modules);
+
             (
-                self.types.get_typedef(ty_ref.key, &*modules).name.with(
-                    method_name,
-                    b::NameIdentKind::Func,
-                    Some(loc),
-                ),
+                typedef
+                    .name
+                    .with(method_name, b::NameIdentKind::Func, Some(loc)),
                 Some(method_info),
             )
         } else {
@@ -269,11 +271,9 @@ impl<'a, 't> ModuleParser<'a, 't> {
         ));
 
         if let Some(method_info) = method_info {
-            self.types.add_method(
-                method_info.ty,
-                method_info.name,
-                b::Method::new((self.mod_idx, func_idx), loc),
-            );
+            let method = b::Method::new((self.mod_idx, func_idx), loc);
+            self.types
+                .add_method(method_info.ty, method_info.name, method);
         }
     }
 
@@ -364,54 +364,58 @@ impl<'a, 't> ModuleParser<'a, 't> {
     }
 
     fn declare_impl(&mut self, node: ts::Node<'t>) {
-        let name_node = node.required_field("name").of_kind("ident");
+        let loc = b::Loc::from_node(self.src_idx, &node);
 
-        let ty = self.types.parse_type_ident(name_node);
+        let ty_node = node.required_field("type").of_kind("type_expr");
+
+        let ty = self.types.parse_type_expr(ty_node);
         if ty.is_unknown() {
-            // parse_type_ident already pushed an error
+            // parse_type_expr already pushed an error
             return;
         }
 
-        let b::TypeBody::TypeRef(ty_ref) = ty else {
+        let b::TypeBody::TypeRef(ty_ref) = &ty.body else {
             self.ctx.push_error(errors::Error::new(
                 errors::Todo::new("impl for internal type".to_string()).into(),
-                Some(b::Loc::from_node(self.src_idx, &name_node)),
+                Some(b::Loc::from_node(self.src_idx, &ty_node)),
             ));
             return;
         };
 
-        let ifaces = {
-            let modules = &self.ctx.lock_modules();
-            node.iter_field("implements")
-                .filter_map(|iface_node| {
-                    let iface_ty = self.types.parse_type_ident(iface_node);
-                    if iface_ty.is_unknown() {
-                        // parse_type_ident already pushed an error
-                        return None;
-                    }
-
-                    let b::TypeBody::TypeRef(iface_ty_ref) = iface_ty else {
-                        self.ctx.push_error(errors::Error::new(
-                            errors::TypeNotInterface::new(
-                                &iface_ty,
-                                modules,
-                                &self.ctx.cfg,
-                            )
-                            .into(),
-                            Some(b::Loc::from_node(self.src_idx, &iface_node)),
-                        ));
-                        return None;
-                    };
-
-                    Some(iface_ty_ref.key)
-                })
-                .collect_vec()
+        let constraints = if ty_ref.args.is_empty() {
+            None
+        } else {
+            Some(ty_ref.args.iter().map(|arg| arg.body.clone()).collect())
         };
 
-        {
-            let modules = &mut self.ctx.lock_modules_mut();
-            let typedef = self.types.get_typedef_mut(ty_ref.key, modules);
-            typedef.ifaces.extend(ifaces);
+        let modules = &mut self.ctx.lock_modules_mut();
+
+        let iface_keys = node
+            .iter_field("implements")
+            .filter_map(|iface_node| {
+                let iface_ty = self.types.parse_type_ident(iface_node);
+                if iface_ty.is_unknown() {
+                    // parse_type_ident already pushed an error
+                    return None;
+                }
+
+                let b::TypeBody::TypeRef(iface_ty_ref) = iface_ty else {
+                    self.ctx.push_error(errors::Error::new(
+                        errors::TypeNotInterface::new(&iface_ty, modules, &self.ctx.cfg)
+                            .into(),
+                        Some(b::Loc::from_node(self.src_idx, &iface_node)),
+                    ));
+                    return None;
+                };
+
+                Some(iface_ty_ref.key)
+            })
+            .collect_vec();
+
+        let typedef = self.types.get_typedef_mut(ty_ref.key, modules);
+        for iface_key in iface_keys {
+            let impl_decl = b::ImplDecl::new(iface_key, constraints.clone(), loc);
+            typedef.impls.push(impl_decl);
         }
     }
 
@@ -421,19 +425,7 @@ impl<'a, 't> ModuleParser<'a, 't> {
         let old_self_type = self.types.idents.get(SELF_TYPE_INDENT).cloned();
 
         if let Some(method) = &func.func.method {
-            let modules = self.ctx.lock_modules();
-            let type_def = match method.ty {
-                b::TypeRefKey::Custom { mod_idx, idx } if mod_idx == self.mod_idx => {
-                    &self.types.typedefs[idx].typedef
-                }
-                _ => method.ty.get_typedef(&*modules),
-            };
-
-            let args = type_def.generics.iter().map(|&idx| {
-                b::Type::new(b::TypeVar::new(self.mod_idx, idx).into(), None)
-            });
-            let type_ref = b::TypeRef::new(method.ty).with_args(args.collect_vec());
-
+            let type_ref = b::TypeRef::new(method.ty).with_args(method.ty_args.clone());
             self.types
                 .idents
                 .insert(SELF_TYPE_INDENT.to_string(), type_ref.into());

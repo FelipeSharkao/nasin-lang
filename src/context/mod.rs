@@ -88,7 +88,7 @@ impl BuildContext {
         if root_node.has_error() {
             for err in root_node.iter_errors() {
                 let source = &self.source_manager.source(src_idx).content().text;
-                let token = err.get_text(source).to_string();
+                let token = err.child(0).unwrap_or(err).get_text(source).to_string();
                 self.push_error(errors::Error::new(
                     errors::UnexpectedToken::new(token).into(),
                     Some(b::Loc::from_node(src_idx, &err)),
@@ -139,7 +139,6 @@ impl BuildContext {
 
     pub fn compile(&self) {
         let rt_entry = RuntimeBuilder::new(self).add_entry().build();
-        // RuntimeBuilder can push errors
         if self.has_errors() {
             return;
         }
