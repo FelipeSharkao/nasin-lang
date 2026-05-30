@@ -123,10 +123,14 @@ impl<'a> RuntimeBuilder<'a> {
         {
             return Err(errors::Error::new(
                 errors::UnexpectedType::new(
-                    vec![&str_ty, &array_ty, &array_2d_ty],
-                    main_ty,
-                    &modules,
-                    &self.ctx.cfg,
+                    vec![
+                        "str".to_string(),
+                        "[str]".to_string(),
+                        "[[str]]".to_string(),
+                    ],
+                    main_ty
+                        .body
+                        .formated(&*modules, &self.ctx.cfg, Some(main_global.0)),
                 )
                 .into(),
                 Some(main_global_def.loc),

@@ -112,32 +112,11 @@ pub struct TypeVarNotFound {
     pub ident: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, ctor)]
 pub struct UnexpectedType {
+    #[ctor(iter(String))]
     pub expected: Vec<String>,
     pub actual:   String,
-}
-
-impl UnexpectedType {
-    pub fn new(
-        expected: Vec<&b::Type>,
-        actual: &b::Type,
-        modules: &[b::Module],
-        cfg: &BuildConfig,
-    ) -> Self {
-        let fmt_ty = |ty: &b::TypeBody| {
-            let mut s = String::new();
-            b::Printer::new(modules, cfg)
-                .with_reconstruct(true)
-                .write_type_expr(&mut s, ty)
-                .unwrap();
-            s
-        };
-        Self {
-            expected: expected.iter().map(|t| fmt_ty(&t.body)).collect(),
-            actual:   fmt_ty(&actual.body),
-        }
-    }
 }
 
 impl Display for UnexpectedType {

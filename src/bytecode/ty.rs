@@ -9,7 +9,9 @@ use derive_setters::Setters;
 use genawaiter::rc::Gen;
 use itertools::{Itertools, chain, izip};
 
+use super::Printer;
 use super::module::*;
+use crate::config::BuildConfig;
 use crate::utils::{self, SortedMap, matches_if, unordered};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, From)]
@@ -213,6 +215,21 @@ impl TypeBody {
             unordered!(Self::TypeVar(_), a) => Some(a.clone()),
             _ => None,
         }
+    }
+
+    pub fn formated(
+        &self,
+        modules: &[Module],
+        cfg: &BuildConfig,
+        base_module: Option<usize>,
+    ) -> String {
+        let mut s = String::new();
+        let mut printer = Printer::new(modules, cfg).with_reconstruct(true);
+        if let Some(base_module) = base_module {
+            printer = printer.with_cur_mod_idx(base_module);
+        }
+        printer.write_type_expr(&mut s, self).unwrap();
+        s
     }
 }
 

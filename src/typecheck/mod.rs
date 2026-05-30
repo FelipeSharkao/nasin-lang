@@ -1122,10 +1122,16 @@ impl<'a> TypeChecker<'a> {
             for (merge_with, loc) in &error_tys {
                 self.ctx.push_error(errors::Error::new(
                     errors::UnexpectedType::new(
-                        vec![merge_with],
-                        &result_ty,
-                        &modules,
-                        &self.ctx.cfg,
+                        vec![merge_with.body.formated(
+                            modules,
+                            &self.ctx.cfg,
+                            Some(self.mod_idx),
+                        )],
+                        result_ty.body.formated(
+                            modules,
+                            &self.ctx.cfg,
+                            Some(self.mod_idx),
+                        ),
                     )
                     .into(),
                     *loc,

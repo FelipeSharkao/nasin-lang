@@ -194,11 +194,11 @@ hello
 :i returncode 1
 :b stdout 0
 
-:b stderr 569
-/home/felipe/Projects/nasin/nasin/tests/conditional_impl_error.nsn:22:8 - error: Expected type conditional_impl_error.StringValue, but found conditional_impl_error.Container(u8) instead
+:b stderr 477
+/home/felipe/Projects/nasin/nasin/tests/conditional_impl_error.nsn:22:8 - error: Expected type StringValue, but found Container(u8) instead
 22 | main = string_with(int_value) ; ERROR: int_value cannot be used as StringValue
             ^
-/home/felipe/Projects/nasin/nasin/tests/conditional_impl_error.nsn:22:8 - error: Expected type conditional_impl_error.StringValue, but found conditional_impl_error.Container(u8) instead
+/home/felipe/Projects/nasin/nasin/tests/conditional_impl_error.nsn:22:8 - error: Expected type StringValue, but found Container(u8) instead
 22 | main = string_with(int_value) ; ERROR: int_value cannot be used as StringValue
             ^
 

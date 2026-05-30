@@ -136,7 +136,7 @@ impl Name {
         base_module: Option<usize>,
     ) -> String {
         let mut s = String::new();
-        let mut printer = Printer::new(modules, cfg);
+        let mut printer = Printer::new(modules, cfg).with_reconstruct(true);
         if let Some(base_module) = base_module {
             printer = printer.with_cur_mod_idx(base_module);
         }
