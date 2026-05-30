@@ -10,6 +10,7 @@ use derive_ctor::ctor;
 use tree_sitter as ts;
 
 use self::runtime::RuntimeBuilder;
+use crate::config::ShouldDump;
 use crate::utils::TreeSitterUtils;
 use crate::{bytecode as b, codegen, config, errors, parser, sources, typecheck, utils};
 
@@ -64,13 +65,13 @@ impl BuildContext {
             .expect("Could not parse this file");
         let root_node = tree.root_node();
 
-        if self.cfg.dump_ast {
+        let name =
+            b::Name::from_path(&self.source_manager.source(src_idx).path, &self.cfg);
+
+        if self.cfg.dump_ast.should_dump(&name) {
             let source = &self.source_manager.source(src_idx).content().text;
             println!("{}", root_node.display(source));
         }
-
-        let name =
-            b::Name::from_path(&self.source_manager.source(src_idx).path, &self.cfg);
 
         let mod_idx = {
             let mut modules = self.lock_modules_mut();
@@ -103,11 +104,19 @@ impl BuildContext {
         module_parser.add_root(root_node);
         module_parser.finish();
 
-        if self.cfg.dump_untyped_bytecode {
-            b::Printer::new(&self.lock_modules(), &self.cfg)
-                .with_show_ids(true)
-                .with_source_manager(&self.source_manager)
-                .print_module(mod_idx);
+        {
+            let modules = self.lock_modules();
+
+            if self
+                .cfg
+                .dump_untyped_bytecode
+                .should_dump(&modules[mod_idx].name)
+            {
+                b::Printer::new(&modules, &self.cfg)
+                    .with_show_ids(true)
+                    .with_source_manager(&self.source_manager)
+                    .print_module(mod_idx);
+            }
         }
 
         typecheck::TypeChecker::new(self, mod_idx).check();
@@ -145,8 +154,8 @@ impl BuildContext {
 
         let modules = self.lock_modules();
 
-        if self.cfg.dump_bytecode {
-            if let Some((mod_idx, _)) = rt_entry {
+        if let Some((mod_idx, _)) = rt_entry {
+            if self.cfg.dump_bytecode.should_dump(&modules[mod_idx].name) {
                 b::Printer::new(&modules, &self.cfg)
                     .with_show_ids(true)
                     .with_source_manager(&self.source_manager)

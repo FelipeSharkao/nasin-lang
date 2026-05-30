@@ -114,19 +114,29 @@ impl Name {
         panic!("Name is empty")
     }
 
+    /// Strips the prefix from the name. If the name doesn't start with the prefix, returns
+    /// the name itself.
     pub fn strip_prefix(&self, prefix: &Self) -> Cow<'_, Self> {
+        if self.starts_with(prefix) {
+            Cow::Owned(Self {
+                nodes: self.nodes[prefix.nodes.len()..].to_vec(),
+                ..self.clone()
+            })
+        } else {
+            Cow::Borrowed(self)
+        }
+    }
+
+    pub fn starts_with(&self, prefix: &Self) -> bool {
         if self.nodes.len() < prefix.nodes.len() {
-            return Cow::Borrowed(self);
+            return false;
         }
         for (a, b) in izip!(&self.nodes, &prefix.nodes) {
             if a != b {
-                return Cow::Borrowed(self);
+                return false;
             }
         }
-        Cow::Owned(Self {
-            nodes: self.nodes[prefix.nodes.len()..].to_vec(),
-            ..self.clone()
-        })
+        true
     }
 
     pub fn formated(

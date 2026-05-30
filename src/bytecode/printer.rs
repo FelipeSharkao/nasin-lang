@@ -11,7 +11,7 @@ use super::instr::*;
 use super::module::*;
 use super::ty::*;
 use super::{Name, NameNode};
-use crate::config::BuildConfig;
+use crate::config::{BuildConfig, ShouldDump};
 use crate::sources::SourceManager;
 use crate::utils;
 
@@ -33,9 +33,9 @@ pub struct Printer<'a> {
 }
 
 impl<'a> Printer<'a> {
-    pub fn print_all(&mut self) {
+    pub fn print(&mut self, flag: impl ShouldDump) {
         let mut p = utils::WriteIO::stdout();
-        self.write_all(&mut p).unwrap();
+        self.write_all(&mut p, flag).unwrap();
         writeln!(p).unwrap();
     }
 
@@ -45,10 +45,14 @@ impl<'a> Printer<'a> {
         writeln!(p).unwrap();
     }
 
-    pub fn write_all(&mut self, f: &mut impl Write) -> fmt::Result {
+    pub fn write_all(
+        &mut self,
+        f: &mut impl Write,
+        flag: impl ShouldDump,
+    ) -> fmt::Result {
         let mut bump = Bump::new();
         let bump = bump.as_mut_scope();
-        self.write_all_in(f, bump)
+        self.write_all_in(f, bump, flag)
     }
 
     pub fn write_module(&mut self, f: &mut impl Write, mod_idx: usize) -> fmt::Result {
@@ -121,12 +125,22 @@ impl<'a> Printer<'a> {
         Ok(())
     }
 
-    fn write_all_in(&mut self, f: &mut impl Write, bump: &mut BumpScope) -> fmt::Result {
-        for (i, _) in self.modules.iter().enumerate() {
-            if i > 0 {
-                writeln!(f)?;
+    fn write_all_in(
+        &mut self,
+        f: &mut impl Write,
+        bump: &mut BumpScope,
+        flag: impl ShouldDump,
+    ) -> fmt::Result {
+        let mut c = 0;
+        for (i, module) in self.modules.iter().enumerate() {
+            if flag.should_dump(&module.name) {
+                if c > 0 {
+                    writeln!(f)?;
+                }
+
+                self.write_module_in(f, bump, i)?;
+                c += 1;
             }
-            self.write_module_in(f, bump, i)?;
         }
         Ok(())
     }

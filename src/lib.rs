@@ -18,7 +18,7 @@ mod typecheck;
 mod utils;
 
 use self::bytecode as b;
-use self::config::BuildConfig;
+use self::config::{BuildConfig, ShouldDump};
 use self::errors::CompilerError;
 use self::utils::cmd;
 
@@ -31,18 +31,18 @@ pub struct EmitArgs {
     silent: bool,
     #[arg(long)]
     /// Whether to dump the AST of the source file
-    dump_ast: bool,
+    dump_ast: Option<Option<String>>,
     #[arg(long)]
     /// Whether to dump the parsed bytecode of the source file
-    dump_bytecode: bool,
+    dump_bytecode: Option<Option<String>>,
     #[arg(long)]
     /// Whether to dump the parsed bytecode of the source file after transformations (e.g.
     /// monomorphization)
-    dump_transformed_bytecode: bool,
+    dump_transformed_bytecode: Option<Option<String>>,
     #[arg(long)]
     /// Whether to dump the parsed bytecode of the source file before type inference and
     /// type checking is performed
-    dump_untyped_bytecode: bool,
+    dump_untyped_bytecode: Option<Option<String>>,
     #[arg(long)]
     /// Whether to dump the parsed CLIF of the source file, if using Cranelift
     dump_clif: bool,
@@ -116,10 +116,10 @@ pub fn build_maybe_run(
         base_dir,
         lib_dirs,
         silent: emit.silent,
-        dump_ast: emit.dump_ast,
-        dump_bytecode: emit.dump_bytecode,
-        dump_transformed_bytecode: emit.dump_transformed_bytecode,
-        dump_untyped_bytecode: emit.dump_untyped_bytecode,
+        dump_ast: emit.dump_ast.into(),
+        dump_bytecode: emit.dump_bytecode.into(),
+        dump_transformed_bytecode: emit.dump_transformed_bytecode.into(),
+        dump_untyped_bytecode: emit.dump_untyped_bytecode.into(),
         dump_clif: emit.dump_clif,
         run,
     });
@@ -134,21 +134,22 @@ pub fn build_maybe_run(
 
     ctx.parse(src_idx);
     if ctx.has_errors() {
-        if ctx.cfg.dump_bytecode || ctx.cfg.dump_transformed_bytecode {
+        let flag = [&ctx.cfg.dump_bytecode, &ctx.cfg.dump_transformed_bytecode];
+        if !flag.never_dumps() {
             b::Printer::new(&ctx.lock_modules(), &ctx.cfg)
                 .with_show_ids(true)
                 .with_source_manager(&ctx.source_manager)
-                .print_all();
+                .print(flag.as_slice());
         }
 
         return Err(ctx.into_compile_error());
     }
 
-    if ctx.cfg.dump_bytecode {
+    if !ctx.cfg.dump_bytecode.never_dumps() {
         b::Printer::new(&ctx.lock_modules(), &ctx.cfg)
             .with_show_ids(true)
             .with_source_manager(&ctx.source_manager)
-            .print_all();
+            .print(&ctx.cfg.dump_bytecode);
     }
 
     let code_transform = transform::CodeTransform::new(&ctx);
@@ -157,11 +158,11 @@ pub fn build_maybe_run(
     code_transform.apply(transform::FinishGetPropertyStep::new(&ctx));
     code_transform.apply(transform::FinishDispatchStep::new(&ctx));
 
-    if ctx.cfg.dump_transformed_bytecode {
+    if !ctx.cfg.dump_transformed_bytecode.never_dumps() {
         b::Printer::new(&ctx.lock_modules(), &ctx.cfg)
             .with_show_ids(true)
             .with_source_manager(&ctx.source_manager)
-            .print_all();
+            .print(&ctx.cfg.dump_transformed_bytecode);
     }
 
     ctx.compile();
