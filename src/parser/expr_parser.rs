@@ -523,12 +523,38 @@ impl<'a, 't> ExprParser<'a, 't> {
         loc: b::Loc,
         returning: bool,
     ) -> ValueRef {
-        let args_vs: Vec<_> = args
+        let mut args_vs: Vec<_> = args
             .into_iter()
             .map(|arg| self.use_value_ref(&arg))
             .collect();
         match callee.body {
             ValueRefBody::Func(mod_idx, func_idx) => {
+                let modules = self.module.ctx.lock_modules();
+                let func = if mod_idx == self.module.mod_idx {
+                    &self.module.funcs[func_idx].func
+                } else {
+                    &modules[mod_idx].funcs[func_idx]
+                };
+
+                if args_vs.len() != func.params.len() {
+                    self.module.ctx.push_error(errors::Error::new(
+                        errors::WrongArgumentCount::new(
+                            func.name.last_ident().to_string(),
+                            args_vs.len(),
+                            func.params.len(),
+                        )
+                        .into(),
+                        Some(loc),
+                    ));
+
+                    args_vs.resize_with(func.params.len(), || {
+                        self.use_value_ref(&ValueRef::new(
+                            ValueRefBody::CompileError,
+                            Some(loc),
+                        ))
+                    });
+                }
+
                 if returning
                     && self.module.mod_idx == mod_idx
                     && self.func_idx.is_some_and(|i| i == func_idx)
