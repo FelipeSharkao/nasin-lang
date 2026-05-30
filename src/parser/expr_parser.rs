@@ -226,6 +226,16 @@ impl<'a, 't> ExprParser<'a, 't> {
                     Loc::from_node(self.module.src_idx, &prop_name_node),
                 )
             }
+            "index" => {
+                let parent = self.add_expr_node(node.required_field("parent"), None);
+                let index_node = node.required_field("index");
+                let index = self.add_expr_node(index_node, None);
+                self.add_index(
+                    parent,
+                    index,
+                    Loc::from_node(self.module.src_idx, &index_node),
+                )
+            }
             "call" => {
                 let callee = self.add_expr_node(node.required_field("callee"), None);
                 let args: Vec<_> = node
@@ -489,6 +499,18 @@ impl<'a, 't> ExprParser<'a, 't> {
         let source_v = self.use_value_ref(&parent);
         let v = self.add_instr_with_result(b::Instr::new(
             b::InstrBody::GetProperty(source_v, prop_name.to_string()),
+            Some(loc),
+        ));
+        ValueRef::new(ValueRefBody::Value(v), Some(loc))
+    }
+
+    fn add_index(&mut self, parent: ValueRef, index: ValueRef, loc: b::Loc) -> ValueRef {
+        let source_v = self.use_value_ref(&parent);
+        let index_v = self.use_value_ref(&index);
+        let v = self.add_instr_with_result(b::Instr::new(
+            // FIXME: this shouldn't be an array index. It should be either a method call
+            // to `index` or a generic Index instruction
+            b::InstrBody::ArrayIndex(source_v, index_v),
             Some(loc),
         ));
         ValueRef::new(ValueRefBody::Value(v), Some(loc))
