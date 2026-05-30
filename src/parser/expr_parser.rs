@@ -593,6 +593,18 @@ impl<'a, 't> ExprParser<'a, 't> {
         }
 
         match name {
+            "internal_array_len" => {
+                check_args!(1);
+
+                let source = self.add_expr_node(args[0], None);
+                let source_v = self.use_value_ref(&source);
+
+                let v = self.add_instr_with_result(b::Instr::new(
+                    b::InstrBody::ArrayLen(source_v),
+                    Some(loc),
+                ));
+                ValueRef::new(ValueRefBody::Value(v), Some(loc))
+            }
             "internal_str_len" => {
                 check_args!(1);
 
