@@ -96,14 +96,18 @@ impl BinaryCodegen<'_> {
             for idx in 0..self.ctx.modules[mod_idx].globals.len() {
                 self.insert_global(mod_idx, idx);
             }
+        }
 
+        for mod_idx in 0..self.ctx.modules.len() {
             for idx in 0..self.ctx.modules[mod_idx].funcs.len() {
                 if !self.ctx.modules[mod_idx].funcs[idx].generics.is_empty() {
                     continue;
                 }
                 self.insert_function(mod_idx, idx);
             }
+        }
 
+        for mod_idx in 0..self.ctx.modules.len() {
             for idx in 0..self.ctx.modules[mod_idx].typedefs.len() {
                 self.insert_type(mod_idx, idx);
             }
