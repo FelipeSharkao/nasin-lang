@@ -61,11 +61,19 @@ impl DumpFlag {}
 impl From<Option<Option<String>>> for DumpFlag {
     fn from(value: Option<Option<String>>) -> Self {
         match value {
-            Some(Some(module)) => {
-                let idents = module.split('.').map(|ident| {
-                    b::NameIdent::new(ident.to_string(), b::NameIdentKind::Module).into()
-                });
-                DumpFlag::Modules(HashSet::from([b::Name::new(idents, None)]))
+            Some(Some(v)) => {
+                let modules = v
+                    .trim()
+                    .split(',')
+                    .map(|module| {
+                        let idents = module.split('.').map(|ident| {
+                            b::NameIdent::new(ident.to_string(), b::NameIdentKind::Module)
+                                .into()
+                        });
+                        b::Name::new(idents, None)
+                    })
+                    .collect();
+                DumpFlag::Modules(modules)
             }
             Some(None) => DumpFlag::All,
             None => DumpFlag::None,
