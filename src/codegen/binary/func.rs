@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use cl::InstBuilder;
 use cranelift_shim::{self as cl, Module};
 use derive_ctor::ctor;
-use itertools::{Itertools, izip};
+use itertools::{Itertools, chain, izip};
 
 use super::context::CodegenContext;
 use super::name_mangling::NameMangler;
@@ -1191,31 +1191,13 @@ impl<'a> FuncCodegen<'a, '_> {
                 "array type should have one argument"
             );
 
-            let item_tys = types::get_type_by_type(
-                &type_ref.args[0],
-                self.ctx.modules,
-                &self.ctx.cl_module,
-            );
-
-            let size =
-                item_tys.iter().map(|ty| ty.bytes()).sum::<u32>() * vs.len() as u32;
+            let values = vs
+                .into_iter()
+                .flat_map(|&v| self.use_value_by_value(mod_idx, v))
+                .collect_vec();
 
             // TODO: escape analysis
-            let buf = self.create_buf_sized(size, true);
-            let ptr = self.add_by_ref(&buf);
-
-            let mut offset = 0;
-            for v in vs {
-                let native_values = self.use_value_by_value(mod_idx, *v);
-                for (ty, value) in izip!(&item_tys, native_values) {
-                    let builder = expect_builder!(self);
-                    builder
-                        .ins()
-                        .store(cl::MemFlags::new(), value, ptr, offset as i32);
-                    offset += ty.bytes();
-                }
-            }
-
+            let ptr = self.store_values(values, true);
             types::ValueSource::Ptr(ptr)
         } else {
             return None;
@@ -1404,8 +1386,15 @@ impl<'a> FuncCodegen<'a, '_> {
                     todo!("pass primitive as pointer")
                 }
             }
-            types::ValueSource::Slice(..) => {
-                todo!("add_by_ref: slice")
+            types::ValueSource::Slice(slice) => {
+                let ptr = self.add_by_ref(&slice.ptr);
+                let len_values = self.add_by_value(
+                    &slice.len,
+                    &b::Type::builtin(b::BuiltinType::USize, [], None),
+                );
+
+                // TODO: escape analysis
+                self.store_values(chain!(Some(ptr), len_values), true)
             }
             types::ValueSource::FuncAsValue(..) => {
                 todo!("add_by_ref: func as value")
@@ -1675,28 +1664,43 @@ impl<'a> FuncCodegen<'a, '_> {
         tuple: impl IntoIterator<Item = &'v types::RuntimeValue> + 'v,
         escape: bool,
     ) -> types::ValueSource {
+        let values = tuple
+            .into_iter()
+            .flat_map(|v| self.use_value_canonical(v.mod_idx, v.value_idx, false))
+            .collect_vec();
+
+        let ptr = self.store_values(values, escape);
+        types::ValueSource::Ptr(ptr)
+    }
+
+    fn store_values(
+        &mut self,
+        values: impl IntoIterator<Item = cl::Value>,
+        escape: bool,
+    ) -> cl::Value {
+        let builder = expect_builder!(self);
+
         let mut size = 0;
-        let mut stored_values = Vec::new();
-        for v in tuple {
-            let v_ty = &self.ctx.modules[v.mod_idx].values[v.value_idx].ty;
-            for v in self.add_canonical(&v.src, v_ty, false) {
-                stored_values.push((size, v));
-                size += expect_builder!(self).func.dfg.value_type(v).bytes();
-            }
-        }
+        let stored_values = values
+            .into_iter()
+            .map(|v| {
+                let offset = size;
+                size += builder.func.dfg.value_type(v).bytes();
+                (offset, v)
+            })
+            .collect_vec();
 
         let buf = self.create_buf_sized(size, escape);
         let ptr = self.add_by_ref(&buf);
+
+        let builder = expect_builder!(self);
         for (offset, value) in stored_values {
-            expect_builder!(self).ins().store(
-                cl::MemFlags::new(),
-                value,
-                ptr,
-                offset as i32,
-            );
+            builder
+                .ins()
+                .store(cl::MemFlags::new(), value, ptr, offset as i32);
         }
 
-        types::ValueSource::Ptr(ptr)
+        ptr
     }
 
     /// Copy `size` bytes from `src` to `dst`.
