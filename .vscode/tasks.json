@@ -1,0 +1,22 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "test",
+            "type": "shell",
+            "command": "./rere.py replay tests/_test.list",
+            "problemMatcher": [],
+            "group": {
+                "kind": "test",
+                "isDefault": true
+            }
+        },
+        {
+            "label": "record-test",
+            "type": "shell",
+            "command": "./rere.py record tests/_test.list",
+            "problemMatcher": [],
+            "group": { "kind": "test" }
+        }
+    ]
+}

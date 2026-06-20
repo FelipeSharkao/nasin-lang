@@ -1,22 +1,31 @@
-:i count 21
-:b shell 29
-./bin/nasin r tests/hello.nsn
+:i count 22
+:b shell 21
+cargo build --release
+:i returncode 0
+:b stdout 0
+
+:b stderr 124
+   Compiling nasin v0.1.0 (/home/felipe/Projects/nasin/nasin)
+    Finished `release` profile [optimized] target(s) in 8.77s
+
+:b shell 40
+./target/release/nasin r tests/hello.nsn
 :i returncode 0
 :b stdout 6
 Hello
 
 :b stderr 0
 
-:b shell 37
-./bin/nasin r tests/global_string.nsn
+:b shell 48
+./target/release/nasin r tests/global_string.nsn
 :i returncode 0
 :b stdout 18
 Hello from global
 
 :b stderr 0
 
-:b shell 35
-./bin/nasin r tests/hello_array.nsn
+:b shell 46
+./target/release/nasin r tests/hello_array.nsn
 :i returncode 0
 :b stdout 12
 Hello
@@ -24,58 +33,58 @@ World
 
 :b stderr 0
 
-:b shell 26
-./bin/nasin r tests/if.nsn
-:i returncode 0
-:b stdout 21
-it's true
-it's false
-
-:b stderr 0
-
-:b shell 36
-./bin/nasin r tests/if_returning.nsn
-:i returncode 0
-:b stdout 21
-it's true
-it's false
-
-:b stderr 0
-
-:b shell 44
-./bin/nasin r tests/aritimetic_operators.nsn
-:i returncode 70
-:b stdout 0
-
-:b stderr 29
-sanity check, this will fail
-
-:b shell 44
-./bin/nasin r tests/comparison_operators.nsn
-:i returncode 70
-:b stdout 0
-
-:b stderr 29
-sanity check, this will fail
-
 :b shell 37
-./bin/nasin r tests/string_concat.nsn
+./target/release/nasin r tests/if.nsn
+:i returncode 0
+:b stdout 21
+it's true
+it's false
+
+:b stderr 0
+
+:b shell 47
+./target/release/nasin r tests/if_returning.nsn
+:i returncode 0
+:b stdout 21
+it's true
+it's false
+
+:b stderr 0
+
+:b shell 55
+./target/release/nasin r tests/aritimetic_operators.nsn
+:i returncode 70
+:b stdout 0
+
+:b stderr 29
+sanity check, this will fail
+
+:b shell 55
+./target/release/nasin r tests/comparison_operators.nsn
+:i returncode 70
+:b stdout 0
+
+:b stderr 29
+sanity check, this will fail
+
+:b shell 48
+./target/release/nasin r tests/string_concat.nsn
 :i returncode 0
 :b stdout 11
 HelloWorld
 
 :b stderr 0
 
-:b shell 40
-./bin/nasin r tests/func_declaration.nsn
+:b shell 51
+./target/release/nasin r tests/func_declaration.nsn
 :i returncode 0
 :b stdout 15
 Hello from foo
 
 :b stderr 0
 
-:b shell 33
-./bin/nasin r tests/recursion.nsn
+:b shell 44
+./target/release/nasin r tests/recursion.nsn
 :i returncode 0
 :b stdout 79
 rec: 0
@@ -93,24 +102,24 @@ rec: 10
 
 :b stderr 0
 
-:b shell 35
-./bin/nasin r tests/record_type.nsn
+:b shell 46
+./target/release/nasin r tests/record_type.nsn
 :i returncode 0
 :b stdout 18
 Hello from record
 
 :b stderr 0
 
-:b shell 37
-./bin/nasin r tests/return_record.nsn
+:b shell 48
+./target/release/nasin r tests/return_record.nsn
 :i returncode 0
 :b stdout 18
 Hello from record
 
 :b stderr 0
 
-:b shell 30
-./bin/nasin r tests/method.nsn
+:b shell 41
+./target/release/nasin r tests/method.nsn
 :i returncode 0
 :b stdout 28
 Hello from record
@@ -118,8 +127,8 @@ Hi method
 
 :b stderr 0
 
-:b shell 33
-./bin/nasin r tests/interface.nsn
+:b shell 44
+./target/release/nasin r tests/interface.nsn
 :i returncode 0
 :b stdout 110
 LinesA
@@ -134,8 +143,8 @@ implementation omitted
 
 :b stderr 0
 
-:b shell 37
-./bin/nasin r tests/func_as_value.nsn
+:b shell 48
+./target/release/nasin r tests/func_as_value.nsn
 :i returncode 0
 :b stdout 42
 LinesA
@@ -145,8 +154,8 @@ Hello indirect
 
 :b stderr 0
 
-:b shell 36
-./bin/nasin r tests/generic_func.nsn
+:b shell 47
+./target/release/nasin r tests/generic_func.nsn
 :i returncode 0
 :b stdout 15
 u8
@@ -156,8 +165,8 @@ bool
 
 :b stderr 0
 
-:b shell 38
-./bin/nasin r tests/generic_record.nsn
+:b shell 49
+./target/release/nasin r tests/generic_record.nsn
 :i returncode 0
 :b stdout 15
 u8
@@ -167,8 +176,8 @@ bool
 
 :b stderr 0
 
-:b shell 38
-./bin/nasin r tests/generic_method.nsn
+:b shell 49
+./target/release/nasin r tests/generic_method.nsn
 :i returncode 0
 :b stdout 15
 u8
@@ -178,8 +187,8 @@ bool
 
 :b stderr 0
 
-:b shell 40
-./bin/nasin r tests/conditional_impl.nsn
+:b shell 51
+./target/release/nasin r tests/conditional_impl.nsn
 :i returncode 0
 :b stdout 18
 hello
@@ -189,8 +198,8 @@ hello
 
 :b stderr 0
 
-:b shell 46
-./bin/nasin r tests/conditional_impl_error.nsn
+:b shell 57
+./target/release/nasin r tests/conditional_impl_error.nsn
 :i returncode 1
 :b stdout 0
 
@@ -203,8 +212,8 @@ hello
             ^
 
 
-:b shell 38
-./bin/nasin r tests/readme_example.nsn
+:b shell 49
+./target/release/nasin r tests/readme_example.nsn
 :i returncode 0
 :b stdout 11
 right

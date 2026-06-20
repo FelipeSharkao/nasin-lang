@@ -6,12 +6,5 @@ macro_rules! cmd {
         )*
         cmd
     }};
-    ($cmd:expr; $( $args:expr ),+ $(,)?) => {{
-        let mut cmd: ::std::process::Command = $cmd;
-        $(
-            cmd.arg($args);
-        )*
-        cmd
-    }};
 }
 pub(crate) use cmd;

@@ -36,28 +36,28 @@ More examples live in [`tests/`](tests/).
 Requirements: a recent Rust toolchain and a C compiler.
 
 ```bash
-make
+cargo build --release
 ```
 
-This builds the compiler with the standard library path baked in and copies the
-binary to `bin/nasin`.
+This builds the compiler with the standard library path baked in.
 
 > Making changes to the grammar additionally requires [Bun]. Run
-> `make -B GENERATE_GRAMMAR=true` to regenerate the tree-sitter parser, or run
-> `make ENV=dev` to build in development mode.
+> `GENERATE_GRAMMAR=1 cargo build --release` to regenerate the tree-sitter
+> parser, or run `cargo build` to build in development mode, which will
+> regenerate the parser whenever needed.
 
 ## Usage
 
 Build an executable from a source file:
 
 ```bash
-./bin/nasin build -o myprog path/to/file.nsn
+nasin build -o myprog path/to/file.nsn
 ```
 
 Or run it directly:
 
 ```bash
-./bin/nasin run path/to/file.nsn
+nasin run path/to/file.nsn
 ```
 
 ## Testing
@@ -65,8 +65,8 @@ Or run it directly:
 Snapshot tests use [rere.py]:
 
 ```bash
-make test           # replay snapshots
-make record-test    # update snapshots
+./rere.py replay tests/_test.list # replay snapshots
+./rere.py record tests/_test.list # update snapshots
 ```
 
 ## Roadmap
