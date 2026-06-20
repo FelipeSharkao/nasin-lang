@@ -2,9 +2,10 @@
 
 use std::os::unix::process::ExitStatusExt;
 use std::path::PathBuf;
-use std::{fs, io, process};
+use std::{env, fs, io, process};
 
 use clap::Args;
+use itertools::chain;
 
 mod bytecode;
 mod codegen;
@@ -65,46 +66,25 @@ pub fn build_maybe_run(
     out: Option<PathBuf>,
     run: bool,
 ) -> Result<(), CompilerError> {
-    let mut path_erros = vec![];
-
-    let lib_dirs = option_env!("LIB_DIR")
-        .iter()
-        .flat_map(|s| s.split(':'))
-        .filter_map(|x| match PathBuf::from(x).canonicalize() {
-            Ok(path) => Some(path),
-            Err(err) => {
-                path_erros.push(errors::Error::new(
-                    errors::ReadError::new(x.into(), err.kind()).into(),
-                    None,
-                ));
-                None
-            }
-        })
-        .collect();
-
-    if !path_erros.is_empty() {
-        return Err(CompilerError::new(None, path_erros));
-    }
-
     let file = match emit.file.canonicalize() {
         Ok(file) => file,
         Err(err) => {
-            path_erros.push(errors::Error::new(
+            let error = errors::Error::new(
                 errors::ReadError::new(emit.file.clone(), err.kind()).into(),
                 None,
-            ));
-            return Err(CompilerError::new(None, path_erros));
+            );
+            return Err(CompilerError::new(None, vec![error]));
         }
     };
 
     let base_dir = match file.parent() {
         Some(parent) => parent.to_owned(),
         None => {
-            path_erros.push(errors::Error::new(
+            let error = errors::Error::new(
                 errors::ReadError::new(file.clone(), io::ErrorKind::IsADirectory).into(),
                 None,
-            ));
-            return Err(CompilerError::new(None, path_erros));
+            );
+            return Err(CompilerError::new(None, vec![error]));
         }
     };
 
@@ -114,7 +94,7 @@ pub fn build_maybe_run(
         name: name.to_string_lossy().to_string(),
         out: out.unwrap_or_else(|| base_dir.join(name)),
         base_dir,
-        lib_dirs,
+        lib_dirs: get_lib_dirs(),
         silent: emit.silent,
         dump_ast: emit.dump_ast.into(),
         dump_bytecode: emit.dump_bytecode.into(),
@@ -190,4 +170,33 @@ pub fn build_maybe_run(
     }
 
     Ok(())
+}
+
+fn get_lib_dirs() -> Vec<PathBuf> {
+    chain!(
+        (|| Some(env::current_dir().ok()?.join("libs")))(),
+        data_home_dir().map(|p| p.join("nasin/libs")),
+        local_share_dir().map(|p| p.join("nasin/libs")),
+    )
+    .collect()
+}
+
+fn data_home_dir() -> Option<PathBuf> {
+    if env::consts::OS == "windows" {
+        env::var_os("LOCALAPPDATA").map(PathBuf::from)
+    } else {
+        env::var_os("XDG_DATA_HOME")
+            .map(PathBuf::from)
+            .or_else(|| Some(env::home_dir()?.join(".local/share")))
+    }
+}
+
+fn local_share_dir() -> Option<PathBuf> {
+    if env::consts::OS == "windows" {
+        env::var_os("PROGRAMFILES")
+            .map(PathBuf::from)
+            .or_else(|| Some(PathBuf::from("C:/Program Files")))
+    } else {
+        Some(PathBuf::from("/usr/local/share"))
+    }
 }

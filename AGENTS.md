@@ -9,8 +9,7 @@ make ENV=dev
 This will:
 
 1. Generate the tree-sitter parser from `tree-sitter-nasin/grammar.js`
-2. Build the nasin binary with `LIB_DIR` set correctly at compile time
-3. Copy the binary to `bin/nasin`
+2. Copy the binary to `bin/nasin`
 
 ## Running
 
