@@ -11,6 +11,7 @@ use std::fs::File;
 use std::io::BufWriter;
 use std::mem;
 
+use command_tools::{CommandTools, cmd};
 use cranelift_shim::settings::Configurable;
 use cranelift_shim::{self as cl, InstBuilder, Module};
 use itertools::Itertools;
@@ -22,7 +23,7 @@ use self::debug::{DebugData, DebugFunction};
 use self::func::{Callee, FuncCodegen};
 use self::name_mangling::NameMangler;
 use self::types::ReturnPolicy;
-use crate::{bytecode as b, cmd, config, sources, utils};
+use crate::{bytecode as b, config, errors, sources, utils};
 
 #[derive(Debug, NumberEnum)]
 #[repr(u32)]
@@ -91,7 +92,7 @@ impl<'a> BinaryCodegen<'a> {
     }
 }
 impl BinaryCodegen<'_> {
-    pub fn write(mut self) {
+    pub fn write(mut self) -> Result<(), errors::Error> {
         for mod_idx in 0..self.ctx.modules.len() {
             for idx in 0..self.ctx.modules[mod_idx].globals.len() {
                 self.insert_global(mod_idx, idx);
@@ -135,7 +136,9 @@ impl BinaryCodegen<'_> {
         }
 
         self.emit_functions();
-        self.write_to_file();
+        self.write_to_file()?;
+
+        Ok(())
     }
 
     fn insert_global(&mut self, mod_idx: usize, idx: usize) {
@@ -478,7 +481,7 @@ impl BinaryCodegen<'_> {
         self.ctx.cl_module.clear_context(&mut self.module_ctx)
     }
 
-    fn write_to_file(mut self) {
+    fn write_to_file(mut self) -> Result<(), errors::Error> {
         let mut obj_product = self.ctx.cl_module.finish();
 
         self.ctx.debug.write_debug_sections(&mut obj_product.object);
@@ -492,20 +495,22 @@ impl BinaryCodegen<'_> {
             .unwrap();
 
         // TODO: windows support
-        let status = cmd!(
+        cmd!(
             "ld",
             "-dynamic-linker",
             "/lib/ld-linux-x86-64.so.2",
             "-o",
             &self.ctx.cfg.out,
             "-lc",
-            &obj_path
+            &obj_path,
         )
-        .status()
-        .expect("failed to link object file");
-
-        if !status.success() {
-            panic!("failed to link object file");
-        }
+        .exec()
+        .map_err(|err| {
+            errors::Error::new(
+                errors::LinkerError::new(self.ctx.cfg.name.clone(), err.to_string())
+                    .into(),
+                None,
+            )
+        })
     }
 }

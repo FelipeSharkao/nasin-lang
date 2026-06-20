@@ -1,4 +1,3 @@
-mod cmd;
 mod deadlock_guard;
 mod paths;
 mod replace_with;
@@ -10,7 +9,6 @@ mod to_radix;
 mod traits;
 mod write_io;
 
-pub(crate) use self::cmd::*;
 pub(crate) use self::deadlock_guard::*;
 pub(crate) use self::paths::*;
 pub(crate) use self::replace_with::*;

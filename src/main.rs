@@ -1,7 +1,8 @@
 use std::io::IsTerminal;
 use std::path::PathBuf;
+use std::process::ExitCode;
 use std::str::FromStr;
-use std::{env, fs, io, process};
+use std::{env, fs, io};
 
 use clap::{Parser, Subcommand};
 use nasin::{EmitArgs, build, build_run};
@@ -37,7 +38,7 @@ enum CliCommand {
     },
 }
 
-fn main() {
+fn main() -> ExitCode {
     prepare_tracing();
 
     let cli = Cli::parse();
@@ -47,9 +48,12 @@ fn main() {
         CliCommand::Run { emit } => build_run(emit),
     };
 
-    if let Err(error) = result {
-        eprintln!("{}", error);
-        process::exit(1);
+    match result {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(err) => {
+            eprintln!("{}", err);
+            ExitCode::FAILURE
+        }
     }
 }
 

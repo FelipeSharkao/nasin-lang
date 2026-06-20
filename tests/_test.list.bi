@@ -1,13 +1,4 @@
-:i count 22
-:b shell 21
-cargo build --release
-:i returncode 0
-:b stdout 0
-
-:b stderr 124
-   Compiling nasin v0.1.0 (/home/felipe/Projects/nasin/nasin)
-    Finished `release` profile [optimized] target(s) in 8.77s
-
+:i count 21
 :b shell 40
 ./target/release/nasin r tests/hello.nsn
 :i returncode 0
@@ -56,16 +47,18 @@ it's false
 :i returncode 70
 :b stdout 0
 
-:b stderr 29
+:b stderr 65
 sanity check, this will fail
+aritimetic_operators exited with 70
 
 :b shell 55
 ./target/release/nasin r tests/comparison_operators.nsn
 :i returncode 70
 :b stdout 0
 
-:b stderr 29
+:b stderr 65
 sanity check, this will fail
+comparison_operators exited with 70
 
 :b shell 48
 ./target/release/nasin r tests/string_concat.nsn

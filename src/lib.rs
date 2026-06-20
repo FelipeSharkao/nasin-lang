@@ -1,10 +1,10 @@
 #![allow(irrefutable_let_patterns)]
 
-use std::os::unix::process::ExitStatusExt;
 use std::path::PathBuf;
-use std::{env, fs, io, process};
+use std::{env, fs, io};
 
 use clap::Args;
+use command_tools::{CommandTools, cmd};
 use itertools::chain;
 
 mod bytecode;
@@ -21,7 +21,6 @@ mod utils;
 use self::bytecode as b;
 use self::config::{BuildConfig, ShouldDump};
 use self::errors::CompilerError;
-use self::utils::cmd;
 
 #[derive(Args, Debug)]
 pub struct EmitArgs {
@@ -151,21 +150,9 @@ pub fn build_maybe_run(
     }
 
     if ctx.cfg.run {
-        let status = cmd!(ctx.cfg.out).status().unwrap();
-        if let Some(code) = status.code() {
-            process::exit(code);
-        } else if let Some(signal) = status.signal() {
-            if signal == 11 {
-                eprintln!("Segmentation fault");
-                eprintln!(
-                    "Unless you are doing some unsafe stuff, this is likely a bug in Nasin itself"
-                );
-            } else {
-                eprintln!("Terminated by signal {signal}");
-            }
-            process::exit(128 + signal as i32);
-        } else {
-            process::exit(1);
+        if let Err(err) = cmd!(ctx.cfg.out).exec() {
+            eprintln!("{}: {err}", ctx.cfg.name);
+            err.exit_process();
         }
     }
 

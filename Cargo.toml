@@ -7,13 +7,19 @@ edition = "2024"
 license = "Apache-2.0"
 
 [workspace]
-members = ["cranelift-shim", "nasin-macros", "tree-sitter-nasin"]
+members = [
+    "command-tools",
+    "cranelift-shim",
+    "nasin-macros",
+    "tree-sitter-nasin",
+]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
 bump-scope = "2.2.0"
 clap = { version = "4.4.18", features = ["derive"] }
+command-tools = { path = "command-tools" }
 cranelift_shim = { path = "cranelift-shim" }
 derive-ctor = "1.0.6"
 derive_more = { version = "^1.0.0-beta.6", features = [
@@ -34,3 +40,6 @@ tracing = "0.1.40"
 tracing-subscriber = "0.3.18"
 tree-sitter = "0.23.0"
 tree-sitter-nasin = { version = "0.0.1", path = "tree-sitter-nasin" }
+
+[build-dependencies]
+command-tools = { path = "command-tools" }

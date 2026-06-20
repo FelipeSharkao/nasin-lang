@@ -1,4 +1,3 @@
-cargo build --release
 ./target/release/nasin r tests/hello.nsn
 ./target/release/nasin r tests/global_string.nsn
 ./target/release/nasin r tests/hello_array.nsn

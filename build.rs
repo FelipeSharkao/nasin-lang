@@ -1,41 +1,36 @@
 use std::fs;
 use std::path::Path;
 
-macro_rules! cmd {
-    ($cmd:expr $(, $args:expr)* $(; cwd: $cwd:expr)?) => {{
-        let mut cmd = ::std::process::Command::new($cmd);
-        $(cmd.arg($args);)*
-        $(cmd.current_dir($cwd);)?
-        match cmd.status() {
-            Ok(status) if status.success() => {}
-            _ => panic!("failed to run command: {:?}", cmd),
-        }
-    }};
-}
+use command_tools::{CommandTools, run};
+
+const GENERATE_GRAMMAR: Option<&str> = option_env!("GENERATE_GRAMMAR");
 
 fn main() {
-    if cfg!(debug_assertions) || option_env!("GENERATE_GRAMMAR").is_some_and(|x| x == "1")
-    {
-        if should_compile(
-            "tree-sitter-nasin/src/parser.c",
-            [
-                "tree-sitter-nasin/grammar.js",
-                "tree-sitter-nasin/package.json",
-            ],
-        ) {
-            cmd!("bun", "install"; cwd: "tree-sitter-nasin");
-            cmd!("bun", "tree-sitter", "generate"; cwd: "tree-sitter-nasin");
-            cmd!("bun", "tree-sitter", "build"; cwd: "tree-sitter-nasin");
-        }
-
-        println!("cargo:rerun-if-changed=tree-sitter-nasin/grammar.js");
-        println!("cargo:rerun-if-changed=tree-sitter-nasin/package.json");
-    }
-
-    println!("cargo:rerun-if-changed=tree-sitter-nasin/src/parser.c");
+    generate_grammar();
 }
 
-fn should_compile(
+fn generate_grammar() {
+    if !cfg!(debug_assertions) && GENERATE_GRAMMAR.is_none_or(|x| x != "1") {
+        return;
+    }
+
+    if needs_rebuild(
+        "tree-sitter-nasin/src/parser.c",
+        [
+            "tree-sitter-nasin/grammar.js",
+            "tree-sitter-nasin/package.json",
+        ],
+    ) {
+        run!("bun", "install"; "tree-sitter-nasin");
+        run!("bun", "tree-sitter", "generate"; "tree-sitter-nasin");
+        run!("bun", "tree-sitter", "build"; "tree-sitter-nasin");
+    }
+
+    println!("cargo:rerun-if-changed=tree-sitter-nasin/grammar.js");
+    println!("cargo:rerun-if-changed=tree-sitter-nasin/package.json");
+}
+
+fn needs_rebuild(
     target: impl AsRef<Path>,
     deps: impl IntoIterator<Item = impl AsRef<Path>>,
 ) -> bool {

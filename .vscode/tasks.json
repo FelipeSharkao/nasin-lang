@@ -4,7 +4,7 @@
         {
             "label": "test",
             "type": "shell",
-            "command": "./rere.py replay tests/_test.list",
+            "command": "cargo build --release && ./rere.py replay tests/_test.list",
             "problemMatcher": [],
             "group": {
                 "kind": "test",
@@ -14,7 +14,7 @@
         {
             "label": "record-test",
             "type": "shell",
-            "command": "./rere.py record tests/_test.list",
+            "command": "cargo build --release && ./rere.py record tests/_test.list",
             "problemMatcher": [],
             "group": { "kind": "test" }
         }

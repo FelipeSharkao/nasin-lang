@@ -171,7 +171,9 @@ impl BuildContext {
         );
 
         fs::create_dir_all(self.cfg.out.parent().unwrap()).unwrap();
-        codegen.write();
+        if let Err(error) = codegen.write() {
+            self.push_error(error);
+        }
 
         if !self.cfg.silent && !self.cfg.run {
             println!("Compiled program to {}", self.cfg.out.to_string_lossy());

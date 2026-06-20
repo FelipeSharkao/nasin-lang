@@ -69,6 +69,7 @@ pub enum ErrorDetail {
     WrongArgumentCount(WrongArgumentCount),
     MethodNotImplemented(MethodNotImplemented),
     MethodTypeMismatch(MethodTypeMismatch),
+    LinkerError(LinkerError),
     Todo(Todo),
 }
 
@@ -225,6 +226,13 @@ pub struct MethodTypeMismatch {
     pub iface:    String,
     pub expected: String,
     pub found:    String,
+}
+
+#[derive(Debug, Clone, Display, ctor)]
+#[display("Failed to link {name}: {err}")]
+pub struct LinkerError {
+    pub name: String,
+    pub err:  String,
 }
 
 #[derive(Debug, Clone, Display, ctor)]
