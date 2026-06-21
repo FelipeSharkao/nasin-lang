@@ -47,18 +47,18 @@ it's false
 :i returncode 70
 :b stdout 0
 
-:b stderr 65
+:b stderr 66
 sanity check, this will fail
-aritimetic_operators exited with 70
+aritimetic_operators: exited with 70
 
 :b shell 55
 ./target/release/nasin r tests/comparison_operators.nsn
 :i returncode 70
 :b stdout 0
 
-:b stderr 65
+:b stderr 66
 sanity check, this will fail
-comparison_operators exited with 70
+comparison_operators: exited with 70
 
 :b shell 48
 ./target/release/nasin r tests/string_concat.nsn

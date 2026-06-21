@@ -33,18 +33,16 @@ More examples live in [`tests/`](tests/).
 
 ## Building
 
-Requirements: a recent Rust toolchain and a C compiler.
+Requirements: a Rust nightly toolchain and a C compiler.
 
 ```bash
-cargo build --release
+./first.rs --release
 ```
 
-This builds the compiler with the standard library path baked in.
+This builds the compiler and copies the binary to `bin/nasin`.
 
-> Making changes to the grammar additionally requires [Bun]. Run
-> `GENERATE_GRAMMAR=1 cargo build --release` to regenerate the tree-sitter
-> parser, or run `cargo build` to build in development mode, which will
-> regenerate the parser whenever needed.
+> Changes to the grammar will only be picked up after regenerating the parser.
+> See [Development](#development) for more info.
 
 ## Usage
 
@@ -58,6 +56,22 @@ Or run it directly:
 
 ```bash
 nasin run path/to/file.nsn
+```
+
+## Development
+
+`./first.rs` is a rust script to manage the build process. Besides compiling the
+rust code, without `--release` (or with `--generate-grammar`), it will generate
+the tree-sitter parser from `tree-sitter-nasin/grammar.js` if needed, and copy
+the binary to the `bin/` directory.
+
+Generating the parser requires [Bun] and [tree-sitter-cli].
+
+For convenience, the script also provides a `--run` flag that will run the
+compiled binary directly:
+
+```bash
+./first.rs --run [args]...
 ```
 
 ## Testing
@@ -82,4 +96,5 @@ Some of the planned features, in no particular order.
 - [ ] Self-hosting
 
 [Bun]: https://bun.sh/
+[tree-sitter-cli]: https://github.com/tree-sitter/tree-sitter
 [rere.py]: https://github.com/tsoding/rere.py

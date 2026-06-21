@@ -2,19 +2,30 @@
     "version": "2.0.0",
     "tasks": [
         {
+            "label": "build-release",
+            "type": "shell",
+            "command": "./first.rs --release",
+            "problemMatcher": [],
+            "group": { "kind": "build", "isDefault": true }
+        },
+        {
+            "label": "build-dev",
+            "type": "shell",
+            "command": "./first.rs",
+            "problemMatcher": [],
+            "group": { "kind": "build" }
+        },
+        {
             "label": "test",
             "type": "shell",
-            "command": "cargo build --release && ./rere.py replay tests/_test.list",
+            "command": "./first.rs --release && ./rere.py replay tests/_test.list",
             "problemMatcher": [],
-            "group": {
-                "kind": "test",
-                "isDefault": true
-            }
+            "group": { "kind": "test", "isDefault": true }
         },
         {
             "label": "record-test",
             "type": "shell",
-            "command": "cargo build --release && ./rere.py record tests/_test.list",
+            "command": "./first.rs --release && ./rere.py record tests/_test.list",
             "problemMatcher": [],
             "group": { "kind": "test" }
         }
