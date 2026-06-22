@@ -20,7 +20,7 @@ use target_lexicon::Triple;
 
 use self::context::{CodegenContext, FuncBinding};
 use self::debug::{DebugData, DebugFunction};
-use self::func::{Callee, FuncCodegen};
+use self::func::FuncCodegen;
 use self::name_mangling::NameMangler;
 use self::types::ReturnPolicy;
 use crate::{bytecode as b, config, errors, sources, utils};
@@ -37,7 +37,6 @@ pub enum FuncNS {
 #[repr(u32)]
 pub enum SystemFunc {
     Start,
-    Exit,
 }
 
 pub struct BinaryCodegen<'a> {
@@ -45,16 +44,27 @@ pub struct BinaryCodegen<'a> {
     declared_funcs: HashMap<(usize, usize), cl::Function>,
     entry_func: Option<(cl::FuncId, cl::Function)>,
     module_ctx: cl::Context,
-    rt_start: Option<(usize, usize)>,
+    runtime_entry: (usize, usize),
     next_func_id: u32,
 }
 impl<'a> BinaryCodegen<'a> {
     pub fn new(
         modules: &'a [b::Module],
-        rt_start: Option<(usize, usize)>,
         cfg: &'a config::BuildConfig,
         source_manager: &'a sources::SourceManager,
     ) -> Self {
+        let runtime_entry = modules.iter().find_map(|module| {
+            module
+                .funcs
+                .iter()
+                .enumerate()
+                .find(|(_, func)| func.is_entry)
+                .map(|(idx, _)| (module.idx, idx))
+        });
+        let Some(runtime_entry) = runtime_entry else {
+            panic!("Missing runtime entry point");
+        };
+
         let triple = Triple::host();
 
         let mut settings_builder = cl::settings::builder();
@@ -86,7 +96,7 @@ impl<'a> BinaryCodegen<'a> {
             module_ctx,
             declared_funcs: HashMap::new(),
             entry_func: None,
-            rt_start,
+            runtime_entry,
             next_func_id: 0,
         }
     }
@@ -216,18 +226,6 @@ impl BinaryCodegen<'_> {
     }
 
     fn build_entry(&mut self) {
-        let mut exit_sig = self.ctx.cl_module.make_signature();
-        exit_sig.params.push(cl::AbiParam::new(cl::types::I32));
-        let exit_func = cl::Function::with_name_signature(
-            cl::UserFuncName::user(FuncNS::SystemFunc.into(), SystemFunc::Exit.into()),
-            exit_sig,
-        );
-        let exit_func_id = self
-            .ctx
-            .cl_module
-            .declare_function("exit", cl::Linkage::Import, &exit_func.signature)
-            .unwrap();
-
         let mut func = cl::Function::with_name_signature(
             cl::UserFuncName::user(FuncNS::SystemFunc.into(), SystemFunc::Start.into()),
             self.ctx.cl_module.make_signature(),
@@ -301,21 +299,7 @@ impl BinaryCodegen<'_> {
                 codegen.values.clear();
             }
 
-            if let Some((mod_idx, func_idx)) = this.rt_start {
-                codegen.call_func(mod_idx, func_idx, &[]);
-            }
-
-            let exit_code = codegen
-                .builder
-                .as_mut()
-                .unwrap()
-                .ins()
-                .iconst(cl::types::I32, 0);
-            codegen.call(
-                Callee::Direct(exit_func_id),
-                &[exit_code],
-                ReturnPolicy::NoReturn,
-            );
+            codegen.call_func(this.runtime_entry.0, this.runtime_entry.1, &[]);
 
             this.ctx = codegen.finish();
             this

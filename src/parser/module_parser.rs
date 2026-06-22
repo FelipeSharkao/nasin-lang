@@ -219,17 +219,37 @@ impl<'a, 't> ModuleParser<'a, 't> {
 
         let ret = self.create_value(b::Type::unknown(None), Some(loc));
 
-        let mut extrn: Option<b::Extern> = None;
+        let mut extrn = None;
+        let mut is_entry = false;
         for directive_node in node.iter_field("directives") {
             let args_nodes: Vec<_> = directive_node.iter_field("args").collect();
-            match directive_node
+
+            let ident = directive_node
                 .required_field("name")
-                .get_text(&self.ctx.source_manager.source(self.src_idx).content().text)
-            {
+                .get_text(&self.ctx.source_manager.source(self.src_idx).content().text);
+
+            macro_rules! validate_args {
+                ($count:expr) => {{
+                    let count = $count;
+                    if args_nodes.len() != count {
+                        self.ctx.push_error(errors::Error::new(
+                            errors::WrongArgumentCount::new(
+                                ident.to_string(),
+                                count,
+                                args_nodes.len(),
+                            )
+                            .into(),
+                            Some(b::Loc::from_node(self.src_idx, &directive_node)),
+                        ));
+                        continue;
+                    }
+                }};
+            }
+
+            match ident {
                 "extern" => {
                     // TODO: error handling
-                    assert!(extrn.is_none());
-                    assert!(args_nodes.len() == 1);
+                    validate_args!(1);
                     assert!(args_nodes[0].kind() == "string_lit");
                     let symbol_name = utils::decode_string_lit(
                         args_nodes[0].required_field("content").get_text(
@@ -238,6 +258,10 @@ impl<'a, 't> ModuleParser<'a, 't> {
                     )
                     .to_string();
                     extrn = Some(b::Extern { name: symbol_name });
+                }
+                "entry" => {
+                    validate_args!(0);
+                    is_entry = true;
                 }
                 _ => todo!(),
             }
@@ -249,7 +273,7 @@ impl<'a, 't> ModuleParser<'a, 't> {
             ret,
             method: method_info.clone(),
             extrn,
-            is_entry: false,
+            is_entry,
             is_virt,
             body: self.add_block(),
             loc: Some(loc),

@@ -1,34 +1,41 @@
 mod builtins;
-mod runtime;
 
 use std::fs;
 use std::ops::{Deref, DerefMut};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, RwLock};
 
-use derive_ctor::ctor;
 use tree_sitter as ts;
 
-use self::runtime::RuntimeBuilder;
 use crate::config::ShouldDump;
 use crate::utils::TreeSitterUtils;
 use crate::{bytecode as b, codegen, config, errors, parser, sources, typecheck, utils};
 
-#[derive(Debug, ctor)]
+#[derive(Debug)]
 pub struct BuildContext {
     pub cfg: config::BuildConfig,
-    #[ctor(default)]
     pub source_manager: sources::SourceManager,
-    #[ctor(default)]
     pub errors: Mutex<Vec<errors::Error>>,
-    #[ctor(default)]
-    modules: RwLock<Vec<b::Module>>,
-    #[ctor(default)]
     pub main: RwLock<Option<(usize, usize)>>,
-    #[ctor(default)]
-    pub core_mod_idx: Option<usize>,
+    pub prelude: Vec<usize>,
+    modules: RwLock<Vec<b::Module>>,
 }
+
 impl BuildContext {
+    pub fn new(cfg: config::BuildConfig) -> Self {
+        let this = Self {
+            cfg,
+            source_manager: sources::SourceManager::default(),
+            errors: Mutex::new(vec![]),
+            main: RwLock::new(None),
+            prelude: vec![],
+            modules: RwLock::new(vec![]),
+        };
+
+        builtins::BuiltinsBuilder::new(&this).build();
+        this
+    }
+
     pub fn lock_modules(&self) -> impl Deref<Target = Vec<b::Module>> + '_ {
         utils::DeadlockGuard::new(self.modules.read().unwrap())
     }
@@ -52,10 +59,6 @@ impl BuildContext {
     }
 
     pub fn parse(&self, src_idx: usize) -> usize {
-        if self.lock_modules().len() == b::BUILTINS_MODULE_IDX {
-            builtins::BuiltinsBuilder::new(self).build();
-        }
-
         let mut ts_parser = ts::Parser::new();
         ts_parser
             .set_language(&tree_sitter_nasin::LANGUAGE.into())
@@ -98,9 +101,11 @@ impl BuildContext {
         }
 
         let mut module_parser = parser::ModuleParser::new(self, src_idx, mod_idx);
-        if let Some(core_mod_idx) = self.core_mod_idx {
-            module_parser.open_module(core_mod_idx);
+
+        for &prelude_mod_idx in &self.prelude {
+            module_parser.open_module(prelude_mod_idx);
         }
+
         module_parser.add_root(root_node);
         module_parser.finish();
 
@@ -124,7 +129,7 @@ impl BuildContext {
         mod_idx
     }
 
-    pub fn parse_library(&mut self) -> bool {
+    pub fn parse_library(&mut self) {
         let mut core = None;
         for lib_dir in &self.cfg.lib_dirs {
             let file = lib_dir.join("core.nsn");
@@ -134,41 +139,60 @@ impl BuildContext {
             }
         }
         let Some(core) = core else {
-            eprintln!("Could not find core.nsn");
-            return false;
+            self.push_error(errors::Error::new(
+                errors::ErrorDetail::MissingLib(errors::MissingLib::new(
+                    "core.nsn".to_string(),
+                )),
+                None,
+            ));
+            return;
         };
 
         let Ok(core_src_idx) = self.open(core) else {
-            return false;
+            return;
         };
 
-        self.core_mod_idx = Some(self.parse(core_src_idx));
-        true
+        self.prelude.push(self.parse(core_src_idx));
     }
 
-    pub fn compile(&self) {
-        let rt_entry = RuntimeBuilder::new(self).add_entry().build();
-        if self.has_errors() {
+    pub fn parse_runtime(&mut self) {
+        let Some((main_mod_idx, _)) = *self.main.read().unwrap() else {
+            self.push_error(errors::Error::new(errors::ErrorDetail::MissingMain, None));
             return;
-        }
+        };
 
-        let modules = self.lock_modules();
+        self.prelude.push(main_mod_idx);
 
-        if let Some((mod_idx, _)) = rt_entry {
-            if self.cfg.dump_bytecode.should_dump(&modules[mod_idx].name) {
-                b::Printer::new(&modules, &self.cfg)
-                    .with_show_ids(true)
-                    .with_source_manager(&self.source_manager)
-                    .print_module(mod_idx);
+        let mut runtime = None;
+        for lib_dir in &self.cfg.lib_dirs {
+            let file = lib_dir.join("runtime.nsn");
+            if file.is_file() {
+                runtime = Some(file);
+                break;
             }
         }
 
-        let codegen = codegen::BinaryCodegen::new(
-            &modules,
-            rt_entry,
-            &self.cfg,
-            &self.source_manager,
-        );
+        let Some(core) = runtime else {
+            self.push_error(errors::Error::new(
+                errors::ErrorDetail::MissingLib(errors::MissingLib::new(
+                    "runtime.nsn".to_string(),
+                )),
+                None,
+            ));
+            return;
+        };
+
+        let Ok(src_idx) = self.open(core) else {
+            return;
+        };
+        self.parse(src_idx);
+    }
+
+    pub fn compile(&mut self) {
+        let modules = self.lock_modules();
+
+        let codegen =
+            codegen::BinaryCodegen::new(&modules, &self.cfg, &self.source_manager);
 
         fs::create_dir_all(self.cfg.out.parent().unwrap()).unwrap();
         if let Err(error) = codegen.write() {

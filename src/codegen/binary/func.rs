@@ -1051,7 +1051,11 @@ impl<'a> FuncCodegen<'a, '_> {
             types::ReturnPolicy::Struct(..) => Some(args[0]),
             types::ReturnPolicy::NoReturn => {
                 builder.ins().trap(cl::TrapCode::UnreachableCodeReached);
-                builder.set_cold_block(self.scopes.last().block);
+                let first_block = self.scopes.first().block;
+                let block = self.scopes.last().block;
+                if first_block != block {
+                    builder.set_cold_block(block);
+                }
                 self.scopes.last_mut().mark_as_never();
                 None
             }

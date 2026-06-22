@@ -58,12 +58,10 @@ impl<'a, 't> TypeParser<'a, 't> {
 
         macro_rules! validate_args {
             ($min:expr, $max:expr) => {{
-                let min = $min;
-                let max = $max;
-                let len = args.len();
-                let expected_len = if len < min {
+                let (min, max) = ($min, $max);
+                let expected_len = if args.len() < min {
                     Some(min)
-                } else if len > max {
+                } else if args.len() > max {
                     Some(max)
                 } else {
                     None
@@ -73,7 +71,7 @@ impl<'a, 't> TypeParser<'a, 't> {
                         errors::WrongArgumentCount::new(
                             ident.to_string(),
                             expected_len,
-                            len,
+                            args.len(),
                         )
                         .into(),
                         Some(b::Loc::from_node(self.src_idx, &node)),

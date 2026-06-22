@@ -103,15 +103,15 @@ pub fn build_maybe_run(
         run,
     });
 
+    ctx.parse_library();
+
     let Ok(src_idx) = ctx.open(file) else {
         return Err(ctx.into_compile_error());
     };
 
-    if !ctx.parse_library() {
-        return Err(ctx.into_compile_error());
-    }
-
     ctx.parse(src_idx);
+    ctx.parse_runtime();
+
     if ctx.has_errors() {
         let flag = [&ctx.cfg.dump_bytecode, &ctx.cfg.dump_transformed_bytecode];
         if !flag.never_dumps() {

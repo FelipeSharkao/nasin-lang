@@ -71,17 +71,15 @@ impl<'a> DebugData<'a> {
             AttributeValue::StringRef(comp_dir_str),
         );
 
+        let path = self.source_manager.source(0).path.as_path();
         let mut line_program = LineProgram::new(
             encoding,
             LineEncoding::default(),
             LineString::String(base_dir.to_string_lossy().as_bytes().to_vec()),
             None,
             LineString::String(
-                self.source_manager
-                    .source(0)
-                    .path
-                    .strip_prefix(base_dir)
-                    .expect("source path should be a child of the base dir")
+                path.strip_prefix(base_dir)
+                    .unwrap_or(path)
                     .to_string_lossy()
                     .as_bytes()
                     .to_vec(),

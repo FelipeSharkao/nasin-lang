@@ -69,3 +69,22 @@ u8._write_str_ptr(x: Self, buf: Ptr(u8), buf_size: usize, i: usize): usize =
     let x = x / 10
     if x == 0 then i + 1
     else x._write_str_ptr(buf, buf_size, i + 1)
+
+type Run interface {
+    run(x: Self): i32
+}
+
+impl str: Run
+str.run(x: Self): i32 =
+    let _ = internal_print(x)
+    EX_OK
+
+typevar TRun: Run
+impl [TRun]: Run
+
+[TRun].run(x: Self): i32 = x.run_impl(0)
+
+[TRun].run_impl(x: Self, i) =
+    if i >= @internal_array_len(x) then EX_OK else
+    let _ = x[i].run
+    x.run_impl(i + 1)

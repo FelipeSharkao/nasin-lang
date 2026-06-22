@@ -1,0 +1,3 @@
+entry(): never @entry =
+    let code = main.run
+    libc_exit(code) ; TODO: windows

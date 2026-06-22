@@ -161,6 +161,7 @@ impl TypeBody {
             // INFO: the more """correct"" would be that a merge with a never type should
             // check the variance, returning a never type if the variance is covariant.
             // That doesn't work with our current implementation of the typechecker tho
+            unordered!(a, b) if a.is_never(modules) && b.is_unknown() => Some(a.clone()),
             unordered!(a, b) if b.is_never(modules) => Some(a.clone()),
             (Self::Func(a), Self::Func(b)) => {
                 Some(Self::Func(a.merge(b, variance, modules)?.into()))
