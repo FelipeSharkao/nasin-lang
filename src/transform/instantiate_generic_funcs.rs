@@ -263,6 +263,8 @@ impl<'a> InstantiateGenericFuncsStep<'a> {
                 }
             }
             FuncArgs::GetMethod { source, result } => {
+                co.yield_(&modules[mod_idx].values[source].ty).await;
+
                 let func = &modules[func_mod_idx].funcs[func_idx];
                 if func.params.len() > 1 {
                     let result_ty = &modules[mod_idx].values[result].ty;
@@ -274,8 +276,6 @@ impl<'a> InstantiateGenericFuncsStep<'a> {
                         co.yield_(param).await;
                     }
                 }
-
-                co.yield_(&modules[mod_idx].values[source].ty).await;
             }
         });
 

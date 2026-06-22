@@ -278,8 +278,9 @@ pub enum TypeDefBody {
 
 #[derive(Debug, Clone, ctor)]
 pub struct TypeVarDef {
-    pub name: Name,
-    pub loc:  Loc,
+    pub name:       Name,
+    pub constraint: Option<Type>,
+    pub loc:        Option<Loc>,
 }
 
 pub type TypeVarIdx = usize;

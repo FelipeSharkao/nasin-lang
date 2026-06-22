@@ -23,25 +23,38 @@ impl<'a> CodeTransform<'a> {
         for mod_idx in 0..({ self.ctx.lock_modules().len() }) {
             tracing::trace!(mod_idx, "transforming module");
 
-            for global_idx in 0..({ self.ctx.lock_modules()[mod_idx].globals.len() }) {
-                tracing::trace!(mod_idx, global_idx, "transforming global");
-                let block_idx =
-                    { self.ctx.lock_modules()[mod_idx].globals[global_idx].body };
-                self.transform_block(&mut step, mod_idx, block_idx);
-            }
-
-            for func_idx in 0..({ self.ctx.lock_modules()[mod_idx].funcs.len() }) {
-                let (is_generic, block_idx) = {
+            let mut global_idx = 0;
+            let mut func_idx = 0;
+            loop {
+                let (globals_len, funcs_len) = {
                     let modules = &self.ctx.lock_modules();
-                    let func = &modules[mod_idx].funcs[func_idx];
-                    (func.generics.len() > 0, func.body)
+                    (modules[mod_idx].globals.len(), modules[mod_idx].funcs.len())
                 };
-                if is_generic {
-                    tracing::trace!(mod_idx, func_idx, "skipping generic function");
-                    continue;
+                if global_idx >= globals_len && func_idx >= funcs_len {
+                    break;
                 }
-                tracing::trace!(mod_idx, func_idx, "transforming function");
-                self.transform_block(&mut step, mod_idx, block_idx);
+
+                for i in global_idx..globals_len {
+                    tracing::trace!(mod_idx, i, "transforming global");
+                    let block_idx = { self.ctx.lock_modules()[mod_idx].globals[i].body };
+                    self.transform_block(&mut step, mod_idx, block_idx);
+                }
+                global_idx = globals_len;
+
+                for i in func_idx..funcs_len {
+                    let (is_generic, block_idx) = {
+                        let modules = &self.ctx.lock_modules();
+                        let func = &modules[mod_idx].funcs[i];
+                        (func.generics.len() > 0, func.body)
+                    };
+                    if is_generic {
+                        tracing::trace!(mod_idx, i, "skipping generic function");
+                        continue;
+                    }
+                    tracing::trace!(mod_idx, i, "transforming function");
+                    self.transform_block(&mut step, mod_idx, block_idx);
+                }
+                func_idx = funcs_len;
             }
 
             tracing::trace!(mod_idx, "transforming module done");

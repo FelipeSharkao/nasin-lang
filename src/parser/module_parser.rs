@@ -352,10 +352,12 @@ impl<'a, 't> ModuleParser<'a, 't> {
     fn declare_typevar(&mut self, name: b::Name, node: ts::Node<'t>) {
         let typevar_idx = self.types.typevar_count;
         self.types.typevar_count += 1;
-        let typevar_def = b::TypeVarDef {
-            name: name.clone(),
-            loc:  b::Loc::from_node(self.src_idx, &node),
-        };
+        let typevar_def = b::TypeVarDef::new(
+            name.clone(),
+            node.field("constraint")
+                .map(|ty_node| self.types.parse_type_expr(ty_node)),
+            Some(b::Loc::from_node(self.src_idx, &node)),
+        );
         self.typevar_defs.push(typevar_def);
         self.types.idents.insert(
             name.last_ident().to_string(),

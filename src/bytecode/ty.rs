@@ -87,6 +87,7 @@ impl TypeBody {
         match self {
             Self::Inferred(v) => v.members.get(name).map(|ty| Cow::Borrowed(ty)),
             Self::TypeRef(type_ref) => type_ref.field(name, modules),
+            Self::TypeVar(type_var) => type_var.field(name, modules),
             _ => None,
         }
     }
@@ -98,6 +99,7 @@ impl TypeBody {
     ) -> Option<Cow<'a, Type>> {
         match self {
             Self::TypeRef(type_ref) => type_ref.method(name, modules),
+            Self::TypeVar(type_var) => type_var.method(name, modules),
             _ => None,
         }
     }
@@ -109,8 +111,42 @@ impl TypeBody {
     ) -> Option<Cow<'a, Type>> {
         match self {
             Self::Inferred(v) => v.properties.get(name).map(|v| Cow::Borrowed(v)),
-            Self::TypeRef(type_ref) => type_ref.property(name, modules),
-            _ => None,
+            _ => {
+                if let Some(ty) = self.method(name, modules) {
+                    let TypeBody::Func(func) = &ty.body else {
+                        return None;
+                    };
+
+                    let [obj_param, params @ ..] = &func.params[..] else {
+                        return None;
+                    };
+
+                    // is static?
+                    if self
+                        .merge(&obj_param.body, Variance::Covariant, modules)
+                        .is_none()
+                    {
+                        return None;
+                    }
+
+                    // functions without parameters are just values
+                    if params.len() == 0 {
+                        return Some(Cow::Owned(func.ret.clone()));
+                    }
+
+                    Some(Cow::Owned(Type::new(
+                        TypeBody::Func(Box::new(FuncType::new(
+                            params.to_vec(),
+                            func.ret.clone(),
+                        ))),
+                        ty.loc,
+                    )))
+                } else if let Some(ty) = self.field(name, modules) {
+                    Some(ty)
+                } else {
+                    None
+                }
+            }
         }
     }
 
@@ -209,10 +245,23 @@ impl TypeBody {
             (Self::TypeRef(a), Self::TypeRef(b)) => {
                 Some(a.merge(b, variance, modules)?.into())
             }
-            // TODO: when we add constraints to generics, we will have to intersect with
-            // that. Since we don't have that yet, all typevars are blanket, they don't
-            // change the type at all
-            unordered!(Self::TypeVar(_), a) => Some(a.clone()),
+            (Self::TypeVar(a), Self::TypeVar(b)) => {
+                let def_a = &modules[a.mod_idx].typevars[a.typevar_idx];
+                let def_b = &modules[b.mod_idx].typevars[b.typevar_idx];
+                match (&def_a.constraint, &def_b.constraint) {
+                    (Some(cons_a), Some(cons_b)) => {
+                        cons_a.body.merge(&cons_b.body, variance, modules)
+                    }
+                    _ => None,
+                }
+            }
+            unordered!(Self::TypeVar(a), b) => {
+                let def = &modules[a.mod_idx].typevars[a.typevar_idx];
+                match &def.constraint {
+                    Some(cons) => cons.body.merge(b, variance, modules),
+                    None => Some(b.clone()),
+                }
+            }
             _ => None,
         }
     }
@@ -833,50 +882,6 @@ impl TypeRef {
         })
     }
 
-    pub fn property<'a>(
-        &'a self,
-        name: &str,
-        modules: &'a [Module],
-    ) -> Option<Cow<'a, Type>> {
-        if let Some(ty) = self.method(name, modules) {
-            let TypeBody::Func(func) = &ty.body else {
-                return None;
-            };
-
-            let [obj_param, params @ ..] = &func.params[..] else {
-                return None;
-            };
-
-            // is static?
-            let TypeBody::TypeRef(obj_type_ref) = &obj_param.body else {
-                return None;
-            };
-            if obj_type_ref
-                .merge(&self, Variance::Covariant, modules)
-                .is_none()
-            {
-                return None;
-            }
-
-            // functions without parameters are just values
-            if params.len() == 0 {
-                return Some(Cow::Owned(func.ret.clone()));
-            }
-
-            Some(Cow::Owned(Type::new(
-                TypeBody::Func(Box::new(FuncType::new(
-                    params.to_vec(),
-                    func.ret.clone(),
-                ))),
-                ty.loc,
-            )))
-        } else if let Some(ty) = self.field(name, modules) {
-            Some(ty)
-        } else {
-            None
-        }
-    }
-
     pub fn typevar_substitutions(&self, modules: &[Module]) -> HashMap<TypeVarIdx, Type> {
         let def = self.get_typedef(modules);
         izip!(&def.generics, &self.args)
@@ -903,7 +908,8 @@ impl TypeRef {
         }
 
         for name in chain!(fields.keys(), def.methods.keys()).unique() {
-            let Some(ty) = self.property(name, modules) else {
+            let as_ty_body = TypeBody::TypeRef(self.clone());
+            let Some(ty) = as_ty_body.property(name, modules) else {
                 continue;
             };
             properties.insert(name.to_string(), ty.into_owned());
@@ -917,6 +923,32 @@ impl TypeRef {
 pub struct TypeVar {
     pub mod_idx:     usize,
     pub typevar_idx: usize,
+}
+
+impl TypeVar {
+    pub fn field<'a>(
+        &'a self,
+        name: &str,
+        modules: &'a [Module],
+    ) -> Option<Cow<'a, Type>> {
+        let def = &modules[self.mod_idx].typevars[self.typevar_idx];
+        match &def.constraint {
+            Some(cons) => cons.body.field(name, modules),
+            None => None,
+        }
+    }
+
+    pub fn method<'a>(
+        &'a self,
+        name: &str,
+        modules: &'a [Module],
+    ) -> Option<Cow<'a, Type>> {
+        let def = &modules[self.mod_idx].typevars[self.typevar_idx];
+        match &def.constraint {
+            Some(cons) => cons.body.method(name, modules),
+            None => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

@@ -222,13 +222,19 @@ impl<'a> Printer<'a> {
         let line = table.push_cell();
         write!(line, "{S:indent$}typevar ")?;
         self.write_name(line, &typevar.name)?;
+
+        if let Some(constraint) = &typevar.constraint {
+            write!(line, ": ")?;
+            self.write_type_body(line, &constraint.body)?;
+        }
+
         if self.show_ids {
             write!(line, " (typevar {idx})")?;
         }
 
         if !self.reconstruct {
             let loc_comment = table.push_cell();
-            self.write_loc_comment(loc_comment, Some(&typevar.loc))?;
+            self.write_loc_comment(loc_comment, typevar.loc.as_ref())?;
         }
 
         table.end_row();

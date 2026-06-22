@@ -40,8 +40,8 @@ impl<'a> BuiltinsBuilder<'a> {
     pub fn add_typevars(&mut self) {
         self.typevars.push(b::TypeVarDef::new(
             self.name.with("T", b::NameIdentKind::Type, None),
-            // FIXME: change this loc to Option
-            b::Loc::default(),
+            None,
+            None,
         ));
     }
 

@@ -1,0 +1,17 @@
+main = [
+    dispatched({}:Foo, "A")
+    dispatched({}:Bar, "B")
+]
+
+type Foo: IFace {}
+type Bar: IFace {}
+
+type IFace interface {
+    append(x: Self, s: str): [str]
+}
+
+Foo.append(foo: Self, s) = ["Foo", s]
+Bar.append(bar: Self, s) = ["Bar", s]
+
+typevar T: IFace
+dispatched(x: T, s) = x.append(s)

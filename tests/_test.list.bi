@@ -1,4 +1,4 @@
-:i count 21
+:i count 23
 :b shell 40
 ./target/release/nasin r tests/hello.nsn
 :i returncode 0
@@ -203,6 +203,31 @@ hello
 /home/felipe/Projects/nasin/nasin/tests/conditional_impl_error.nsn:22:8 - error: Expected type StringValue, but found Container(u8) instead
 22 | main = string_with(int_value) ; ERROR: int_value cannot be used as StringValue
             ^
+
+
+:b shell 63
+./target/release/nasin r tests/generic_func_with_constraint.nsn
+:i returncode 0
+:b stdout 12
+Foo
+A
+Bar
+B
+
+:b stderr 0
+
+:b shell 69
+./target/release/nasin r tests/generic_func_with_constraint_error.nsn
+:i returncode 1
+:b stdout 0
+
+:b stderr 321
+/home/felipe/Projects/nasin/nasin/tests/generic_func_with_constraint_error.nsn:6:5 - error: Expected type T, but found Foo instead
+6 | dispatched({}:Foo)
+    ^
+/home/felipe/Projects/nasin/nasin/tests/generic_func_with_constraint_error.nsn:7:5 - error: Expected type T, but found Bar instead
+7 | dispatched({}:Bar)
+    ^
 
 
 :b shell 49

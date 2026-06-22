@@ -626,8 +626,8 @@ impl<'a> FuncCodegen<'a, '_> {
 
                 self.values.insert((mod_idx, instr.results[0]), value);
             }
-            b::InstrBody::GetMethod(source_v, name) => {
-                let src = self.get_method_inst(mod_idx, *source_v, name);
+            &b::InstrBody::GetMethod(source_v, ref name) => {
+                let src = self.get_method_inst(mod_idx, source_v, name);
                 self.values.insert(
                     (mod_idx, instr.results[0]),
                     types::RuntimeValue::new(src, mod_idx, instr.results[0]),

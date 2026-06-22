@@ -17,6 +17,7 @@ members = [
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+anti-debug = "0.3.0"
 bump-scope = "2.2.0"
 clap = { version = "4.4.18", features = ["derive"] }
 command-tools = { path = "command-tools" }

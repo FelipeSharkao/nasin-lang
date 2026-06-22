@@ -1,0 +1,18 @@
+; This test should error with a type mismatch error
+; FAIL: compiling but crashing when running, crashing the compiler, or compiling and
+;       running successfully (black magic)
+
+main = [
+    dispatched({}:Foo)
+    dispatched({}:Bar)
+]
+
+type Foo {}
+type Bar {}
+
+type IFace interface {
+    method(): str
+}
+
+typevar T: IFace
+dispatched(x: T) = x.method()

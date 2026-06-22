@@ -24,6 +24,8 @@ mod debug {
     use std::time::{Duration, Instant};
     use std::{env, process, thread};
 
+    use anti_debug::is_debugger_present;
+
     use super::*;
 
     static CONTROL: Mutex<Option<DeadlockGuardControl>> = Mutex::new(None);
@@ -33,7 +35,9 @@ mod debug {
 
     impl<T> DeadlockGuard<T> {
         pub fn new(lock: T) -> Self {
-            if env::var("NASIN_NO_DEADLOCK_GUARD").is_ok() {
+            if env::var("NASIN_NO_DEADLOCK_GUARD").is_ok()
+                || is_debugger_present().unwrap_or(false)
+            {
                 return Self { lock, lock_id: 0 };
             }
 
