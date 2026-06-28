@@ -16,7 +16,7 @@ pub enum ConstraintPriority {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ConstraintKind {
     Is(b::Type),
-    TypeOf(b::ValueIdx),
+    TypeOf(b::ValueIdx, /** rigid: */ bool),
     Array(b::ValueIdx),
     ArrayElem(b::ValueIdx),
     Ptr(b::ValueIdx),
@@ -35,6 +35,7 @@ pub struct Constraint {
     pub kind: ConstraintKind,
     pub loc:  Option<b::Loc>,
 }
+
 impl Constraint {
     pub fn priority(&self) -> ConstraintPriority {
         match &self.kind {

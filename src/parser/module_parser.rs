@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use derive_ctor::ctor;
 use derive_more::Debug;
-use itertools::{Itertools, enumerate};
+use itertools::{Itertools, chain, enumerate};
 use tree_sitter as ts;
 
 use super::parser_value::ValueRef;
@@ -468,17 +468,17 @@ impl<'a, 't> ModuleParser<'a, 't> {
             self.values[func.func.ret].ty = ty;
         }
 
-        func.func.generics = func
-            .params
-            .iter()
-            .flat_map(|param| {
+        func.func.generics = chain!(
+            func.params.iter().flat_map(|param| {
                 let param_ty = &self.values[param.value].ty;
-                param_ty.typevars()
-            })
-            .chain(self.values[func.func.ret].ty.typevars())
-            .unique()
-            .sorted()
-            .collect();
+                param_ty.body.typevars()
+            }),
+            self.values[func.func.ret].ty.body.typevars()
+        )
+        .map(|typevar| typevar.typevar_idx)
+        .unique()
+        .sorted()
+        .collect();
 
         if let Some(value_node) = func.value_node {
             let block_idx = func.func.body;

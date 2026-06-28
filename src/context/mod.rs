@@ -162,8 +162,6 @@ impl BuildContext {
             return;
         };
 
-        self.prelude.push(main_mod_idx);
-
         let mut runtime = None;
         for lib_dir in &self.cfg.lib_dirs {
             let file = lib_dir.join("runtime.nsn");
@@ -186,6 +184,8 @@ impl BuildContext {
         let Ok(src_idx) = self.open(core) else {
             return;
         };
+
+        self.prelude.push(main_mod_idx);
         self.parse(src_idx);
     }
 

@@ -29,6 +29,7 @@ derive_more = { version = "^1.0.0-beta.6", features = [
     "full",
 ] }
 derive_setters = "0.1.6"
+duplicate = "2.0.1"
 genawaiter = "0.99.1"
 gimli = "0.32.1"
 itertools = "0.14.0"

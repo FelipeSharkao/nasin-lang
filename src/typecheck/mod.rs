@@ -8,7 +8,7 @@ use derive_ctor::ctor;
 use itertools::{Itertools, enumerate, izip};
 
 use self::constraints::{Constraint, ConstraintKind};
-use crate::utils::{SortedMap, matches_if};
+use crate::utils::SortedMap;
 use crate::{bytecode as b, context, errors, utils};
 
 #[derive(Debug, Clone, ctor)]
@@ -338,22 +338,22 @@ impl<'a> TypeChecker<'a> {
                 for (arg, param) in izip!(args, params) {
                     let param_ty = &modules[call_mod_idx].values[param].ty;
                     let kind = if call_mod_idx == self.mod_idx
-                        && !param_ty.typevars().next().is_some()
+                        && !param_ty.body.typevars().next().is_some()
                     {
-                        ConstraintKind::TypeOf(param)
+                        ConstraintKind::TypeOf(param, false)
                     } else {
-                        ConstraintKind::Is(param_ty.clone())
+                        ConstraintKind::Is(param_ty.clone().with_rigid(false))
                     };
                     self.add_constraint(arg, Constraint::new(kind, loc), modules);
                 }
 
                 let ret_ty = &modules[call_mod_idx].values[ret].ty;
                 let kind = if call_mod_idx == self.mod_idx
-                    && !ret_ty.typevars().next().is_some()
+                    && !ret_ty.body.typevars().next().is_some()
                 {
-                    ConstraintKind::TypeOf(ret)
+                    ConstraintKind::TypeOf(ret, true)
                 } else {
-                    ConstraintKind::Is(ret_ty.clone())
+                    ConstraintKind::Is(ret_ty.clone().with_rigid(true))
                 };
                 self.add_constraint(v, Constraint::new(kind, loc), modules);
             }
@@ -377,13 +377,13 @@ impl<'a> TypeChecker<'a> {
                     for (param, arg) in izip!(&params, &args) {
                         self.add_constraint(
                             *arg,
-                            Constraint::new(ConstraintKind::TypeOf(*param), loc),
+                            Constraint::new(ConstraintKind::TypeOf(*param, false), loc),
                             modules,
                         );
                     }
                     self.add_constraint(
                         v,
-                        Constraint::new(ConstraintKind::TypeOf(ret), loc),
+                        Constraint::new(ConstraintKind::TypeOf(ret, true), loc),
                         modules,
                     );
                 }
@@ -884,12 +884,15 @@ impl<'a> TypeChecker<'a> {
                     let merge_with = 'merge_with: {
                         match c.kind.clone() {
                             ConstraintKind::Is(ty) => ty.clone(),
-                            ConstraintKind::TypeOf(target) => {
+                            ConstraintKind::TypeOf(target, rigid) => {
                                 tracing::trace!(target, "will validate TypeOf");
                                 success &= !self
                                     .validate_value(target, visited, modules)
                                     .is_failed();
-                                modules[self.mod_idx].values[target].ty.clone()
+                                modules[self.mod_idx].values[target]
+                                    .ty
+                                    .clone()
+                                    .with_rigid(rigid)
                             }
                             ConstraintKind::Array(target) => {
                                 tracing::trace!(target, "will validate Array");
@@ -962,7 +965,7 @@ impl<'a> TypeChecker<'a> {
                                 if let b::TypeBody::Func(func_ty) =
                                     &modules[self.mod_idx].values[target].ty.body
                                 {
-                                    func_ty.ret.clone()
+                                    func_ty.ret.clone().with_rigid(true)
                                 } else {
                                     b::Type::unknown(None)
                                 }
@@ -980,6 +983,7 @@ impl<'a> TypeChecker<'a> {
                                         .get(idx)
                                         .cloned()
                                         .unwrap_or(b::Type::unknown(None))
+                                        .with_rigid(false)
                                 } else {
                                     b::Type::unknown(None)
                                 }
@@ -1068,9 +1072,7 @@ impl<'a> TypeChecker<'a> {
                                 let ret = module.values[ret].ty.clone();
 
                                 b::Type::new(
-                                    b::TypeBody::Func(Box::new(b::FuncType::new(
-                                        params, ret,
-                                    ))),
+                                    b::FuncType::new(params, ret.into()).into(),
                                     None,
                                 )
                             }
@@ -1094,9 +1096,7 @@ impl<'a> TypeChecker<'a> {
                                 let ret = module.values[ret].ty.clone();
 
                                 b::Type::new(
-                                    b::TypeBody::Func(Box::new(b::FuncType::new(
-                                        params, ret,
-                                    ))),
+                                    b::FuncType::new(params, ret.into()).into(),
                                     None,
                                 )
                             }
@@ -1236,7 +1236,8 @@ impl<'a> TypeChecker<'a> {
     ) -> Option<b::Type> {
         let module = &modules[self.mod_idx];
         let parent = &module.values[v].ty;
-        return parent.body.property(key, modules).map(|ty| ty.into_owned());
+        let res = parent.body.property(key, modules).map(|ty| ty.into_owned());
+        res
     }
 
     fn validate_impls(&self, modules: &[b::Module]) {
@@ -1292,54 +1293,24 @@ impl<'a> TypeChecker<'a> {
             let (impl_mod_idx, impl_func_idx) = typedef_method.func_ref;
             let (iface_mod_idx, iface_func_idx) = iface_method.func_ref;
 
-            let impl_method_func = &modules[impl_mod_idx].funcs[impl_func_idx];
-            let iface_method_func = &modules[iface_mod_idx].funcs[iface_func_idx];
+            let iface_method_func_ty =
+                b::FuncType::from_func(iface_mod_idx, iface_func_idx, false, modules);
+            let impl_method_func_ty =
+                b::FuncType::from_func(impl_mod_idx, impl_func_idx, false, modules);
 
-            let ok = iface_method_func.params.len() == impl_method_func.params.len()
-                && izip!(&iface_method_func.params, &impl_method_func.params)
-                    .enumerate()
-                    .all(|(i, (&iface_param, &impl_param))| {
-                        let iface_param =
-                            &modules[iface_mod_idx].values[iface_param].ty.body;
-                        let impl_param =
-                            &modules[impl_mod_idx].values[impl_param].ty.body;
-
-                        // FIXME: Self in interface should be a special type since it's the
-                        // implementor not the interface
-                        let variance = if !matches_if!(
-                            &iface_param,
-                            b::TypeBody::TypeRef(t),
-                            i == 0 && t.key == iface_key
-                        ) {
-                            b::Variance::Covariant
-                        } else {
-                            b::Variance::Contravariant
-                        };
-                        iface_param.merge(impl_param, variance, modules).is_some()
-                    })
-                && modules[iface_mod_idx].values[iface_method_func.ret]
-                    .ty
-                    .body
-                    .merge(
-                        &modules[impl_mod_idx].values[impl_method_func.ret].ty.body,
-                        b::Variance::Covariant,
-                        modules,
-                    )
-                    .is_some();
-
-            if !ok {
+            if !impl_method_func_ty.extends(&iface_method_func_ty, true, modules) {
                 self.ctx.push_error(errors::Error::new(
                     errors::MethodTypeMismatch::new(
                         method_name.clone(),
                         type_name!(),
                         iface_name!(),
-                        iface_method_func.formated_signature(
+                        modules[iface_mod_idx].funcs[iface_func_idx].formated_signature(
                             iface_mod_idx,
                             modules,
                             &self.ctx.cfg,
                             Some(self.mod_idx),
                         ),
-                        impl_method_func.formated_signature(
+                        modules[impl_mod_idx].funcs[impl_func_idx].formated_signature(
                             impl_mod_idx,
                             modules,
                             &self.ctx.cfg,
@@ -1347,7 +1318,7 @@ impl<'a> TypeChecker<'a> {
                         ),
                     )
                     .into(),
-                    impl_method_func.loc,
+                    modules[impl_mod_idx].funcs[impl_func_idx].loc,
                 ));
             }
         }

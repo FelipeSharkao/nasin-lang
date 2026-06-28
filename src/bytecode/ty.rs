@@ -6,6 +6,7 @@ use std::hash::Hash;
 use derive_ctor::ctor;
 use derive_more::From;
 use derive_setters::Setters;
+use duplicate::duplicate_item;
 use genawaiter::rc::Gen;
 use itertools::{Itertools, chain, izip};
 
@@ -17,7 +18,7 @@ use crate::utils::{self, SortedMap, matches_if, unordered};
 #[derive(Debug, Clone, PartialEq, Eq, Hash, From)]
 pub enum TypeBody {
     Inferred(InferredType),
-    Func(Box<FuncType>),
+    Func(FuncType),
     TypeRef(TypeRef),
     TypeVar(TypeVar),
 }
@@ -42,20 +43,22 @@ impl TypeBody {
     }
 
     pub fn is_not_final(&self, modules: &[Module]) -> bool {
-        if let TypeBody::Func(func) = self {
-            func.params.iter().any(|ty| ty.body.is_not_final(modules))
-                || func.ret.body.is_not_final(modules)
-        } else if let TypeBody::TypeRef(type_ref) = self {
-            if type_ref.args.iter().any(|ty| ty.body.is_not_final(modules)) {
-                return true;
+        match self {
+            TypeBody::Func(func) => {
+                func.params.iter().any(|ty| ty.body.is_not_final(modules))
+                    || func.ret.body.is_not_final(modules)
             }
-
-            match &type_ref.get_typedef(modules).body {
-                TypeDefBody::Builtin(builtin) => builtin.is_not_final(),
-                TypeDefBody::Record(_) | TypeDefBody::Interface => false,
+            TypeBody::TypeRef(type_ref) => {
+                if type_ref.args.iter().any(|ty| ty.body.is_not_final(modules)) {
+                    return true;
+                }
+                match &type_ref.get_typedef(modules).body {
+                    TypeDefBody::Builtin(builtin) => builtin.is_not_final(),
+                    TypeDefBody::Record(_) | TypeDefBody::Interface => false,
+                }
             }
-        } else {
-            matches!(self, TypeBody::Inferred(_))
+            TypeBody::Inferred(_) => true,
+            _ => false,
         }
     }
 
@@ -99,7 +102,10 @@ impl TypeBody {
     ) -> Option<Cow<'a, Type>> {
         match self {
             Self::TypeRef(type_ref) => type_ref.method(name, modules),
-            Self::TypeVar(type_var) => type_var.method(name, modules),
+            Self::TypeVar(type_var) => {
+                let res = type_var.method(name, modules);
+                res
+            }
             _ => None,
         }
     }
@@ -123,7 +129,11 @@ impl TypeBody {
 
                     // is static?
                     if self
-                        .merge(&obj_param.body, Variance::Covariant, modules)
+                        .merge(
+                            &obj_param.body.clone().with_rigid(false),
+                            Variance::Covariant,
+                            modules,
+                        )
                         .is_none()
                     {
                         return None;
@@ -131,14 +141,11 @@ impl TypeBody {
 
                     // functions without parameters are just values
                     if params.len() == 0 {
-                        return Some(Cow::Owned(func.ret.clone()));
+                        return Some(Cow::Owned(func.ret.as_ref().clone()));
                     }
 
                     Some(Cow::Owned(Type::new(
-                        TypeBody::Func(Box::new(FuncType::new(
-                            params.to_vec(),
-                            func.ret.clone(),
-                        ))),
+                        FuncType::new(params.to_vec(), func.ret.clone()).into(),
                         ty.loc,
                     )))
                 } else if let Some(ty) = self.field(name, modules) {
@@ -167,38 +174,7 @@ impl TypeBody {
                 Some(Self::Func(a.merge(b, variance, modules)?.into()))
             }
             (Self::Inferred(a), Self::Inferred(b)) => {
-                let mut members = SortedMap::new();
-                for name in chain!(a.members.keys(), b.members.keys()).unique() {
-                    let ty = match (a.members.get(name), b.members.get(name)) {
-                        (Some(a_member), Some(b_member)) => {
-                            a_member.merge(b_member, variance, modules)?
-                        }
-                        // TODO: optional fields
-                        unordered!(Some(_), None) => return None,
-                        _ => unreachable!(),
-                    };
-                    members.insert(name.to_string(), ty);
-                }
-
-                let mut properties = SortedMap::new();
-                for name in chain!(a.properties.keys(), b.properties.keys()).unique() {
-                    let ty = match (a.properties.get(name), b.properties.get(name)) {
-                        (Some(a_prop), Some(b_prop)) => {
-                            a_prop.merge(b_prop, variance, modules)?
-                        }
-                        unordered!(Some(prop), None) => match variance {
-                            Variance::Covariant => prop.clone(),
-                            Variance::Contravariant => continue,
-                        },
-                        _ => unreachable!(),
-                    };
-                    properties.insert(name.to_string(), ty);
-                }
-
-                Some(Self::Inferred(InferredType {
-                    members,
-                    properties,
-                }))
+                Some(Self::Inferred(a.merge(b, variance, modules)?.into()))
             }
             unordered!(Self::Inferred(a), b) => {
                 let has_all_members = a.members.iter().all(|(name, a_ty)| {
@@ -246,6 +222,13 @@ impl TypeBody {
             (Self::TypeRef(a), Self::TypeRef(b)) => {
                 Some(a.merge(b, variance, modules)?.into())
             }
+            unordered!(Self::TypeVar(a), Self::TypeVar(b)) if a.rigid => {
+                if a.extends(b, modules) {
+                    Some(self.clone())
+                } else {
+                    None
+                }
+            }
             (Self::TypeVar(a), Self::TypeVar(b)) => {
                 let def_a = &modules[a.mod_idx].typevars[a.typevar_idx];
                 let def_b = &modules[b.mod_idx].typevars[b.typevar_idx];
@@ -253,6 +236,13 @@ impl TypeBody {
                     (Some(cons_a), Some(cons_b)) => {
                         cons_a.body.merge(&cons_b.body, variance, modules)
                     }
+                    _ => None,
+                }
+            }
+            unordered!(Self::TypeVar(a), b) if a.rigid => {
+                let def = &modules[a.mod_idx].typevars[a.typevar_idx];
+                match &def.constraint {
+                    Some(cons) if b.extends(&cons.body, modules) => Some(self.clone()),
                     _ => None,
                 }
             }
@@ -264,6 +254,41 @@ impl TypeBody {
                 }
             }
             _ => None,
+        }
+    }
+
+    pub fn extends(&self, other: &Self, modules: &[Module]) -> bool {
+        match (self, other) {
+            (a, b) if a == b || a.is_never(modules) => true,
+            (_, b) if b.is_unknown() => true,
+            (_, b) if b.is_never(modules) => false,
+            (Self::Func(a), Self::Func(b)) => a.extends(b, false, modules),
+            (Self::Inferred(a), Self::Inferred(b)) => a.extends(b, modules),
+            (Self::Inferred(a), Self::TypeRef(type_ref)) => {
+                if let TypeRefKey::Builtin(_) = &type_ref.key
+                    && !a.members.is_empty()
+                {
+                    return false;
+                }
+                a.extends(&type_ref.to_inferred(modules), modules)
+            }
+            (Self::TypeRef(a), Self::TypeRef(b)) => a.implements(b, modules),
+            (Self::TypeVar(a), Self::TypeVar(b)) => a.extends(b, modules),
+            (Self::TypeVar(a), b) => {
+                let def = &modules[a.mod_idx].typevars[a.typevar_idx];
+                match &def.constraint {
+                    Some(cons) => cons.body.extends(b, modules),
+                    None => !a.rigid,
+                }
+            }
+            (a, Self::TypeVar(b)) => {
+                let def = &modules[b.mod_idx].typevars[b.typevar_idx];
+                match &def.constraint {
+                    Some(cons) => a.extends(&cons.body, modules),
+                    None => !b.rigid,
+                }
+            }
+            _ => false,
         }
     }
 
@@ -280,6 +305,57 @@ impl TypeBody {
         }
         printer.write_type_expr(&mut s, self).unwrap();
         s
+    }
+
+    #[duplicate_item(
+        typevars       values_ref   reference(e);
+        [typevars]     [values]     [&e];
+        [typevars_mut] [values_mut] [&mut e];
+    )]
+    pub fn typevars(
+        self: reference([Self]),
+    ) -> impl Iterator<Item = reference([TypeVar])> {
+        Gen::new(async move |co| match self {
+            TypeBody::TypeVar(typevar) => co.yield_(typevar).await,
+            TypeBody::TypeRef(type_ref) => {
+                for arg_ty in reference([type_ref.args]) {
+                    for typevar in arg_ty.body.typevars() {
+                        co.yield_(typevar).await;
+                    }
+                }
+            }
+            TypeBody::Inferred(inferred) => {
+                for ty in inferred.members.values_ref() {
+                    for typevar in ty.body.typevars() {
+                        co.yield_(typevar).await;
+                    }
+                }
+                for ty in inferred.properties.values_ref() {
+                    for typevar in ty.body.typevars() {
+                        co.yield_(typevar).await;
+                    }
+                }
+            }
+            TypeBody::Func(func_ty) => {
+                for param in reference([func_ty.params]) {
+                    for typevar in param.body.typevars() {
+                        co.yield_(typevar).await;
+                    }
+                }
+                for typevar in func_ty.ret.body.typevars() {
+                    co.yield_(typevar).await;
+                }
+            }
+        })
+        .into_iter()
+    }
+
+    /// Returns a new type with all typevars marked as rigid or not. See [`TypeVar`].
+    pub fn with_rigid(mut self, rigid: bool) -> Self {
+        for typevar in &mut self.typevars_mut() {
+            typevar.rigid = rigid;
+        }
+        self
     }
 }
 
@@ -432,39 +508,7 @@ impl Type {
         &self,
         substitutions: &'m HashMap<TypeVarIdx, Type>,
     ) -> Option<Type> {
-        struct Substitutions<'a>(&'a HashMap<TypeVarIdx, Type>);
-        impl<'a> Substitutions<'a> {
-            fn substitute(&self, ty: &Type) -> Option<Type> {
-                ty.substitute_typevar(self.0)
-            }
-
-            fn substitute_many<'s>(
-                &'s self,
-                iter: impl IntoIterator<Item = &'s Type>,
-            ) -> Vec<Option<Type>>
-            where
-                'a: 's,
-            {
-                iter.into_iter().map(|ty| self.substitute(ty)).collect_vec()
-            }
-
-            fn mix(&self, old: &Type, new: Option<Type>) -> Type {
-                new.unwrap_or_else(|| old.clone())
-            }
-
-            fn mix_many<'s>(
-                &'s self,
-                old: impl IntoIterator<Item = &'s Type>,
-                new: impl IntoIterator<Item = Option<Type>>,
-            ) -> impl Iterator<Item = Type>
-            where
-                'a: 's,
-            {
-                izip!(old, new).map(|(old_ty, new_ty)| self.mix(old_ty, new_ty))
-            }
-        }
-
-        let subs = Substitutions(substitutions);
+        let subs = TypevarSubstitutions(substitutions);
 
         macro_rules! validate {
             ($($iter:expr),* $(,)?) => {
@@ -508,50 +552,15 @@ impl Type {
                 let params = subs.substitute_many(&func_ty.params);
                 let ret = subs.substitute(&func_ty.ret);
                 validate!(&params, Some(&ret));
-                TypeBody::Func(Box::new(FuncType::new(
+                FuncType::new(
                     subs.mix_many(&func_ty.params, params).collect(),
-                    subs.mix(&func_ty.ret, ret),
-                )))
+                    subs.mix(&func_ty.ret, ret).into(),
+                )
+                .into()
             }
         };
 
         Some(Type::new(body, self.loc))
-    }
-
-    pub fn typevars(&self) -> impl Iterator<Item = TypeVarIdx> {
-        Gen::new(async move |co| match &self.body {
-            TypeBody::TypeVar(typevar) => co.yield_(typevar.typevar_idx).await,
-            TypeBody::TypeRef(type_ref) => {
-                for arg_ty in &type_ref.args {
-                    for typevar in arg_ty.typevars() {
-                        co.yield_(typevar).await;
-                    }
-                }
-            }
-            TypeBody::Inferred(inferred) => {
-                for ty in inferred.members.values() {
-                    for typevar in ty.typevars() {
-                        co.yield_(typevar).await;
-                    }
-                }
-                for ty in inferred.properties.values() {
-                    for typevar in ty.typevars() {
-                        co.yield_(typevar).await;
-                    }
-                }
-            }
-            TypeBody::Func(func_ty) => {
-                for param in &func_ty.params {
-                    for typevar in param.typevars() {
-                        co.yield_(typevar).await;
-                    }
-                }
-                for typevar in func_ty.ret.typevars() {
-                    co.yield_(typevar).await;
-                }
-            }
-        })
-        .into_iter()
     }
 
     /// Compares the type `self` with `other` and updates a map of typevars that exist in
@@ -618,6 +627,14 @@ impl Type {
             _ => {}
         }
         true
+    }
+
+    /// Returns a new type with all typevars marked as rigid or not. See [`TypeVar`].
+    pub fn with_rigid(self, rigid: bool) -> Self {
+        Self {
+            body: self.body.with_rigid(rigid),
+            loc:  self.loc,
+        }
     }
 }
 
@@ -846,7 +863,7 @@ impl TypeRef {
             .unwrap_or_else(|| ret_ty.clone());
 
         Some(Cow::Owned(Type::new(
-            TypeBody::Func(Box::new(FuncType::new(params_tys, ret_ty))),
+            FuncType::new(params_tys, ret_ty.into()).into(),
             Some(method.loc),
         )))
     }
@@ -868,7 +885,7 @@ impl TypeRef {
         chain!(Some(base_method.func_ref), instantiated_funcs).find_map(|func_ref| {
             let func = &modules[func_ref.0].funcs[func_ref.1];
             let recv_ty = &modules[base_method.func_ref.0].values[func.params[0]].ty;
-            if recv_ty.typevars().next().is_some()
+            if recv_ty.body.typevars().next().is_some()
                 || !matches_if!(
                     &recv_ty.body,
                     TypeBody::TypeRef(recv_ty_ref),
@@ -924,19 +941,32 @@ impl TypeRef {
 pub struct TypeVar {
     pub mod_idx:     usize,
     pub typevar_idx: usize,
+    #[ctor(expr(true))]
+    /// Represents a fixed concrete type within a single instantiation. It can only unify
+    /// with itself, not with arbitrary types that satisfy its constraint.
+    pub rigid:       bool,
 }
 
 impl TypeVar {
+    pub fn is_same_of(&self, other: &Self) -> bool {
+        self.mod_idx == other.mod_idx && self.typevar_idx == other.typevar_idx
+    }
+
     pub fn field<'a>(
         &'a self,
         name: &str,
         modules: &'a [Module],
     ) -> Option<Cow<'a, Type>> {
         let def = &modules[self.mod_idx].typevars[self.typevar_idx];
-        match &def.constraint {
-            Some(cons) => cons.body.field(name, modules),
-            None => None,
-        }
+        let cons = def.constraint.as_ref()?;
+        cons.body.field(name, modules).map(|mut ty| {
+            if ty.body.typevars().next().is_some() {
+                utils::replace_with(&mut ty.to_mut().body, |tyb| {
+                    tyb.with_rigid(self.rigid)
+                });
+            }
+            ty
+        })
     }
 
     pub fn method<'a>(
@@ -945,9 +975,28 @@ impl TypeVar {
         modules: &'a [Module],
     ) -> Option<Cow<'a, Type>> {
         let def = &modules[self.mod_idx].typevars[self.typevar_idx];
-        match &def.constraint {
-            Some(cons) => cons.body.method(name, modules),
-            None => None,
+        let cons = def.constraint.as_ref()?;
+        let method = cons.body.method(name, modules);
+        method.map(|mut ty| {
+            if ty.body.typevars().next().is_some() {
+                utils::replace_with(&mut ty.to_mut().body, |tyb| {
+                    tyb.with_rigid(self.rigid)
+                });
+            }
+            ty
+        })
+    }
+
+    pub fn extends(&self, other: &Self, modules: &[Module]) -> bool {
+        if other.rigid {
+            return self.is_same_of(other);
+        }
+        let def_a = &modules[self.mod_idx].typevars[self.typevar_idx];
+        let def_b = &modules[other.mod_idx].typevars[other.typevar_idx];
+        match (&def_a.constraint, &def_b.constraint) {
+            (Some(cons_a), Some(cons_b)) => cons_a.body.extends(&cons_b.body, modules),
+            (Some(_), None) => true,
+            _ => false,
         }
     }
 }
@@ -1000,23 +1049,89 @@ impl InferredType {
 
         true
     }
+
+    pub fn merge(
+        &self,
+        other: &Self,
+        variance: Variance,
+        modules: &[Module],
+    ) -> Option<Self> {
+        let mut members = SortedMap::new();
+        for name in chain!(self.members.keys(), other.members.keys()).unique() {
+            let ty = match (self.members.get(name), other.members.get(name)) {
+                (Some(a_member), Some(b_member)) => {
+                    a_member.merge(b_member, variance, modules)?
+                }
+                // TODO: optional fields
+                unordered!(Some(_), None) => return None,
+                _ => unreachable!(),
+            };
+            members.insert(name.to_string(), ty);
+        }
+
+        let mut properties = SortedMap::new();
+        for name in chain!(self.properties.keys(), other.properties.keys()).unique() {
+            let ty = match (self.properties.get(name), other.properties.get(name)) {
+                (Some(a_prop), Some(b_prop)) => {
+                    a_prop.merge(b_prop, variance, modules)?
+                }
+                unordered!(Some(prop), None) => match variance {
+                    Variance::Covariant => prop.clone(),
+                    Variance::Contravariant => continue,
+                },
+                _ => unreachable!(),
+            };
+            properties.insert(name.to_string(), ty);
+        }
+
+        Some(Self {
+            members,
+            properties,
+        })
+    }
+
+    pub fn extends(&self, other: &Self, modules: &[Module]) -> bool {
+        // TODO: optional fields
+        self.members.len() == other.members.len()
+            && other.members.iter().all(|(name, b)| {
+                self.members
+                    .get(name)
+                    .is_some_and(|a| a.body.extends(&b.body, modules))
+            })
+            && other.properties.iter().all(|(name, b)| {
+                self.properties
+                    .get(name)
+                    .is_some_and(|a| a.body.extends(&b.body, modules))
+            })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, ctor)]
 pub struct FuncType {
     pub params: Vec<Type>,
-    pub ret:    Type,
+    pub ret:    Box<Type>,
 }
 impl FuncType {
-    pub fn from_func(mod_idx: usize, func_idx: usize, modules: &[Module]) -> Self {
+    pub fn from_func(
+        mod_idx: usize,
+        func_idx: usize,
+        rigid: bool,
+        modules: &[Module],
+    ) -> Self {
         let func = &modules[mod_idx].funcs[func_idx];
         let params = func
             .params
             .iter()
-            .map(|&v| modules[mod_idx].values[v].ty.clone())
+            .map(|&v| modules[mod_idx].values[v].ty.clone().with_rigid(rigid))
             .collect_vec();
-        let ret = modules[mod_idx].values[func.ret].ty.clone();
-        Self { params, ret }
+        let ret = modules[mod_idx].values[func.ret]
+            .ty
+            .clone()
+            .with_rigid(rigid);
+        Self {
+            params,
+            ret: ret.into(),
+        }
     }
 
     pub fn merge(
@@ -1033,7 +1148,53 @@ impl FuncType {
             .collect::<Option<_>>()?;
         Some(FuncType::new(
             params,
-            self.ret.merge(&other.ret, var, modules)?,
+            self.ret.merge(&other.ret, var, modules)?.into(),
         ))
+    }
+
+    pub fn extends(&self, other: &Self, is_method: bool, modules: &[Module]) -> bool {
+        if self.params.len() != other.params.len() {
+            return false;
+        }
+        izip!(&self.params, &other.params)
+            .enumerate()
+            .all(|(i, (a_param, b_param))| {
+                (is_method && i == 0 && a_param.body.extends(&b_param.body, modules))
+                    || b_param.body.extends(&a_param.body, modules)
+            })
+            && self.ret.body.extends(&other.ret.body, modules)
+    }
+}
+
+struct TypevarSubstitutions<'a>(&'a HashMap<TypeVarIdx, Type>);
+
+impl<'a> TypevarSubstitutions<'a> {
+    fn substitute(&self, ty: &Type) -> Option<Type> {
+        ty.substitute_typevar(self.0)
+    }
+
+    fn substitute_many<'s>(
+        &'s self,
+        iter: impl IntoIterator<Item = &'s Type>,
+    ) -> Vec<Option<Type>>
+    where
+        'a: 's,
+    {
+        iter.into_iter().map(|ty| self.substitute(ty)).collect_vec()
+    }
+
+    fn mix(&self, old: &Type, new: Option<Type>) -> Type {
+        new.unwrap_or_else(|| old.clone())
+    }
+
+    fn mix_many<'s>(
+        &'s self,
+        old: impl IntoIterator<Item = &'s Type>,
+        new: impl IntoIterator<Item = Option<Type>>,
+    ) -> impl Iterator<Item = Type>
+    where
+        'a: 's,
+    {
+        izip!(old, new).map(|(old_ty, new_ty)| self.mix(old_ty, new_ty))
     }
 }
