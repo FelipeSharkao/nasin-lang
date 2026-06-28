@@ -1,5 +1,6 @@
 #![allow(irrefutable_let_patterns)]
 
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::{env, fs, io};
 
@@ -72,7 +73,7 @@ pub fn build_maybe_run(
                 errors::ReadError::new(emit.file.clone(), err.kind()).into(),
                 None,
             );
-            return Err(CompilerError::new(None, vec![error]));
+            return Err(CompilerError::new(None, HashSet::from([error])));
         }
     };
 
@@ -83,7 +84,7 @@ pub fn build_maybe_run(
                 errors::ReadError::new(file.clone(), io::ErrorKind::IsADirectory).into(),
                 None,
             );
-            return Err(CompilerError::new(None, vec![error]));
+            return Err(CompilerError::new(None, HashSet::from([error])));
         }
     };
 
@@ -131,7 +132,7 @@ pub fn build_maybe_run(
             .print(&ctx.cfg.dump_bytecode);
     }
 
-    let code_transform = transform::CodeTransform::new(&ctx);
+    let mut code_transform = transform::CodeTransform::new(&ctx);
     code_transform.apply(transform::InstantiateGenericFuncsStep::new(&ctx));
     code_transform.apply(transform::LowerTypeNameStep::new(&ctx));
     code_transform.apply(transform::FinishGetPropertyStep::new(&ctx));

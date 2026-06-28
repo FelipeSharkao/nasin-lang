@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::{fmt, io};
@@ -9,7 +10,7 @@ use thiserror::Error;
 use crate::config::BuildConfig;
 use crate::{bytecode as b, sources, utils};
 
-#[derive(Debug, Clone, ctor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, ctor)]
 pub struct Error {
     detail: ErrorDetail,
     loc:    Option<b::Loc>,
@@ -18,7 +19,7 @@ pub struct Error {
 #[derive(Debug, Clone, Error, ctor)]
 pub struct CompilerError {
     source_manager: Option<Arc<sources::SourceManager>>,
-    errors:         Vec<Error>,
+    errors:         HashSet<Error>,
 }
 impl fmt::Display for CompilerError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -54,7 +55,7 @@ impl fmt::Display for CompilerError {
     }
 }
 
-#[derive(Debug, Clone, Display, From)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Display, From)]
 pub enum ErrorDetail {
     ReadError(ReadError),
     MissingLib(MissingLib),
@@ -78,26 +79,26 @@ pub enum ErrorDetail {
     Todo(Todo),
 }
 
-#[derive(Debug, Clone, Display, ctor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Display, ctor)]
 #[display("Cannot read file `{}`: {kind}", path.display())]
 pub struct ReadError {
     pub path: PathBuf,
     pub kind: io::ErrorKind,
 }
 
-#[derive(Debug, Clone, Display, ctor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Display, ctor)]
 #[display("Cannot find `{name}` in any of the libs directories")]
 pub struct MissingLib {
     pub name: String,
 }
 
-#[derive(Debug, Clone, Display, ctor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Display, ctor)]
 #[display("Unexpected token {}", utils::encode_string_lit(token))]
 pub struct UnexpectedToken {
     pub token: String,
 }
 
-#[derive(Debug, Clone, Display, ctor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Display, ctor)]
 #[display(
     "Cannot find value {} on the current scope",
     utils::encode_string_lit(ident)
@@ -106,7 +107,7 @@ pub struct ValueNotFound {
     pub ident: String,
 }
 
-#[derive(Debug, Clone, Display, ctor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Display, ctor)]
 #[display(
     "Cannot find type {} on the current scope",
     utils::encode_string_lit(ident)
@@ -115,7 +116,7 @@ pub struct TypeNotFound {
     pub ident: String,
 }
 
-#[derive(Debug, Clone, Display, ctor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Display, ctor)]
 #[display(
     "Cannot find typevar {} on the current scope",
     utils::encode_string_lit(ident)
@@ -124,7 +125,7 @@ pub struct TypeVarNotFound {
     pub ident: String,
 }
 
-#[derive(Debug, Clone, ctor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, ctor)]
 pub struct UnexpectedType {
     #[ctor(iter(String))]
     pub expected: Vec<String>,
@@ -151,7 +152,7 @@ impl Display for UnexpectedType {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TypeMisatch {
     pub types: Vec<String>,
 }
@@ -184,7 +185,7 @@ impl Display for TypeMisatch {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct TypeNotInterface {
     pub ty: String,
 }
@@ -206,7 +207,7 @@ impl Display for TypeNotInterface {
     }
 }
 
-#[derive(Debug, Clone, Display, ctor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Display, ctor)]
 #[display(
     "`{name}` requires {expected} {}, but {found} were provided",
     if *expected == 1 { "argument" } else { "arguments" }
@@ -217,7 +218,7 @@ pub struct WrongArgumentCount {
     pub found:    usize,
 }
 
-#[derive(Debug, Clone, Display, ctor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Display, ctor)]
 #[display(
     "Type `{ty}` does not implement method `{method}` required by interface `{iface}`"
 )]
@@ -227,7 +228,7 @@ pub struct MethodNotImplemented {
     pub iface:  String,
 }
 
-#[derive(Debug, Clone, Display, ctor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Display, ctor)]
 #[display(
     "Method `{method}` has an incompatible type for interface `{iface}`\nExpected `{method}{expected}`\n   Found `{method}{found}`"
 )]
@@ -239,14 +240,14 @@ pub struct MethodTypeMismatch {
     pub found:    String,
 }
 
-#[derive(Debug, Clone, Display, ctor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Display, ctor)]
 #[display("Failed to link {name}: {err}")]
 pub struct LinkerError {
     pub name: String,
     pub err:  String,
 }
 
-#[derive(Debug, Clone, Display, ctor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Display, ctor)]
 #[display("Feature is not implemented yet: {feature}")]
 pub struct Todo {
     pub feature: String,

@@ -1,5 +1,6 @@
 mod builtins;
 
+use std::collections::HashSet;
 use std::fs;
 use std::ops::{Deref, DerefMut};
 use std::path::PathBuf;
@@ -15,7 +16,7 @@ use crate::{bytecode as b, codegen, config, errors, parser, sources, typecheck, 
 pub struct BuildContext {
     pub cfg: config::BuildConfig,
     pub source_manager: sources::SourceManager,
-    pub errors: Mutex<Vec<errors::Error>>,
+    pub errors: Mutex<HashSet<errors::Error>>,
     pub main: RwLock<Option<(usize, usize)>>,
     pub prelude: Vec<usize>,
     modules: RwLock<Vec<b::Module>>,
@@ -26,7 +27,7 @@ impl BuildContext {
         let this = Self {
             cfg,
             source_manager: sources::SourceManager::default(),
-            errors: Mutex::new(vec![]),
+            errors: Mutex::new(HashSet::new()),
             main: RwLock::new(None),
             prelude: vec![],
             modules: RwLock::new(vec![]),
@@ -45,7 +46,7 @@ impl BuildContext {
     }
 
     pub fn push_error(&self, value: errors::Error) {
-        self.errors.lock().unwrap().push(value);
+        self.errors.lock().unwrap().insert(value);
     }
 
     pub fn has_errors(&self) -> bool {
