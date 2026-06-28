@@ -70,7 +70,7 @@ impl<'a> InstantiateGenericFuncsStep<'a> {
         };
 
         let Some((new_func_idx, _)) =
-            self.instantiate_call(modules, mod_idx, func_mod_idx, func_idx, args)
+            self.instantiate_call(cursor, modules, mod_idx, func_mod_idx, func_idx, args)
         else {
             return;
         };
@@ -121,6 +121,7 @@ impl<'a> InstantiateGenericFuncsStep<'a> {
         let (func_mod_idx, func_idx) = method.func_ref;
 
         let Some((new_func_idx, tys)) = self.instantiate_call(
+            cursor,
             modules,
             mod_idx,
             func_mod_idx,
@@ -199,6 +200,7 @@ impl<'a> InstantiateGenericFuncsStep<'a> {
                 let typedef = item.ty_key.get_typedef(modules);
                 let method = typedef.methods.get(&method_name).unwrap();
                 self.instantiate_generic_func(
+                    cursor,
                     modules,
                     method.func_ref.0,
                     method.func_ref.1,
@@ -211,6 +213,7 @@ impl<'a> InstantiateGenericFuncsStep<'a> {
     #[tracing::instrument(skip(self))]
     fn instantiate_call<'b>(
         &mut self,
+        cursor: &mut b::BlockCursor,
         modules: &mut [b::Module],
         mod_idx: usize,
         func_mod_idx: usize,
@@ -225,6 +228,7 @@ impl<'a> InstantiateGenericFuncsStep<'a> {
         }
 
         let res = self.instantiate_generic_func(
+            cursor,
             modules,
             func_mod_idx,
             func_idx,
@@ -295,6 +299,7 @@ impl<'a> InstantiateGenericFuncsStep<'a> {
     #[tracing::instrument(skip(self))]
     fn instantiate_generic_func(
         &mut self,
+        cursor: &mut b::BlockCursor,
         modules: &mut [b::Module],
         func_mod_idx: usize,
         func_idx: usize,
@@ -314,7 +319,8 @@ impl<'a> InstantiateGenericFuncsStep<'a> {
 
         let module = &mut modules[func_mod_idx];
 
-        let new_func_idx = remap_func(module, func_idx, &substitutions);
+        let new_func = remap_func(module, func_idx, &substitutions);
+        let new_func_idx = cursor.add_func(module, new_func);
 
         module.funcs[func_idx]
             .generic_instantiations
@@ -417,7 +423,7 @@ fn remap_func(
     module: &mut b::Module,
     func_idx: usize,
     substitutions: &HashMap<b::TypeVarIdx, b::Type>,
-) -> usize {
+) -> b::Func {
     let mut new_func = module.funcs[func_idx].clone();
     new_func.generics = Vec::new();
     new_func.generic_instantiations = HashMap::new();
@@ -455,5 +461,5 @@ fn remap_func(
     new_func.body =
         module.clone_block_tree(new_func.body, &mut transformer, &mut HashMap::new());
 
-    module.add_func(new_func)
+    new_func
 }

@@ -10,7 +10,8 @@ use super::module::*;
 /// writing, and navigating instructions within the block.
 #[derive(Debug, Clone)]
 pub struct BlockCursor {
-    frames: Vec<BlockCursorFrame>,
+    pub added_funcs: VecDeque<(usize, usize)>,
+    frames:          Vec<BlockCursorFrame>,
 }
 
 impl BlockCursor {
@@ -18,7 +19,8 @@ impl BlockCursor {
     /// the first instruction until `step()` or `step_over()` is called.
     pub fn new(block_idx: BlockIdx) -> Self {
         Self {
-            frames: vec![BlockCursorFrame::new(block_idx)],
+            added_funcs: VecDeque::new(),
+            frames:      vec![BlockCursorFrame::new(block_idx)],
         }
     }
 
@@ -131,6 +133,13 @@ impl BlockCursor {
 
         let block = &mut module.blocks[frame.block_idx];
         block.body.insert(instr_idx.min(block.body.len()), instr);
+    }
+
+    /// Adds a function to a module and adds it to the cursor's list of added functions.
+    pub fn add_func(&mut self, module: &mut Module, func: Func) -> usize {
+        let idx = module.add_func(func);
+        self.added_funcs.push_back((module.idx, idx));
+        idx
     }
 
     fn nested_blocks(&self, module: &Module) -> Vec<BlockIdx> {
