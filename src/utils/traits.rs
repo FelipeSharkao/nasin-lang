@@ -137,7 +137,24 @@ impl<'t> Iterator for TreeSitterErrors<'t> {
             && !self.cursor.node().is_missing()
         {
             if self.cursor.node().has_error() {
-                self.cursor.goto_first_child();
+                if !self.cursor.goto_first_child() {
+                    // This happens when tree-sitter inserted a zero-width node for error
+                    // recovery, as in when it encountered a missing node. We need to
+                    // yield the next sized node as unexpected.
+                    // I would prefer to have a "Expected X but found Y" error, but that
+                    // requires a dictionary for human readable node kinds, and I don't
+                    // want to do that rn
+                    // Feel free to do that if you bored
+                    assert_eq!(
+                        self.cursor.node().start_byte(),
+                        self.cursor.node().end_byte()
+                    );
+                    while self.cursor.node().start_byte() == self.cursor.node().end_byte()
+                    {
+                        self.goto_next_sibling_or_parent();
+                    }
+                    break;
+                }
                 continue;
             }
             self.goto_next_sibling_or_parent();
