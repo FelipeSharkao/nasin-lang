@@ -1,4 +1,5 @@
 mod deadlock_guard;
+mod on_drop;
 mod paths;
 mod replace_with;
 mod scope_stack;
@@ -10,6 +11,7 @@ mod traits;
 mod write_io;
 
 pub(crate) use self::deadlock_guard::*;
+pub(crate) use self::on_drop::*;
 pub(crate) use self::paths::*;
 pub(crate) use self::replace_with::*;
 pub(crate) use self::scope_stack::*;

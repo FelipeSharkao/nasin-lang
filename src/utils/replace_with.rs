@@ -1,4 +1,6 @@
-use std::ptr;
+use std::{process, ptr};
+
+use super::with_panic_hook;
 
 /// Temporarily takes ownership of a value at a mutable location, and replace it with a
 /// new value based on the old one.
@@ -8,8 +10,9 @@ pub fn replace_with<'a, T, U, R: ReplaceResult<T, U>>(
 ) -> U {
     unsafe {
         let old = ptr::read(dest);
-        let (ctor, ret) = f(old).get_replace_result();
-        ptr::write(dest, ctor);
+        let (new, ret) =
+            with_panic_hook(|| f(old).get_replace_result(), || process::abort());
+        ptr::write(dest, new);
         ret
     }
 }
@@ -23,6 +26,7 @@ impl<T> ReplaceResult<T, ()> for T {
         (self, ())
     }
 }
+
 impl<T, R1> ReplaceResult<T, R1> for (T, R1) {
     fn get_replace_result(self) -> (T, R1) {
         (self.0, self.1)
