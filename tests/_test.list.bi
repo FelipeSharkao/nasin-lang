@@ -1,22 +1,22 @@
 :i count 23
-:b shell 40
-./target/release/nasin r tests/hello.nsn
+:b shell 29
+./bin/nasin r tests/hello.nsn
 :i returncode 0
 :b stdout 6
 Hello
 
 :b stderr 0
 
-:b shell 48
-./target/release/nasin r tests/global_string.nsn
+:b shell 37
+./bin/nasin r tests/global_string.nsn
 :i returncode 0
 :b stdout 18
 Hello from global
 
 :b stderr 0
 
-:b shell 46
-./target/release/nasin r tests/hello_array.nsn
+:b shell 35
+./bin/nasin r tests/hello_array.nsn
 :i returncode 0
 :b stdout 12
 Hello
@@ -24,8 +24,8 @@ World
 
 :b stderr 0
 
-:b shell 37
-./target/release/nasin r tests/if.nsn
+:b shell 26
+./bin/nasin r tests/if.nsn
 :i returncode 0
 :b stdout 21
 it's true
@@ -33,8 +33,8 @@ it's false
 
 :b stderr 0
 
-:b shell 47
-./target/release/nasin r tests/if_returning.nsn
+:b shell 36
+./bin/nasin r tests/if_returning.nsn
 :i returncode 0
 :b stdout 21
 it's true
@@ -42,8 +42,8 @@ it's false
 
 :b stderr 0
 
-:b shell 55
-./target/release/nasin r tests/aritimetic_operators.nsn
+:b shell 44
+./bin/nasin r tests/aritimetic_operators.nsn
 :i returncode 70
 :b stdout 0
 
@@ -51,8 +51,8 @@ it's false
 sanity check, this will fail
 aritimetic_operators: exited with 70
 
-:b shell 55
-./target/release/nasin r tests/comparison_operators.nsn
+:b shell 44
+./bin/nasin r tests/comparison_operators.nsn
 :i returncode 70
 :b stdout 0
 
@@ -60,24 +60,24 @@ aritimetic_operators: exited with 70
 sanity check, this will fail
 comparison_operators: exited with 70
 
-:b shell 48
-./target/release/nasin r tests/string_concat.nsn
+:b shell 37
+./bin/nasin r tests/string_concat.nsn
 :i returncode 0
 :b stdout 11
 HelloWorld
 
 :b stderr 0
 
-:b shell 51
-./target/release/nasin r tests/func_declaration.nsn
+:b shell 40
+./bin/nasin r tests/func_declaration.nsn
 :i returncode 0
 :b stdout 15
 Hello from foo
 
 :b stderr 0
 
-:b shell 44
-./target/release/nasin r tests/recursion.nsn
+:b shell 33
+./bin/nasin r tests/recursion.nsn
 :i returncode 0
 :b stdout 79
 rec: 0
@@ -95,24 +95,24 @@ rec: 10
 
 :b stderr 0
 
-:b shell 46
-./target/release/nasin r tests/record_type.nsn
+:b shell 35
+./bin/nasin r tests/record_type.nsn
 :i returncode 0
 :b stdout 18
 Hello from record
 
 :b stderr 0
 
-:b shell 48
-./target/release/nasin r tests/return_record.nsn
+:b shell 37
+./bin/nasin r tests/return_record.nsn
 :i returncode 0
 :b stdout 18
 Hello from record
 
 :b stderr 0
 
-:b shell 41
-./target/release/nasin r tests/method.nsn
+:b shell 30
+./bin/nasin r tests/method.nsn
 :i returncode 0
 :b stdout 28
 Hello from record
@@ -120,8 +120,8 @@ Hi method
 
 :b stderr 0
 
-:b shell 44
-./target/release/nasin r tests/interface.nsn
+:b shell 33
+./bin/nasin r tests/interface.nsn
 :i returncode 0
 :b stdout 110
 LinesA
@@ -136,8 +136,8 @@ implementation omitted
 
 :b stderr 0
 
-:b shell 48
-./target/release/nasin r tests/func_as_value.nsn
+:b shell 37
+./bin/nasin r tests/func_as_value.nsn
 :i returncode 0
 :b stdout 42
 LinesA
@@ -147,8 +147,8 @@ Hello indirect
 
 :b stderr 0
 
-:b shell 47
-./target/release/nasin r tests/generic_func.nsn
+:b shell 36
+./bin/nasin r tests/generic_func.nsn
 :i returncode 0
 :b stdout 15
 u8
@@ -158,8 +158,8 @@ bool
 
 :b stderr 0
 
-:b shell 49
-./target/release/nasin r tests/generic_record.nsn
+:b shell 38
+./bin/nasin r tests/generic_record.nsn
 :i returncode 0
 :b stdout 15
 u8
@@ -169,8 +169,8 @@ bool
 
 :b stderr 0
 
-:b shell 49
-./target/release/nasin r tests/generic_method.nsn
+:b shell 38
+./bin/nasin r tests/generic_method.nsn
 :i returncode 0
 :b stdout 15
 u8
@@ -180,8 +180,8 @@ bool
 
 :b stderr 0
 
-:b shell 51
-./target/release/nasin r tests/conditional_impl.nsn
+:b shell 40
+./bin/nasin r tests/conditional_impl.nsn
 :i returncode 0
 :b stdout 18
 hello
@@ -191,22 +191,19 @@ hello
 
 :b stderr 0
 
-:b shell 57
-./target/release/nasin r tests/conditional_impl_error.nsn
+:b shell 46
+./bin/nasin r tests/conditional_impl_error.nsn
 :i returncode 1
 :b stdout 0
 
-:b stderr 477
-/home/felipe/Projects/nasin/nasin/tests/conditional_impl_error.nsn:22:8 - error: Expected type StringValue, but found Container(u8) instead
-22 | main = string_with(int_value) ; ERROR: int_value cannot be used as StringValue
-            ^
+:b stderr 239
 /home/felipe/Projects/nasin/nasin/tests/conditional_impl_error.nsn:22:8 - error: Expected type StringValue, but found Container(u8) instead
 22 | main = string_with(int_value) ; ERROR: int_value cannot be used as StringValue
             ^
 
 
-:b shell 63
-./target/release/nasin r tests/generic_func_with_constraint.nsn
+:b shell 52
+./bin/nasin r tests/generic_func_with_constraint.nsn
 :i returncode 0
 :b stdout 12
 Foo
@@ -216,22 +213,22 @@ B
 
 :b stderr 0
 
-:b shell 69
-./target/release/nasin r tests/generic_func_with_constraint_error.nsn
+:b shell 58
+./bin/nasin r tests/generic_func_with_constraint_error.nsn
 :i returncode 1
 :b stdout 0
 
-:b stderr 321
-/home/felipe/Projects/nasin/nasin/tests/generic_func_with_constraint_error.nsn:6:5 - error: Expected type T, but found Foo instead
+:b stderr 336
+/home/felipe/Projects/nasin/nasin/tests/generic_func_with_constraint_error.nsn:6:19 - error: Expected type Foo, but found T instead
 6 | dispatched({}:Foo)
-    ^
+                  ^
 /home/felipe/Projects/nasin/nasin/tests/generic_func_with_constraint_error.nsn:7:5 - error: Expected type T, but found Bar instead
 7 | dispatched({}:Bar)
     ^
 
 
-:b shell 49
-./target/release/nasin r tests/readme_example.nsn
+:b shell 38
+./bin/nasin r tests/readme_example.nsn
 :i returncode 0
 :b stdout 11
 right

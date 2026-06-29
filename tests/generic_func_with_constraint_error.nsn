@@ -11,8 +11,8 @@ type Foo {}
 type Bar {}
 
 type IFace interface {
-    method(): str
+    method(x: Self): str
 }
 
 typevar T: IFace
-dispatched(x: T) = x.method()
+dispatched(x: T) = x.method

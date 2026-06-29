@@ -18,14 +18,14 @@
         {
             "label": "test",
             "type": "shell",
-            "command": "./first.rs --release && ./rere.py replay tests/_test.list",
+            "command": "./first.rs --release --test",
             "problemMatcher": [],
             "group": { "kind": "test", "isDefault": true }
         },
         {
             "label": "record-test",
             "type": "shell",
-            "command": "./first.rs --release && ./rere.py record tests/_test.list",
+            "command": "./first.rs --release --record",
             "problemMatcher": [],
             "group": { "kind": "test" }
         }

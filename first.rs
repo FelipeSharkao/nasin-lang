@@ -19,6 +19,10 @@ use scopeguard::defer;
 struct Cli {
     #[arg(short, long)]
     run: bool,
+    #[arg(short, long)]
+    test: bool,
+    #[arg(long)]
+    record: bool,
     #[arg(long)]
     release: bool,
     #[arg(long)]
@@ -52,6 +56,14 @@ fn main() {
         } else {
             fs::copy("target/debug/nasin", "bin/nasin").unwrap();
         }
+    }
+
+    if cli.test {
+        cmd!("./rere.py", "replay", "tests/_test.list").run();
+    }
+
+    if cli.record {
+        cmd!("./rere.py", "record", "tests/_test.list").run();
     }
 }
 
