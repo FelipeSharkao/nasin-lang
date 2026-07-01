@@ -184,7 +184,7 @@ impl<'a, 't> ModuleParser<'a, 't> {
                 // FIXME: not all methods are virtual, we should handle this properly
                 true,
             );
-            method_info.ty_args = ty_ref.args.clone();
+            method_info.ty_args = Some(ty_ref.args.clone());
 
             let modules = self.ctx.lock_modules();
             let typedef = self.types.get_typedef(ty_ref.key, &*modules);
@@ -349,6 +349,19 @@ impl<'a, 't> ModuleParser<'a, 't> {
             let method_name = method_name_node
                 .get_text(&self.ctx.source_manager.source(self.src_idx).content().text);
 
+            let method_info = b::FuncMethodInfo::new(
+                method_name.to_string(),
+                b::TypeRefKey::Custom {
+                    mod_idx: self.mod_idx,
+                    idx:     ty_idx,
+                },
+                // FIXME: since in the method's implementations we're not
+                // handling is_virtual properly, we can't handle it here
+                // as well to be consistent. As soon as we implement it
+                // there, we should use `is_virt` here
+                true,
+            );
+
             self.declare_func(
                 name.with(
                     method_name,
@@ -356,18 +369,7 @@ impl<'a, 't> ModuleParser<'a, 't> {
                     Some(b::Loc::from_node(self.src_idx, &method_name_node)),
                 ),
                 method_node,
-                Some(b::FuncMethodInfo::new(
-                    method_name.to_string(),
-                    b::TypeRefKey::Custom {
-                        mod_idx: self.mod_idx,
-                        idx:     ty_idx,
-                    },
-                    // FIXME: since in the method's implementations we're not
-                    // handling is_virtual properly, we can't handle it here
-                    // as well to be consistent. As soon as we implement it
-                    // there, we should use `is_virt` here
-                    true,
-                )),
+                Some(method_info),
                 is_virt,
             );
         }
@@ -440,7 +442,7 @@ impl<'a, 't> ModuleParser<'a, 't> {
 
         let typedef = self.types.get_typedef_mut(ty_ref.key, modules);
         for iface_key in iface_keys {
-            let impl_decl = b::ImplDecl::new(iface_key, constraints.clone(), loc);
+            let impl_decl = b::ImplDecl::new(iface_key, vec![], constraints.clone(), loc);
             typedef.impls.push(impl_decl);
         }
     }
@@ -450,8 +452,29 @@ impl<'a, 't> ModuleParser<'a, 't> {
 
         let old_self_type = self.types.idents.get(SELF_TYPE_INDENT).cloned();
 
-        if let Some(method) = &func.func.method {
-            let type_ref = b::TypeRef::new(method.ty).with_args(method.ty_args.clone());
+        if let Some(method) = &mut func.func.method {
+            let ty_args = match &method.ty_args {
+                Some(ty_args) => ty_args.clone(),
+                None => {
+                    let modules = &self.ctx.lock_modules();
+                    let typedef = self.types.get_typedef(method.ty, modules);
+                    typedef
+                        .generics
+                        .iter()
+                        .map(|&typevar_idx| {
+                            b::Type::new(
+                                b::TypeBody::TypeVar(b::TypeVar::new(
+                                    self.mod_idx,
+                                    typevar_idx,
+                                )),
+                                None,
+                            )
+                        })
+                        .collect_vec()
+                }
+            };
+
+            let type_ref = b::TypeRef::new(method.ty).with_args(ty_args);
             self.types
                 .idents
                 .insert(SELF_TYPE_INDENT.to_string(), type_ref.into());

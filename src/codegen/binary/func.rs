@@ -1127,12 +1127,17 @@ impl<'a> FuncCodegen<'a, '_> {
                 let typedef = ty_ref.get_typedef(self.ctx.modules);
                 let method = &typedef.methods[name];
 
+                let base_name = match name.find('<') {
+                    Some(pos) => &name[..pos],
+                    None => name,
+                };
+
                 let offset = self
                     .ctx
                     .vtables_desc
                     .get(&ty_ref.key)
                     .expect("Interface should already be defined")
-                    .method_offset(name, &self.ctx.cl_module)
+                    .method_offset(base_name, &self.ctx.cl_module)
                     .unwrap();
 
                 let builder = expect_builder!(self);

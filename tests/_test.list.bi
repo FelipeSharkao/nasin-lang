@@ -1,4 +1,4 @@
-:i count 23
+:i count 24
 :b shell 29
 ./bin/nasin r tests/hello.nsn
 :i returncode 0
@@ -218,14 +218,25 @@ B
 :i returncode 1
 :b stdout 0
 
-:b stderr 336
-/home/felipe/Projects/nasin/nasin/tests/generic_func_with_constraint_error.nsn:6:19 - error: Expected type Foo, but found T instead
+:b stderr 321
+/home/felipe/Projects/nasin/nasin/tests/generic_func_with_constraint_error.nsn:6:5 - error: Expected type T, but found Foo instead
 6 | dispatched({}:Foo)
-                  ^
+    ^
 /home/felipe/Projects/nasin/nasin/tests/generic_func_with_constraint_error.nsn:7:5 - error: Expected type T, but found Bar instead
 7 | dispatched({}:Bar)
     ^
 
+
+:b shell 41
+./bin/nasin r tests/generic_interface.nsn
+:i returncode 0
+:b stdout 18
+hello
+42
+hello
+42
+
+:b stderr 0
 
 :b shell 38
 ./bin/nasin r tests/readme_example.nsn

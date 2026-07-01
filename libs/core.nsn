@@ -52,6 +52,15 @@ assert(cond: bool, desc: str): bool =
 internal_heap_alloc(size: usize): Ptr(u8) =
     libc_malloc(size)
 
+type ToStr interface {
+    to_str(x: Self): str
+}
+
+impl str : ToStr
+str.to_str(x: Self) = x
+
+impl u8 : ToStr
+
 u8.to_str(x: Self): str =
     let BUF_SIZE = 4
     let buf = internal_heap_alloc(BUF_SIZE)

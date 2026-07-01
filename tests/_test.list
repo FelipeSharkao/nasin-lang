@@ -20,4 +20,5 @@
 ./bin/nasin r tests/conditional_impl_error.nsn
 ./bin/nasin r tests/generic_func_with_constraint.nsn
 ./bin/nasin r tests/generic_func_with_constraint_error.nsn
+./bin/nasin r tests/generic_interface.nsn
 ./bin/nasin r tests/readme_example.nsn

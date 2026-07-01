@@ -6,6 +6,7 @@ node_modules/
 bin/*
 target/
 tests/build
+build
 *.o
 
 # dotenv environment variable files
@@ -20,4 +21,4 @@ tests/build
 
 # AI slop
 superpowers
-/build
+.codegraph

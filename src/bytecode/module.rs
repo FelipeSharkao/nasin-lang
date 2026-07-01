@@ -18,6 +18,7 @@ use crate::utils::SortedMap;
 #[derive(Debug, Clone, ctor)]
 pub struct ImplDecl {
     pub iface: TypeRefKey,
+    pub iface_args: Vec<TypeBody>,
     pub type_args_constraints: Option<Vec<TypeBody>>,
     pub loc: Loc,
     #[ctor(default)]
@@ -266,7 +267,7 @@ pub struct FuncMethodInfo {
     pub ty:         TypeRefKey,
     pub is_virtual: bool,
     #[ctor(default)]
-    pub ty_args:    Vec<Type>,
+    pub ty_args:    Option<Vec<Type>>,
 }
 
 #[derive(Debug, Clone, From)]

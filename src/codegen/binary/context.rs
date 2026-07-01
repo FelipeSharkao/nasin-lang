@@ -312,7 +312,12 @@ impl<'a> CodegenContext<'a> {
             );
 
             if !self.vtables_desc.contains_key(&iface_key) {
-                let method_names = iface_def.methods.keys().cloned().collect_vec();
+                let method_names = iface_def
+                    .methods
+                    .keys()
+                    .filter(|name| !name.contains('<'))
+                    .cloned()
+                    .collect_vec();
                 self.vtables_desc
                     .insert(iface_key, types::VTableDesc::new(method_names));
             }
@@ -369,7 +374,14 @@ impl<'a> CodegenContext<'a> {
         typedef: &b::TypeDef,
     ) -> &types::VTableDesc {
         self.vtables_desc.entry(ty_key).or_insert_with(|| {
-            types::VTableDesc::new(typedef.methods.keys().cloned().collect())
+            types::VTableDesc::new(
+                typedef
+                    .methods
+                    .keys()
+                    .filter(|name| !name.contains('<'))
+                    .cloned()
+                    .collect(),
+            )
         })
     }
 

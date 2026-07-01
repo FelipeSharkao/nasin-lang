@@ -599,6 +599,39 @@ impl Type {
                 substitutions.insert(typevar.typevar_idx, ty);
             }
             (body!(TypeBody::TypeRef(a)), body!(TypeBody::TypeRef(b)))
+                if !a.is_same_of(b) && b.implements(a, modules) =>
+            {
+                if a.args.is_empty() {
+                    return true;
+                }
+
+                let b_def = b.get_typedef(modules);
+
+                let impl_decl =
+                    b_def.impls.iter().find(|decl| decl.iface == a.key).unwrap();
+                assert!(impl_decl.iface_args.len() == a.args.len());
+
+                let subs = izip!(&b_def.generics, &b.args)
+                    .map(|(&typevar, arg)| (typevar, arg.clone()))
+                    .collect();
+
+                for (a_arg, iface_arg) in izip!(&a.args, &impl_decl.iface_args) {
+                    let iface_arg_ty = Type::new(iface_arg.clone(), None);
+                    let resolved_ty = iface_arg_ty
+                        .substitute_typevar(&subs)
+                        .unwrap_or(iface_arg_ty);
+
+                    if !a_arg.collect_typevar_substitutions(
+                        &Type::new(resolved_ty.body, None),
+                        variance,
+                        substitutions,
+                        modules,
+                    ) {
+                        return false;
+                    }
+                }
+            }
+            (body!(TypeBody::TypeRef(a)), body!(TypeBody::TypeRef(b)))
                 if a.is_same_of(b) =>
             {
                 if a.args.len() != b.args.len() {
@@ -763,16 +796,60 @@ impl TypeRef {
 
         match (&self_def.body, &other_def.body) {
             (_, TypeDefBody::Interface) => {
-                if !other.args.is_empty() {
-                    todo!("merge of interface and record with generics");
-                }
-
                 let args: Vec<TypeBody> =
                     self.args.iter().map(|arg| arg.body.clone()).collect();
 
                 self_def.impls.iter().any(|impl_decl| {
-                    impl_decl.iface == other.key
-                        && impl_decl.constraints_satisfied(&args, modules)
+                    if impl_decl.iface != other.key {
+                        return false;
+                    }
+                    if !impl_decl.constraints_satisfied(&args, modules) {
+                        return false;
+                    }
+
+                    if impl_decl.iface_args.is_empty() {
+                        return true;
+                    }
+
+                    if other.args.is_empty() {
+                        return false;
+                    }
+
+                    let substitutions: HashMap<TypeVarIdx, Type> =
+                        izip!(&self_def.generics, &self.args)
+                            .map(|(&typevar, arg)| (typevar, arg.clone()))
+                            .collect();
+
+                    let resolved: Vec<TypeBody> = impl_decl
+                        .iface_args
+                        .iter()
+                        .map(|arg| {
+                            Type::new(arg.clone(), None)
+                                .substitute_typevar(&substitutions)
+                                .map_or_else(|| arg.clone(), |ty| ty.body)
+                        })
+                        .collect();
+
+                    if resolved.len() != other.args.len() {
+                        return false;
+                    }
+
+                    izip!(&resolved, &other.args).all(|(resolved, other_arg)| {
+                        if let TypeBody::TypeVar(typevar) = &other_arg.body {
+                            let def =
+                                &modules[typevar.mod_idx].typevars[typevar.typevar_idx];
+                            match &def.constraint {
+                                Some(constraint) => {
+                                    resolved.extends(&constraint.body, modules)
+                                }
+                                None => true,
+                            }
+                        } else {
+                            resolved
+                                .merge(&other_arg.body, Variance::Covariant, modules)
+                                .is_some()
+                        }
+                    })
                 })
             }
             _ => false,

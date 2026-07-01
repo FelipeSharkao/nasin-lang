@@ -23,7 +23,12 @@ pub struct CompilerError {
 }
 impl fmt::Display for CompilerError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        for err in &self.errors {
+        let mut sorted: Vec<&Error> = self.errors.iter().collect();
+        sorted.sort_by_key(|err| {
+            err.loc
+                .map(|loc| (loc.source_idx, loc.start_line, loc.start_col))
+        });
+        for err in sorted {
             if let (Some(source_manager), Some(loc)) = (&self.source_manager, &err.loc) {
                 let idx = loc.source_idx;
                 let src = source_manager.source(idx);

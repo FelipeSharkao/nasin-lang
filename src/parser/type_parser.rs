@@ -271,7 +271,10 @@ impl<'a, 't> TypeParser<'a, 't> {
                 let loc = b::Loc::from_node(self.src_idx, &ty_node);
                 let ty = self.parse_type_expr(ty_node);
                 match ty.body {
-                    b::TypeBody::TypeRef(t) => Some(b::ImplDecl::new(t.key, None, loc)),
+                    b::TypeBody::TypeRef(t) => {
+                        let iface_args = t.args.into_iter().map(|arg| arg.body).collect();
+                        Some(b::ImplDecl::new(t.key, iface_args, None, loc))
+                    }
                     _ => {
                         self.ctx.push_error(errors::Error::new(
                             errors::TypeNotInterface::new(

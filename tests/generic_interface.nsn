@@ -1,0 +1,31 @@
+typevar T
+typevar S: ToStr
+
+type StringContainer : GetValue(str) {
+    data: str
+}
+
+type IntContainer : GetValue(u8) {
+    data: u8
+}
+
+type ToStrContainer(S): GetValue(S) {
+    data: S
+}
+
+type GetValue(T) interface {
+    value(x: Self): T
+}
+
+main = [
+    dispatched({data="hello"}:StringContainer)
+    dispatched({data=42}:IntContainer)
+    dispatched({data="hello"}:ToStrContainer(str))
+    dispatched({data=42}:ToStrContainer(u8))
+]
+
+dispatched(get_value: GetValue(S)) = get_value.value.to_str
+
+StringContainer.value(x: Self)   = x.data
+IntContainer.value(x: Self)      = x.data
+ToStrContainer(S).value(x: Self) = x.data
