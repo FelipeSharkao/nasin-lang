@@ -338,7 +338,7 @@ impl<'a> TypeChecker<'a> {
                 for (arg, param) in izip!(args, params) {
                     let param_ty = &modules[call_mod_idx].values[param].ty;
                     let kind = if call_mod_idx == self.mod_idx
-                        && !param_ty.body.typevars().next().is_some()
+                        && !param_ty.body.has_typevars()
                     {
                         ConstraintKind::TypeOf(param, false)
                     } else {
@@ -348,8 +348,7 @@ impl<'a> TypeChecker<'a> {
                 }
 
                 let ret_ty = &modules[call_mod_idx].values[ret].ty;
-                let kind = if call_mod_idx == self.mod_idx
-                    && !ret_ty.body.typevars().next().is_some()
+                let kind = if call_mod_idx == self.mod_idx && !ret_ty.body.has_typevars()
                 {
                     ConstraintKind::TypeOf(ret, true)
                 } else {
@@ -630,8 +629,12 @@ impl<'a> TypeChecker<'a> {
                     modules,
                 );
             }
-            b::InstrBody::Dispatch(v, ty_key) => {
-                let ty = b::Type::new(b::TypeRef::new(*ty_key).into(), None);
+            b::InstrBody::Dispatch(v, ty_key, args) => {
+                let mut ty_ref = b::TypeRef::new(*ty_key);
+                ty_ref
+                    .args
+                    .extend(args.iter().map(|t| b::Type::new(t.clone().into(), None)));
+                let ty = b::Type::new(ty_ref.into(), None);
                 self.add_constraint(
                     *v,
                     Constraint::new(ConstraintKind::Is(ty), loc),

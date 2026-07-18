@@ -24,11 +24,13 @@ enum FuncArgs {
 
 #[derive(Debug, ctor)]
 struct DispatchedTypeArgs {
-    ty_key:        b::TypeRefKey,
-    iface_key:     b::TypeRefKey,
-    args:          Vec<b::TypeBody>,
+    ty_key: b::TypeRefKey,
+    iface_key: b::TypeRefKey,
+    args: Vec<b::TypeBody>,
     #[ctor(default)]
-    substitutions: HashMap<String, HashMap<b::TypeVarIdx, b::Type>>,
+    substitutions: HashMap<b::TypeVarIdx, b::Type>,
+    #[ctor(default)]
+    methods_substitutions: HashMap<String, HashMap<b::TypeVarIdx, b::Type>>,
 }
 
 #[derive(Clone, Copy, ctor)]
@@ -132,24 +134,20 @@ impl<'a> InstantiateGenericFuncsStep<'a> {
         };
 
         let new_prop_name = b::Name::from_ident(&prop, b::NameIdentKind::Func, None)
-            .with_type_params(tys.into_iter().map(|body| b::Type::new(body, None)), None);
-
-        let mut new_prop = String::new();
-        b::Printer::new(&modules, &self.ctx.cfg)
-            .write_name(&mut new_prop, &new_prop_name)
-            .unwrap();
+            .with_type_params(tys.into_iter().map(|body| b::Type::new(body, None)), None)
+            .formated(&modules, &self.ctx.cfg, None);
 
         let typedef = &mut type_ref_key.get_typedef_mut(modules);
         let mut new_method = typedef.methods.get(&prop).unwrap().clone();
         new_method.func_ref.1 = new_func_idx;
 
-        typedef.methods.insert(new_prop.clone(), new_method);
+        typedef.methods.insert(new_prop_name.clone(), new_method);
 
         let instr = cursor.instr_mut(&mut modules[mod_idx]).unwrap();
         if let b::InstrBody::GetProperty(_, prop) | b::InstrBody::GetMethod(_, prop) =
             &mut instr.body
         {
-            *prop = new_prop;
+            *prop = new_prop_name;
         }
     }
 
@@ -191,21 +189,61 @@ impl<'a> InstantiateGenericFuncsStep<'a> {
 
         for item in items {
             let typedef = item.ty_key.get_typedef_mut(modules);
-            let impl_decl = typedef.impls.iter_mut().find(|d| d.iface == item.iface_key);
-            if let Some(impl_decl) = impl_decl {
-                impl_decl.used_type_args.insert(item.args);
+            let impl_idx = typedef.impls.iter().position(|d| d.iface == item.iface_key);
+            if let Some(impl_idx) = impl_idx {
+                if !typedef.impls[impl_idx]
+                    .generic_instantiations
+                    .contains_key(&item.args)
+                {
+                    let impl_decl = &typedef.impls[impl_idx];
+
+                    let mut iface_args = impl_decl.iface_args.clone();
+                    for iface_arg in &mut iface_args {
+                        match iface_arg.substitute_typevar(&item.substitutions) {
+                            Some(ty) => *iface_arg = ty,
+                            None => {}
+                        }
+                    }
+
+                    let new_impl_idx = typedef.impls.len();
+                    typedef.impls.push(b::ImplDecl::new(
+                        item.iface_key,
+                        iface_args,
+                        Some(item.args.clone()),
+                        impl_decl.loc,
+                    ));
+
+                    typedef.impls[impl_idx]
+                        .generic_instantiations
+                        .insert(item.args.clone(), new_impl_idx);
+                }
             }
 
-            for (method_name, substitutions) in item.substitutions {
+            for (method_name, substitutions) in item.methods_substitutions {
                 let typedef = item.ty_key.get_typedef(modules);
                 let method = typedef.methods.get(&method_name).unwrap();
-                self.instantiate_generic_func(
+
+                let (new_func_idx, tys) = self.instantiate_generic_func(
                     cursor,
                     modules,
                     method.func_ref.0,
                     method.func_ref.1,
                     &substitutions,
                 );
+
+                let new_method_name =
+                    b::Name::from_ident(&method_name, b::NameIdentKind::Func, None)
+                        .with_type_params(
+                            tys.into_iter().map(|body| b::Type::new(body, None)),
+                            None,
+                        )
+                        .formated(&modules, &self.ctx.cfg, None);
+
+                let typedef = &mut item.ty_key.get_typedef_mut(modules);
+                let mut new_method = typedef.methods.get(&method_name).unwrap().clone();
+                new_method.func_ref.1 = new_func_idx;
+
+                typedef.methods.insert(new_method_name, new_method);
             }
         }
     }
@@ -374,18 +412,22 @@ impl<'a> InstantiateGenericFuncsStep<'a> {
             let func = &modules[method.func_ref.0].funcs[method.func_ref.1];
             let reciever_ty = &modules[method.func_ref.0].values[func.params[0]].ty;
 
-            let mut substitutions = HashMap::new();
+            let mut method_substitutions = HashMap::new();
             reciever_ty.collect_typevar_substitutions(
                 ty,
                 b::Variance::Covariant,
-                &mut substitutions,
+                &mut method_substitutions,
                 modules,
             );
 
-            if !substitutions.is_empty() {
+            if !method_substitutions.is_empty() {
+                for (&k, v) in &method_substitutions {
+                    result.substitutions.insert(k, v.clone());
+                }
+
                 result
-                    .substitutions
-                    .insert(method_name.to_string(), substitutions);
+                    .methods_substitutions
+                    .insert(method_name.to_string(), method_substitutions);
             }
         }
 

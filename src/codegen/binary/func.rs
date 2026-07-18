@@ -810,21 +810,25 @@ impl<'a> FuncCodegen<'a, '_> {
                     offset += native_ty.bytes() as i32;
                 }
             }
-            b::InstrBody::Dispatch(v, iface_ty_key) => {
-                let ty = &self.ctx.modules[mod_idx].values[*v].ty;
+            &b::InstrBody::Dispatch(v, iface_ty_key, ref iface_args) => {
+                let ty = &self.ctx.modules[mod_idx].values[v].ty;
                 let b::TypeBody::TypeRef(ty_ref) = &ty.body else {
                     panic!("type should be a typeref");
                 };
                 let type_args = ty_ref.args.iter().map(|t| t.body.clone()).collect();
-                let vtable_ref =
-                    types::VTableRef::new(*iface_ty_key, ty_ref.key, type_args);
+                let vtable_ref = types::VTableRef::new(
+                    iface_ty_key,
+                    ty_ref.key,
+                    iface_args.clone(),
+                    type_args,
+                );
                 let vtable_data = self.ctx.vtables_impl[&vtable_ref];
                 let vtable_gv = self.get_global_value(vtable_data);
                 let vtable = expect_builder!(self)
                     .ins()
                     .global_value(self.ctx.cl_module.isa().pointer_type(), vtable_gv);
 
-                let src = self.use_value_by_ref(mod_idx, *v);
+                let src = self.use_value_by_ref(mod_idx, v);
 
                 let dispatched = types::DynDispatched::new(src, vtable.into());
                 self.values.insert(

@@ -628,14 +628,14 @@ impl<'a> Printer<'a> {
 
         write!(line, "{S:indent$}impl ")?;
 
-        let constraints = impl_decl.type_args_constraints.iter().flatten();
+        let mut constraints = impl_decl.type_args_constraints.iter().flatten().peekable();
 
         if let TypeDefBody::Builtin(builtin) = &typedef.body {
             self.write_builtin_type(line, builtin, constraints)?;
         } else {
             self.write_name(line, &typedef.name)?;
 
-            if typedef.generics.len() > 0 {
+            if !typedef.generics.is_empty() && constraints.peek().is_some() {
                 write!(line, "(")?;
                 for (i, ty) in constraints.enumerate() {
                     if i > 0 {
@@ -648,7 +648,7 @@ impl<'a> Printer<'a> {
         }
 
         write!(line, " : ")?;
-        self.write_type_ref(line, &TypeRef::new(impl_decl.iface))?;
+        self.write_type_key(line, impl_decl.iface, &impl_decl.iface_args)?;
 
         if !self.reconstruct {
             let loc_comment = table.push_cell();
@@ -772,9 +772,15 @@ impl<'a> Printer<'a> {
             InstrBody::PtrSet(p, val) => write!(f, "PtrSet(v{p}, v{val})"),
             InstrBody::TypeName(v) => write!(f, "TypeName(v{v})"),
             InstrBody::CompileError => write!(f, "CompileError"),
-            InstrBody::Dispatch(v, ty_key) => {
+            InstrBody::Dispatch(v, ty_key, args) => {
                 write!(f, "Dispatch(v{v}, ")?;
                 self.write_type_ref(f, &TypeRef::new(*ty_key))?;
+                if !args.is_empty() {
+                    for arg in args {
+                        write!(f, ", ")?;
+                        self.write_type_body(f, arg)?;
+                    }
+                }
                 write!(f, ")")
             }
             InstrBody::Type(v, ty) => {
@@ -824,30 +830,36 @@ impl<'a> Printer<'a> {
     }
 
     fn write_type_ref(&mut self, f: &mut impl Write, type_ref: &TypeRef) -> fmt::Result {
-        let typedef = type_ref.get_typedef(self.modules);
+        self.write_type_key(f, type_ref.key, type_ref.args.iter().map(|arg| &arg.body))
+    }
+
+    fn write_type_key(
+        &mut self,
+        f: &mut impl Write,
+        type_key: TypeRefKey,
+        args: impl IntoIterator<Item = impl Borrow<TypeBody>>,
+    ) -> fmt::Result {
+        let typedef = type_key.get_typedef(self.modules);
 
         if let TypeDefBody::Builtin(builtin) = &typedef.body {
-            self.write_builtin_type(
-                f,
-                builtin,
-                type_ref.args.iter().map(|arg| &arg.body),
-            )?;
+            self.write_builtin_type(f, builtin, args)?;
         } else {
             self.write_name(f, &typedef.name)?;
 
-            if !type_ref.args.is_empty() {
+            let mut args = args.into_iter().peekable();
+            if args.peek().is_some() {
                 write!(f, "(")?;
-                for (i, arg) in type_ref.args.iter().enumerate() {
+                for (i, arg) in args.enumerate() {
                     if i > 0 {
                         write!(f, ", ")?;
                     }
-                    self.write_type_body(f, &arg.body)?;
+                    self.write_type_body(f, arg.borrow())?;
                 }
                 write!(f, ")")?;
             }
         }
 
-        if let TypeRefKey::Custom { mod_idx, idx } = type_ref.key
+        if let TypeRefKey::Custom { mod_idx, idx } = type_key
             && self.show_ids
         {
             write!(f, " (type {}-{})", mod_idx, idx)?;

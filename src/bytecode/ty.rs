@@ -350,6 +350,68 @@ impl TypeBody {
         .into_iter()
     }
 
+    pub fn substitute_typevar<'m>(
+        &self,
+        substitutions: &'m HashMap<TypeVarIdx, Type>,
+    ) -> Option<Self> {
+        let subs = TypevarSubstitutions(substitutions);
+
+        macro_rules! validate {
+            ($($iter:expr),* $(,)?) => {
+                if chain!($($iter),*).all(|ty| ty.is_none()) {
+                    return None;
+                }
+            };
+        }
+
+        match &self {
+            Self::TypeVar(typevar) => substitutions
+                .get(&typevar.typevar_idx)
+                .map(|t| t.body.clone()),
+            Self::TypeRef(type_ref) => {
+                let args = subs.substitute_many(&type_ref.args);
+                validate!(&args);
+                Some(Self::TypeRef(TypeRef {
+                    args: subs.mix_many(&type_ref.args, args).collect(),
+                    ..type_ref.clone()
+                }))
+            }
+            Self::Inferred(inferred) => {
+                let members = subs.substitute_many(inferred.members.values());
+                let properties = subs.substitute_many(inferred.properties.values());
+                validate!(&members, &properties);
+                Some(Self::Inferred(InferredType {
+                    members: izip!(
+                        inferred.members.keys().cloned(),
+                        subs.mix_many(inferred.members.values(), members)
+                    )
+                    .collect(),
+                    properties: izip!(
+                        inferred.properties.keys().cloned(),
+                        subs.mix_many(inferred.properties.values(), properties)
+                    )
+                    .collect(),
+                    ..inferred.clone()
+                }))
+            }
+            Self::Func(func_ty) => {
+                let params = subs.substitute_many(&func_ty.params);
+                let ret = subs.substitute(&func_ty.ret);
+                validate!(&params, Some(&ret));
+                let body = FuncType::new(
+                    subs.mix_many(&func_ty.params, params).collect(),
+                    subs.mix(&func_ty.ret, ret).into(),
+                )
+                .into();
+                Some(body)
+            }
+        }
+    }
+
+    pub fn has_typevars(&self) -> bool {
+        self.typevars().next().is_some()
+    }
+
     /// Returns a new type with all typevars marked as rigid or not. See [`TypeVar`].
     pub fn with_rigid(mut self, rigid: bool) -> Self {
         for typevar in &mut self.typevars_mut() {
@@ -507,59 +569,8 @@ impl Type {
     pub fn substitute_typevar<'m>(
         &self,
         substitutions: &'m HashMap<TypeVarIdx, Type>,
-    ) -> Option<Type> {
-        let subs = TypevarSubstitutions(substitutions);
-
-        macro_rules! validate {
-            ($($iter:expr),* $(,)?) => {
-                if chain!($($iter),*).all(|ty| ty.is_none()) {
-                    return None;
-                }
-            };
-        }
-
-        let body = match &self.body {
-            TypeBody::TypeVar(typevar) => {
-                return substitutions.get(&typevar.typevar_idx).cloned();
-            }
-            TypeBody::TypeRef(type_ref) => {
-                let args = subs.substitute_many(&type_ref.args);
-                validate!(&args);
-                TypeBody::TypeRef(TypeRef {
-                    args: subs.mix_many(&type_ref.args, args).collect(),
-                    ..type_ref.clone()
-                })
-            }
-            TypeBody::Inferred(inferred) => {
-                let members = subs.substitute_many(inferred.members.values());
-                let properties = subs.substitute_many(inferred.properties.values());
-                validate!(&members, &properties);
-                TypeBody::Inferred(InferredType {
-                    members: izip!(
-                        inferred.members.keys().cloned(),
-                        subs.mix_many(inferred.members.values(), members)
-                    )
-                    .collect(),
-                    properties: izip!(
-                        inferred.properties.keys().cloned(),
-                        subs.mix_many(inferred.properties.values(), properties)
-                    )
-                    .collect(),
-                    ..inferred.clone()
-                })
-            }
-            TypeBody::Func(func_ty) => {
-                let params = subs.substitute_many(&func_ty.params);
-                let ret = subs.substitute(&func_ty.ret);
-                validate!(&params, Some(&ret));
-                FuncType::new(
-                    subs.mix_many(&func_ty.params, params).collect(),
-                    subs.mix(&func_ty.ret, ret).into(),
-                )
-                .into()
-            }
-        };
-
+    ) -> Option<Self> {
+        let body = self.body.substitute_typevar(substitutions)?;
         Some(Type::new(body, self.loc))
     }
 
@@ -962,7 +973,7 @@ impl TypeRef {
         chain!(Some(base_method.func_ref), instantiated_funcs).find_map(|func_ref| {
             let func = &modules[func_ref.0].funcs[func_ref.1];
             let recv_ty = &modules[base_method.func_ref.0].values[func.params[0]].ty;
-            if recv_ty.body.typevars().next().is_some()
+            if recv_ty.body.has_typevars()
                 || !matches_if!(
                     &recv_ty.body,
                     TypeBody::TypeRef(recv_ty_ref),
@@ -1037,7 +1048,7 @@ impl TypeVar {
         let def = &modules[self.mod_idx].typevars[self.typevar_idx];
         let cons = def.constraint.as_ref()?;
         cons.body.field(name, modules).map(|mut ty| {
-            if ty.body.typevars().next().is_some() {
+            if ty.body.has_typevars() {
                 utils::replace_with(&mut ty.to_mut().body, |tyb| {
                     tyb.with_rigid(self.rigid)
                 });
@@ -1055,7 +1066,7 @@ impl TypeVar {
         let cons = def.constraint.as_ref()?;
         let method = cons.body.method(name, modules);
         method.map(|mut ty| {
-            if ty.body.typevars().next().is_some() {
+            if ty.body.has_typevars() {
                 utils::replace_with(&mut ty.to_mut().body, |tyb| {
                     tyb.with_rigid(self.rigid)
                 });

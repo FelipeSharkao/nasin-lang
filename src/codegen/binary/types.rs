@@ -661,7 +661,8 @@ impl VTableDesc {
 
 #[derive(ctor, Hash, PartialEq, Eq, Clone, Debug)]
 pub struct VTableRef {
-    pub iface_key: b::TypeRefKey,
-    pub ty_key:    b::TypeRefKey,
-    pub type_args: Vec<b::TypeBody>,
+    pub iface_key:  b::TypeRefKey,
+    pub ty_key:     b::TypeRefKey,
+    pub iface_args: Vec<b::TypeBody>,
+    pub type_args:  Vec<b::TypeBody>,
 }

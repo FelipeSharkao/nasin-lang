@@ -21,8 +21,10 @@ pub struct ImplDecl {
     pub iface_args: Vec<TypeBody>,
     pub type_args_constraints: Option<Vec<TypeBody>>,
     pub loc: Loc,
+    /// Maps generic substitutions to the index of the instantiated impl declaration. Used
+    /// to deduplicate generic instantiations
     #[ctor(default)]
-    pub used_type_args: HashSet<Vec<TypeBody>>,
+    pub generic_instantiations: HashMap<Vec<TypeBody>, usize>,
 }
 
 impl ImplDecl {
@@ -37,6 +39,15 @@ impl ImplDecl {
             arg.merge(constraint, Variance::Covariant, modules)
                 .is_some()
         })
+    }
+
+    pub fn is_generic(&self) -> bool {
+        !self.generic_instantiations.is_empty()
+            || self
+                .type_args_constraints
+                .as_ref()
+                .is_some_and(|args| args.iter().any(TypeBody::has_typevars))
+            || self.iface_args.iter().any(TypeBody::has_typevars)
     }
 }
 

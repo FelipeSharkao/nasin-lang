@@ -303,6 +303,10 @@ impl<'a> CodegenContext<'a> {
         let mut result = Vec::new();
 
         for impl_decl in &typedef.impls {
+            if impl_decl.is_generic() {
+                continue;
+            }
+
             let iface_key = impl_decl.iface;
             let iface_def = iface_key.get_typedef(self.modules);
             assert!(
@@ -322,16 +326,16 @@ impl<'a> CodegenContext<'a> {
                     .insert(iface_key, types::VTableDesc::new(method_names));
             }
 
-            if typedef.generics.is_empty() {
-                let data_id = self.insert_type_impls_for_args(ty_key, iface_key, &[]);
-                result.push(data_id);
-            } else {
-                for args in &impl_decl.used_type_args {
-                    let data_id =
-                        self.insert_type_impls_for_args(ty_key, iface_key, args);
-                    result.push(data_id);
-                }
-            }
+            let data_id = self.insert_type_impls_for_args(
+                iface_key,
+                ty_key,
+                &impl_decl.iface_args,
+                impl_decl
+                    .type_args_constraints
+                    .as_ref()
+                    .map_or(&[], Vec::as_slice),
+            );
+            result.push(data_id);
         }
 
         result
@@ -339,11 +343,17 @@ impl<'a> CodegenContext<'a> {
 
     fn insert_type_impls_for_args(
         &mut self,
-        ty_key: b::TypeRefKey,
         iface_key: b::TypeRefKey,
-        args: &[b::TypeBody],
+        ty_key: b::TypeRefKey,
+        iface_args: &[b::TypeBody],
+        ty_args: &[b::TypeBody],
     ) -> cl::DataId {
-        let key = types::VTableRef::new(iface_key, ty_key, args.to_vec());
+        let key = types::VTableRef::new(
+            iface_key,
+            ty_key,
+            iface_args.to_vec(),
+            ty_args.to_vec(),
+        );
         if let Some(&data_id) = self.vtables_impl.get(&key) {
             return data_id;
         }
@@ -353,7 +363,8 @@ impl<'a> CodegenContext<'a> {
             .methods
             .iter()
             .map(|method_name| {
-                let func_ref = self.find_instantiated_method(ty_key, method_name, args);
+                let func_ref =
+                    self.find_instantiated_method(ty_key, method_name, ty_args);
                 let func_id = self.funcs[&func_ref]
                     .func_id
                     .expect("Function should be defined");
