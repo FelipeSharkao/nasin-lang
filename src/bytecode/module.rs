@@ -395,7 +395,7 @@ pub struct Source {
     pub path: PathBuf,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Display, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Display, Default, PartialOrd, Ord)]
 #[display(":{start_line}:{start_col}-{end_line}:{end_col}")]
 #[debug(":{start_line}:{start_col}-{end_line}:{end_col}")]
 pub struct Loc {
@@ -407,6 +407,7 @@ pub struct Loc {
     pub end_col:    usize,
     pub end_byte:   usize,
 }
+
 impl Loc {
     pub fn from_node(source: usize, node: &ts::Node) -> Loc {
         let start_pos = node.start_position();

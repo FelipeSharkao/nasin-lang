@@ -15,7 +15,7 @@ use super::module::*;
 use crate::config::BuildConfig;
 use crate::utils::{self, SortedMap, matches_if, unordered};
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, From)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, From, PartialOrd, Ord)]
 pub enum TypeBody {
     Inferred(InferredType),
     Func(FuncType),
@@ -421,7 +421,7 @@ impl TypeBody {
     }
 }
 
-#[derive(Debug, Clone, ctor)]
+#[derive(Debug, Clone, PartialOrd, Ord, ctor)]
 pub struct Type {
     pub body: TypeBody,
     pub loc:  Option<Loc>,
@@ -740,7 +740,7 @@ impl TypeRefKey {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Setters, ctor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Setters, ctor)]
 #[setters(into, prefix = "with_")]
 pub struct TypeRef {
     pub key:  TypeRefKey,
@@ -1089,7 +1089,7 @@ impl TypeVar {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct InferredType {
     /// Fields used in the constructors
     pub members:    utils::SortedMap<String, Type>,
@@ -1194,7 +1194,7 @@ impl InferredType {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, ctor)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, ctor)]
 pub struct FuncType {
     pub params: Vec<Type>,
     pub ret:    Box<Type>,

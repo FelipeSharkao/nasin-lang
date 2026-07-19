@@ -7,7 +7,7 @@ use super::indented;
 
 /// Ordered map that uses  binary search internally. Lookup is O(log(n)), but it
 /// guarantees order when iterating. Useful for small maps (<50) that are iterated a lot.
-#[derive(PartialEq, Eq, Hash, Clone)]
+#[derive(PartialEq, Eq, Hash, Clone, PartialOrd, Ord)]
 pub struct SortedMap<K: Ord, V> {
     items: Vec<(K, V)>,
 }

@@ -7,7 +7,7 @@ use std::mem;
 use derive_ctor::ctor;
 use itertools::{Itertools, enumerate, izip};
 
-use self::constraints::{Constraint, ConstraintKind};
+use self::constraints::{Constraint, ConstraintKind, Priority};
 use crate::utils::SortedMap;
 use crate::{bytecode as b, context, errors, utils};
 
@@ -60,7 +60,7 @@ impl<'a> TypeChecker<'a> {
                 let mut node = TypeNode::new();
                 if !value.ty.is_unknown() {
                     node.constraints.insert(Constraint::new(
-                        ConstraintKind::Is(value.ty.clone()),
+                        ConstraintKind::Is(value.ty.clone(), Priority::UserDefined),
                         value.ty.loc,
                     ));
                 }
@@ -144,7 +144,10 @@ impl<'a> TypeChecker<'a> {
                     let ty = module.values[gv].ty.clone();
                     self.add_constraint(
                         v,
-                        Constraint::new(ConstraintKind::Is(ty), loc),
+                        Constraint::new(
+                            ConstraintKind::Is(ty, Priority::UserDefined),
+                            loc,
+                        ),
                         modules,
                     );
                 };
@@ -168,7 +171,7 @@ impl<'a> TypeChecker<'a> {
                 let ty = b::Type::builtin(b::BuiltinType::Bool, [], None);
                 self.add_constraint(
                     v,
-                    Constraint::new(ConstraintKind::Is(ty), loc),
+                    Constraint::new(ConstraintKind::Is(ty, Priority::UserDefined), loc),
                     modules,
                 );
             }
@@ -184,7 +187,13 @@ impl<'a> TypeChecker<'a> {
                 };
                 self.add_constraint(
                     v,
-                    Constraint::new(ConstraintKind::Is(b::Type::new(ty_body, None)), loc),
+                    Constraint::new(
+                        ConstraintKind::Is(
+                            b::Type::new(ty_body, None),
+                            Priority::UserDefined,
+                        ),
+                        loc,
+                    ),
                     modules,
                 );
             }
@@ -193,7 +202,10 @@ impl<'a> TypeChecker<'a> {
                 let ty = b::Type::builtin(b::BuiltinType::String, [], None);
                 self.add_constraint(
                     v,
-                    Constraint::new(ConstraintKind::Is(ty.clone()), loc),
+                    Constraint::new(
+                        ConstraintKind::Is(ty.clone(), Priority::UserDefined),
+                        loc,
+                    ),
                     modules,
                 );
             }
@@ -202,14 +214,20 @@ impl<'a> TypeChecker<'a> {
                 let ty = b::Type::builtin(b::BuiltinType::String, [], None);
                 self.add_constraint(
                     v,
-                    Constraint::new(ConstraintKind::Is(ty.clone()), loc),
+                    Constraint::new(
+                        ConstraintKind::Is(ty.clone(), Priority::DerivedDefined),
+                        loc,
+                    ),
                     modules,
                 );
 
                 let len_ty = b::Type::builtin(b::BuiltinType::USize, [], None);
                 self.add_constraint(
                     len_v,
-                    Constraint::new(ConstraintKind::Is(len_ty), loc),
+                    Constraint::new(
+                        ConstraintKind::Is(len_ty, Priority::DerivedDefined),
+                        loc,
+                    ),
                     modules,
                 );
             }
@@ -228,7 +246,10 @@ impl<'a> TypeChecker<'a> {
                     let arr_ty = b::Type::builtin(b::BuiltinType::Array, [item_ty], None);
                     self.add_constraint(
                         v,
-                        Constraint::new(ConstraintKind::Is(arr_ty), loc),
+                        Constraint::new(
+                            ConstraintKind::Is(arr_ty, Priority::DerivedDefined),
+                            loc,
+                        ),
                         modules,
                     );
                 }
@@ -260,7 +281,10 @@ impl<'a> TypeChecker<'a> {
                 let ty = b::Type::builtin(b::BuiltinType::AnyNumber, [], None);
                 self.add_constraint(
                     a,
-                    Constraint::new(ConstraintKind::Is(ty), loc),
+                    Constraint::new(
+                        ConstraintKind::Is(ty, Priority::DerivedDefined),
+                        loc,
+                    ),
                     modules,
                 );
             }
@@ -271,10 +295,13 @@ impl<'a> TypeChecker<'a> {
                 self.add_constraint(
                     x,
                     Constraint::new(
-                        ConstraintKind::Is(b::Type::new(
-                            b::TypeBody::builtin(b::BuiltinType::AnySignedNumber, []),
-                            None,
-                        )),
+                        ConstraintKind::Is(
+                            b::Type::new(
+                                b::TypeBody::builtin(b::BuiltinType::AnySignedNumber, []),
+                                None,
+                            ),
+                            Priority::DerivedDefined,
+                        ),
                         loc,
                     ),
                     modules,
@@ -287,11 +314,10 @@ impl<'a> TypeChecker<'a> {
                 self.add_constraint(
                     x,
                     Constraint::new(
-                        ConstraintKind::Is(b::Type::builtin(
-                            b::BuiltinType::Bool,
-                            [],
-                            None,
-                        )),
+                        ConstraintKind::Is(
+                            b::Type::builtin(b::BuiltinType::Bool, [], None),
+                            Priority::DerivedDefined,
+                        ),
                         loc,
                     ),
                     modules,
@@ -310,13 +336,19 @@ impl<'a> TypeChecker<'a> {
                 let bool_ty = b::Type::builtin(b::BuiltinType::Bool, [], None);
                 self.add_constraint(
                     a,
-                    Constraint::new(ConstraintKind::Is(number_ty), loc),
+                    Constraint::new(
+                        ConstraintKind::Is(number_ty, Priority::DerivedDefined),
+                        loc,
+                    ),
                     modules,
                 );
 
                 self.add_constraint(
                     v,
-                    Constraint::new(ConstraintKind::Is(bool_ty), loc),
+                    Constraint::new(
+                        ConstraintKind::Is(bool_ty, Priority::DerivedDefined),
+                        loc,
+                    ),
                     modules,
                 );
             }
@@ -340,9 +372,12 @@ impl<'a> TypeChecker<'a> {
                     let kind = if call_mod_idx == self.mod_idx
                         && !param_ty.body.has_typevars()
                     {
-                        ConstraintKind::TypeOf(param, false)
+                        ConstraintKind::TypeOf(param, Priority::DerivedDefined, false)
                     } else {
-                        ConstraintKind::Is(param_ty.clone().with_rigid(false))
+                        ConstraintKind::Is(
+                            param_ty.clone().with_rigid(false),
+                            Priority::DerivedDefined,
+                        )
                     };
                     self.add_constraint(arg, Constraint::new(kind, loc), modules);
                 }
@@ -350,9 +385,12 @@ impl<'a> TypeChecker<'a> {
                 let ret_ty = &modules[call_mod_idx].values[ret].ty;
                 let kind = if call_mod_idx == self.mod_idx && !ret_ty.body.has_typevars()
                 {
-                    ConstraintKind::TypeOf(ret, true)
+                    ConstraintKind::TypeOf(ret, Priority::DerivedDefined, true)
                 } else {
-                    ConstraintKind::Is(ret_ty.clone().with_rigid(true))
+                    ConstraintKind::Is(
+                        ret_ty.clone().with_rigid(true),
+                        Priority::DerivedDefined,
+                    )
                 };
                 self.add_constraint(v, Constraint::new(kind, loc), modules);
             }
@@ -376,13 +414,23 @@ impl<'a> TypeChecker<'a> {
                     for (param, arg) in izip!(&params, &args) {
                         self.add_constraint(
                             *arg,
-                            Constraint::new(ConstraintKind::TypeOf(*param, false), loc),
+                            Constraint::new(
+                                ConstraintKind::TypeOf(
+                                    *param,
+                                    Priority::DerivedDefined,
+                                    false,
+                                ),
+                                loc,
+                            ),
                             modules,
                         );
                     }
                     self.add_constraint(
                         v,
-                        Constraint::new(ConstraintKind::TypeOf(ret, true), loc),
+                        Constraint::new(
+                            ConstraintKind::TypeOf(ret, Priority::DerivedDefined, true),
+                            loc,
+                        ),
                         modules,
                     );
                 }
@@ -413,11 +461,10 @@ impl<'a> TypeChecker<'a> {
                 self.add_constraint(
                     cond_v,
                     Constraint::new(
-                        ConstraintKind::Is(b::Type::builtin(
-                            b::BuiltinType::Bool,
-                            [],
-                            None,
-                        )),
+                        ConstraintKind::Is(
+                            b::Type::builtin(b::BuiltinType::Bool, [], None),
+                            Priority::DerivedDefined,
+                        ),
                         loc,
                     ),
                     modules,
@@ -473,13 +520,19 @@ impl<'a> TypeChecker<'a> {
                 let str_ty = b::Type::builtin(b::BuiltinType::String, [], None);
                 self.add_constraint(
                     *input,
-                    Constraint::new(ConstraintKind::Is(str_ty), loc),
+                    Constraint::new(
+                        ConstraintKind::Is(str_ty, Priority::DerivedDefined),
+                        loc,
+                    ),
                     modules,
                 );
                 let ty = b::Type::builtin(b::BuiltinType::USize, [], None);
                 self.add_constraint(
                     v,
-                    Constraint::new(ConstraintKind::Is(ty), loc),
+                    Constraint::new(
+                        ConstraintKind::Is(ty, Priority::DerivedDefined),
+                        loc,
+                    ),
                     modules,
                 );
             }
@@ -488,7 +541,10 @@ impl<'a> TypeChecker<'a> {
                 let str_ty = b::Type::builtin(b::BuiltinType::String, [], None);
                 self.add_constraint(
                     *input,
-                    Constraint::new(ConstraintKind::Is(str_ty), loc),
+                    Constraint::new(
+                        ConstraintKind::Is(str_ty, Priority::UserDefined),
+                        loc,
+                    ),
                     modules,
                 );
                 let ty = b::Type::builtin(
@@ -498,7 +554,7 @@ impl<'a> TypeChecker<'a> {
                 );
                 self.add_constraint(
                     v,
-                    Constraint::new(ConstraintKind::Is(ty), loc),
+                    Constraint::new(ConstraintKind::Is(ty, Priority::UserDefined), loc),
                     modules,
                 );
             }
@@ -512,21 +568,27 @@ impl<'a> TypeChecker<'a> {
                 );
                 self.add_constraint(
                     ptr_v,
-                    Constraint::new(ConstraintKind::Is(ptr_ty), loc),
+                    Constraint::new(
+                        ConstraintKind::Is(ptr_ty, Priority::UserDefined),
+                        loc,
+                    ),
                     modules,
                 );
 
                 let len_ty = b::Type::builtin(b::BuiltinType::USize, [], None);
                 self.add_constraint(
                     len_v,
-                    Constraint::new(ConstraintKind::Is(len_ty), loc),
+                    Constraint::new(
+                        ConstraintKind::Is(len_ty, Priority::UserDefined),
+                        loc,
+                    ),
                     modules,
                 );
 
                 let ty = b::Type::builtin(b::BuiltinType::String, [], None);
                 self.add_constraint(
                     v,
-                    Constraint::new(ConstraintKind::Is(ty), loc),
+                    Constraint::new(ConstraintKind::Is(ty, Priority::UserDefined), loc),
                     modules,
                 );
             }
@@ -534,12 +596,18 @@ impl<'a> TypeChecker<'a> {
                 let str_ty = b::Type::builtin(b::BuiltinType::String, [], None);
                 self.add_constraint(
                     src_v,
-                    Constraint::new(ConstraintKind::Is(str_ty.clone()), loc),
+                    Constraint::new(
+                        ConstraintKind::Is(str_ty.clone(), Priority::UserDefined),
+                        loc,
+                    ),
                     modules,
                 );
                 self.add_constraint(
                     dst_v,
-                    Constraint::new(ConstraintKind::Is(str_ty), loc),
+                    Constraint::new(
+                        ConstraintKind::Is(str_ty, Priority::UserDefined),
+                        loc,
+                    ),
                     modules,
                 );
 
@@ -547,7 +615,10 @@ impl<'a> TypeChecker<'a> {
                     let offset_ty = b::Type::builtin(b::BuiltinType::USize, [], None);
                     self.add_constraint(
                         offset_v,
-                        Constraint::new(ConstraintKind::Is(offset_ty), loc),
+                        Constraint::new(
+                            ConstraintKind::Is(offset_ty, Priority::UserDefined),
+                            loc,
+                        ),
                         modules,
                     );
                 }
@@ -561,13 +632,16 @@ impl<'a> TypeChecker<'a> {
                 );
                 self.add_constraint(
                     *input,
-                    Constraint::new(ConstraintKind::Is(arr_ty), loc),
+                    Constraint::new(
+                        ConstraintKind::Is(arr_ty, Priority::UserDefined),
+                        loc,
+                    ),
                     modules,
                 );
                 let ty = b::Type::builtin(b::BuiltinType::USize, [], None);
                 self.add_constraint(
                     v,
-                    Constraint::new(ConstraintKind::Is(ty), loc),
+                    Constraint::new(ConstraintKind::Is(ty, Priority::UserDefined), loc),
                     modules,
                 );
             }
@@ -581,7 +655,10 @@ impl<'a> TypeChecker<'a> {
                 let idx_ty = b::Type::builtin(b::BuiltinType::USize, [], None);
                 self.add_constraint(
                     idx,
-                    Constraint::new(ConstraintKind::Is(idx_ty), loc),
+                    Constraint::new(
+                        ConstraintKind::Is(idx_ty, Priority::UserDefined),
+                        loc,
+                    ),
                     modules,
                 );
                 self.add_constraint(
@@ -598,14 +675,20 @@ impl<'a> TypeChecker<'a> {
                     b::Type::builtin(b::BuiltinType::Ptr, [b::Type::unknown(None)], None);
                 self.add_constraint(
                     ptr,
-                    Constraint::new(ConstraintKind::Is(ptr_ty), loc),
+                    Constraint::new(
+                        ConstraintKind::Is(ptr_ty, Priority::UserDefined),
+                        loc,
+                    ),
                     modules,
                 );
 
                 let offset_ty = b::Type::builtin(b::BuiltinType::USize, [], None);
                 self.add_constraint(
                     offset,
-                    Constraint::new(ConstraintKind::Is(offset_ty), loc),
+                    Constraint::new(
+                        ConstraintKind::Is(offset_ty, Priority::UserDefined),
+                        loc,
+                    ),
                     modules,
                 );
             }
@@ -625,7 +708,10 @@ impl<'a> TypeChecker<'a> {
             b::InstrBody::Type(v, ty) => {
                 self.add_constraint(
                     *v,
-                    Constraint::new(ConstraintKind::Is(ty.clone()), loc),
+                    Constraint::new(
+                        ConstraintKind::Is(ty.clone(), Priority::UserDefined),
+                        loc,
+                    ),
                     modules,
                 );
             }
@@ -637,7 +723,7 @@ impl<'a> TypeChecker<'a> {
                 let ty = b::Type::new(ty_ref.into(), None);
                 self.add_constraint(
                     *v,
-                    Constraint::new(ConstraintKind::Is(ty), loc),
+                    Constraint::new(ConstraintKind::Is(ty, Priority::UserDefined), loc),
                     modules,
                 );
             }
@@ -646,7 +732,10 @@ impl<'a> TypeChecker<'a> {
                 let ty = b::Type::builtin(b::BuiltinType::String, [], None);
                 self.add_constraint(
                     v,
-                    Constraint::new(ConstraintKind::Is(ty.clone()), loc),
+                    Constraint::new(
+                        ConstraintKind::Is(ty.clone(), Priority::UserDefined),
+                        loc,
+                    ),
                     modules,
                 );
             }
@@ -881,13 +970,13 @@ impl<'a> TypeChecker<'a> {
                 .constraints
                 .iter()
                 .cloned()
-                .sorted_by(|a, b| b.priority().cmp(&a.priority()))
+                .sorted()
                 .filter_map(|c| {
                     tracing::trace!(?c, "checking constraint");
                     let merge_with = 'merge_with: {
                         match c.kind.clone() {
-                            ConstraintKind::Is(ty) => ty.clone(),
-                            ConstraintKind::TypeOf(target, rigid) => {
+                            ConstraintKind::Is(ty, _) => ty.clone(),
+                            ConstraintKind::TypeOf(target, _, rigid) => {
                                 tracing::trace!(target, "will validate TypeOf");
                                 success &= !self
                                     .validate_value(target, visited, modules)
@@ -1122,6 +1211,7 @@ impl<'a> TypeChecker<'a> {
                     }
                 })
                 .collect_vec();
+
             for (merge_with, loc) in &error_tys {
                 self.ctx.push_error(errors::Error::new(
                     errors::UnexpectedType::new(
