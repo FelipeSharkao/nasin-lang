@@ -715,12 +715,8 @@ impl<'a> TypeChecker<'a> {
                     modules,
                 );
             }
-            b::InstrBody::Dispatch(v, ty_key, args) => {
-                let mut ty_ref = b::TypeRef::new(*ty_key);
-                ty_ref
-                    .args
-                    .extend(args.iter().map(|t| b::Type::new(t.clone().into(), None)));
-                let ty = b::Type::new(ty_ref.into(), None);
+            b::InstrBody::Dispatch(v, ty_ref) => {
+                let ty = b::Type::new(ty_ref.clone().into(), None);
                 self.add_constraint(
                     *v,
                     Constraint::new(ConstraintKind::Is(ty, Priority::UserDefined), loc),

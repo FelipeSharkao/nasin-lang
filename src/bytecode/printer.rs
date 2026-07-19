@@ -772,15 +772,9 @@ impl<'a> Printer<'a> {
             InstrBody::PtrSet(p, val) => write!(f, "PtrSet(v{p}, v{val})"),
             InstrBody::TypeName(v) => write!(f, "TypeName(v{v})"),
             InstrBody::CompileError => write!(f, "CompileError"),
-            InstrBody::Dispatch(v, ty_key, args) => {
+            InstrBody::Dispatch(v, ty_ref) => {
                 write!(f, "Dispatch(v{v}, ")?;
-                self.write_type_ref(f, &TypeRef::new(*ty_key))?;
-                if !args.is_empty() {
-                    for arg in args {
-                        write!(f, ", ")?;
-                        self.write_type_body(f, arg)?;
-                    }
-                }
+                self.write_type_ref(f, ty_ref)?;
                 write!(f, ")")
             }
             InstrBody::Type(v, ty) => {

@@ -810,16 +810,16 @@ impl<'a> FuncCodegen<'a, '_> {
                     offset += native_ty.bytes() as i32;
                 }
             }
-            &b::InstrBody::Dispatch(v, iface_ty_key, ref iface_args) => {
+            &b::InstrBody::Dispatch(v, ref iface_ref) => {
                 let ty = &self.ctx.modules[mod_idx].values[v].ty;
                 let b::TypeBody::TypeRef(ty_ref) = &ty.body else {
                     panic!("type should be a typeref");
                 };
                 let type_args = ty_ref.args.iter().map(|t| t.body.clone()).collect();
                 let vtable_ref = types::VTableRef::new(
-                    iface_ty_key,
+                    iface_ref.key,
                     ty_ref.key,
-                    iface_args.clone(),
+                    iface_ref.args.iter().map(|t| t.body.clone()).collect(),
                     type_args,
                 );
                 let vtable_data = self.ctx.vtables_impl[&vtable_ref];
