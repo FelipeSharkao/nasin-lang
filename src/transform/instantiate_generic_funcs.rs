@@ -30,7 +30,7 @@ struct DispatchedTypeArgs {
     #[ctor(default)]
     substitutions: HashMap<b::TypeVarIdx, b::Type>,
     #[ctor(default)]
-    methods_substitutions: HashMap<String, HashMap<b::TypeVarIdx, b::Type>>,
+    methods_substitutions: HashMap<usize, HashMap<b::TypeVarIdx, b::Type>>,
 }
 
 #[derive(Clone, Copy, ctor)]
@@ -98,10 +98,8 @@ impl<'a> InstantiateGenericFuncsStep<'a> {
     ) {
         let instr = cursor.instr(&modules[mod_idx]).unwrap();
 
-        let (source, prop) = match &instr.body {
-            &b::InstrBody::GetProperty(source, ref prop)
-            | &b::InstrBody::GetMethod(source, ref prop) => (source, prop),
-            _ => return,
+        let &b::InstrBody::GetMethod(source, idx) = &instr.body else {
+            return;
         };
 
         assert!(instr.results.len() == 1);
@@ -114,12 +112,7 @@ impl<'a> InstantiateGenericFuncsStep<'a> {
 
         let type_ref_key = type_ref.key;
         let typedef = type_ref_key.get_typedef(modules);
-
-        let prop = prop.clone();
-        let Some(method) = typedef.methods.get(&prop) else {
-            return;
-        };
-
+        let method = &typedef.methods[idx];
         let (func_mod_idx, func_idx) = method.func_ref;
 
         let Some((new_func_idx, tys)) = self.instantiate_call(
@@ -133,21 +126,29 @@ impl<'a> InstantiateGenericFuncsStep<'a> {
             return;
         };
 
-        let new_prop_name = b::Name::from_ident(&prop, b::NameIdentKind::Func, None)
-            .with_type_params(tys.into_iter().map(|body| b::Type::new(body, None)), None)
-            .formated(&modules, &self.ctx.cfg, None);
+        let typedef = type_ref_key.get_typedef(modules);
+        let method = &typedef.methods[idx];
+
+        let new_method_name =
+            b::Name::from_ident(&method.name, b::NameIdentKind::Func, None)
+                .with_type_params(
+                    tys.into_iter().map(|body| b::Type::new(body, None)),
+                    None,
+                )
+                .formated(&modules, &self.ctx.cfg, None);
 
         let typedef = &mut type_ref_key.get_typedef_mut(modules);
-        let mut new_method = typedef.methods.get(&prop).unwrap().clone();
+
+        let mut new_method = typedef.methods[idx].clone();
+        new_method.name = new_method_name;
         new_method.func_ref.1 = new_func_idx;
 
-        typedef.methods.insert(new_prop_name.clone(), new_method);
+        let new_method_idx = typedef.methods.len();
+        typedef.methods.push(new_method);
 
         let instr = cursor.instr_mut(&mut modules[mod_idx]).unwrap();
-        if let b::InstrBody::GetProperty(_, prop) | b::InstrBody::GetMethod(_, prop) =
-            &mut instr.body
-        {
-            *prop = new_prop_name;
+        if let b::InstrBody::GetMethod(_, idx) = &mut instr.body {
+            *idx = new_method_idx;
         }
     }
 
@@ -188,40 +189,11 @@ impl<'a> InstantiateGenericFuncsStep<'a> {
         };
 
         for item in items {
-            let typedef = item.ty_key.get_typedef_mut(modules);
-            let impl_idx = typedef.impls.iter().position(|d| d.iface == item.iface_key);
-            if let Some(impl_idx) = impl_idx {
-                if !typedef.impls[impl_idx]
-                    .generic_instantiations
-                    .contains_key(&item.args)
-                {
-                    let impl_decl = &typedef.impls[impl_idx];
+            let mut new_methods_idxs = HashMap::new();
 
-                    let mut iface_args = impl_decl.iface_args.clone();
-                    for iface_arg in &mut iface_args {
-                        match iface_arg.substitute_typevar(&item.substitutions) {
-                            Some(ty) => *iface_arg = ty,
-                            None => {}
-                        }
-                    }
-
-                    let new_impl_idx = typedef.impls.len();
-                    typedef.impls.push(b::ImplDecl::new(
-                        item.iface_key,
-                        iface_args,
-                        Some(item.args.clone()),
-                        impl_decl.loc,
-                    ));
-
-                    typedef.impls[impl_idx]
-                        .generic_instantiations
-                        .insert(item.args.clone(), new_impl_idx);
-                }
-            }
-
-            for (method_name, substitutions) in item.methods_substitutions {
+            for (method_idx, substitutions) in item.methods_substitutions {
                 let typedef = item.ty_key.get_typedef(modules);
-                let method = typedef.methods.get(&method_name).unwrap();
+                let method = &typedef.methods[method_idx];
 
                 let (new_func_idx, tys) = self.instantiate_generic_func(
                     cursor,
@@ -231,19 +203,64 @@ impl<'a> InstantiateGenericFuncsStep<'a> {
                     &substitutions,
                 );
 
+                let typedef = item.ty_key.get_typedef(modules);
+                let method = &typedef.methods[method_idx];
+
                 let new_method_name =
-                    b::Name::from_ident(&method_name, b::NameIdentKind::Func, None)
+                    b::Name::from_ident(&method.name, b::NameIdentKind::Func, None)
                         .with_type_params(
                             tys.into_iter().map(|body| b::Type::new(body, None)),
                             None,
                         )
                         .formated(&modules, &self.ctx.cfg, None);
 
-                let typedef = &mut item.ty_key.get_typedef_mut(modules);
-                let mut new_method = typedef.methods.get(&method_name).unwrap().clone();
+                let typedef = item.ty_key.get_typedef_mut(modules);
+
+                let mut new_method = typedef.methods[method_idx].clone();
+                new_method.name = new_method_name;
                 new_method.func_ref.1 = new_func_idx;
 
-                typedef.methods.insert(new_method_name, new_method);
+                let new_method_idx = typedef.methods.len();
+                typedef.methods.push(new_method);
+                new_methods_idxs.insert(method_idx, new_method_idx);
+            }
+
+            let typedef = item.ty_key.get_typedef_mut(modules);
+            let impl_idx = typedef.impls.iter().position(|d| d.iface == item.iface_key);
+
+            if let Some(impl_idx) = impl_idx
+                && !typedef.impls[impl_idx]
+                    .generic_instantiations
+                    .contains_key(&item.args)
+            {
+                let impl_decl = &typedef.impls[impl_idx];
+
+                let mut iface_args = impl_decl.iface_args.clone();
+                for iface_arg in &mut iface_args {
+                    match iface_arg.substitute_typevar(&item.substitutions) {
+                        Some(ty) => *iface_arg = ty,
+                        None => {}
+                    }
+                }
+
+                let mut new_impl = b::ImplDecl::new(
+                    item.iface_key,
+                    iface_args,
+                    Some(item.args.clone()),
+                    impl_decl.loc,
+                );
+                new_impl.methods = impl_decl
+                    .methods
+                    .iter()
+                    .map(|i| *new_methods_idxs.get(i).unwrap_or(i))
+                    .collect();
+
+                let new_impl_idx = typedef.impls.len();
+                typedef.impls.push(new_impl);
+
+                typedef.impls[impl_idx]
+                    .generic_instantiations
+                    .insert(item.args.clone(), new_impl_idx);
             }
         }
     }
@@ -393,6 +410,12 @@ impl<'a> InstantiateGenericFuncsStep<'a> {
         }
 
         let typedef = ty_ref.get_typedef(modules);
+        let impl_decl = typedef
+            .impls
+            .iter()
+            .find(|v| v.iface == iface_ty_ref.key)
+            .unwrap();
+
         let iface_typedef = iface_ty_ref.get_typedef(modules);
         if !matches!(iface_typedef.body, b::TypeDefBody::Interface) {
             return None;
@@ -404,10 +427,9 @@ impl<'a> InstantiateGenericFuncsStep<'a> {
             ty_ref.args.iter().map(|arg| arg.body.clone()).collect(),
         );
 
-        for method_name in iface_typedef.methods.keys() {
-            let Some(method) = typedef.methods.get(method_name) else {
-                continue;
-            };
+        for i in 0..iface_typedef.methods.len() {
+            let method_idx = impl_decl.methods[i];
+            let method = &typedef.methods[method_idx];
 
             let func = &modules[method.func_ref.0].funcs[method.func_ref.1];
             let reciever_ty = &modules[method.func_ref.0].values[func.params[0]].ty;
@@ -427,7 +449,7 @@ impl<'a> InstantiateGenericFuncsStep<'a> {
 
                 result
                     .methods_substitutions
-                    .insert(method_name.to_string(), method_substitutions);
+                    .insert(method_idx, method_substitutions);
             }
         }
 

@@ -160,9 +160,7 @@ impl<'a> TypeChecker<'a> {
                     modules,
                 );
             }
-            b::InstrBody::GetProperty(source_v, name)
-            | b::InstrBody::GetField(source_v, name)
-            | b::InstrBody::GetMethod(source_v, name) => {
+            b::InstrBody::GetProperty(source_v, name) => {
                 let v = instr.results[0];
                 self.define_property(*source_v, v, &name.clone(), loc, modules);
             }
@@ -735,6 +733,11 @@ impl<'a> TypeChecker<'a> {
                     modules,
                 );
             }
+            b::InstrBody::GetField(..) | b::InstrBody::GetMethod(..) => {
+                unreachable!(
+                    "GetField and GetMethod are only present after transformation"
+                )
+            }
             b::InstrBody::CompileError => {}
         }
     }
@@ -1305,7 +1308,11 @@ impl<'a> TypeChecker<'a> {
             return vec![];
         };
         let Some(func) = (|| {
-            let method = ty_ref.get_typedef(modules).methods.get(name)?;
+            let method = ty_ref
+                .get_typedef(modules)
+                .methods
+                .iter()
+                .find(|method| method.name == name)?;
             if method.func_ref.0 == self.mod_idx {
                 modules.get(method.func_ref.0)?.funcs.get(method.func_ref.1)
             } else {
@@ -1364,11 +1371,17 @@ impl<'a> TypeChecker<'a> {
             };
         }
 
-        for (method_name, iface_method) in &iface_typedef.methods {
-            let Some(typedef_method) = typedef.methods.get(method_name) else {
+        for iface_method in &iface_typedef.methods {
+            let method_name = &iface_method.name;
+
+            let Some(typedef_method) = typedef
+                .methods
+                .iter()
+                .find(|method| &method.name == method_name)
+            else {
                 self.ctx.push_error(errors::Error::new(
                     errors::MethodNotImplemented::new(
-                        method_name.clone(),
+                        iface_method.name.clone(),
                         type_name!(),
                         iface_name!(),
                     )

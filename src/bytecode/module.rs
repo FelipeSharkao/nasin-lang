@@ -13,7 +13,6 @@ use super::name::*;
 use super::ty::*;
 use super::value::*;
 use crate::config::BuildConfig;
-use crate::utils::SortedMap;
 
 #[derive(Debug, Clone, ctor)]
 pub struct ImplDecl {
@@ -21,6 +20,10 @@ pub struct ImplDecl {
     pub iface_args: Vec<TypeBody>,
     pub type_args_constraints: Option<Vec<TypeBody>>,
     pub loc: Loc,
+    /// Indexes of the methods in this impl. Should match the interface's methods by
+    /// position
+    #[ctor(default)]
+    pub methods: Vec<usize>,
     /// Maps generic substitutions to the index of the instantiated impl declaration. Used
     /// to deduplicate generic instantiations
     #[ctor(default)]
@@ -221,7 +224,7 @@ pub struct TypeDef {
     #[ctor(default)]
     pub impls:    Vec<ImplDecl>,
     #[ctor(default)]
-    pub methods:  SortedMap<String, Method>,
+    pub methods:  Vec<Method>,
 }
 
 #[derive(Debug, Clone)]
@@ -300,13 +303,14 @@ pub type TypeVarIdx = usize;
 #[derive(Debug, Clone, ctor)]
 pub struct RecordType {
     #[ctor(default)]
-    pub fields: SortedMap<String, RecordField>,
+    pub fields: Vec<RecordField>,
 }
 
 #[derive(Debug, Clone, ctor)]
 pub struct RecordField {
-    pub ty:  Type,
-    pub loc: Loc,
+    pub name: String,
+    pub ty:   Type,
+    pub loc:  Loc,
 }
 
 /// Builtin types. Every compilation has a module 0 (`BUILTINS_MODULE_IDX`) with TypeDefs
@@ -381,6 +385,7 @@ impl BuiltinType {
 
 #[derive(Debug, Clone, ctor)]
 pub struct Method {
+    pub name:     String,
     pub func_ref: (usize, usize),
     pub loc:      Loc,
 }

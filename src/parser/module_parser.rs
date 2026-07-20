@@ -61,9 +61,11 @@ impl<'a, 't> ModuleParser<'a, 't> {
             self.define_func(i);
         }
 
-        let typedefs = self.types.finish();
+        let mut modules = self.ctx.lock_modules_mut();
 
-        let module = &mut self.ctx.lock_modules_mut()[self.mod_idx];
+        let typedefs = self.types.finish(&mut modules);
+
+        let module = &mut modules[self.mod_idx];
         module.typedefs = typedefs;
         module.typevars = self.typevar_defs;
         module.globals = self.globals.into_iter().map(|x| x.global).collect();
@@ -295,9 +297,8 @@ impl<'a, 't> ModuleParser<'a, 't> {
         ));
 
         if let Some(method_info) = method_info {
-            let method = b::Method::new((self.mod_idx, func_idx), loc);
-            self.types
-                .add_method(method_info.ty, method_info.name, method);
+            let method = b::Method::new(method_info.name, (self.mod_idx, func_idx), loc);
+            self.types.add_method(method_info.ty, method);
         }
     }
 
@@ -440,10 +441,9 @@ impl<'a, 't> ModuleParser<'a, 't> {
             })
             .collect_vec();
 
-        let typedef = self.types.get_typedef_mut(ty_ref.key, modules);
         for iface_key in iface_keys {
             let impl_decl = b::ImplDecl::new(iface_key, vec![], constraints.clone(), loc);
-            typedef.impls.push(impl_decl);
+            self.types.impls.push((ty_ref.key, impl_decl));
         }
     }
 

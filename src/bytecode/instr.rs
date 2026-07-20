@@ -10,9 +10,11 @@ use crate::utils;
 pub enum InstrBody {
     GetGlobal(usize, usize),
     GetFunc(usize, usize),
+
     GetProperty(ValueIdx, String),
-    GetField(ValueIdx, String),
-    GetMethod(ValueIdx, String),
+    GetField(ValueIdx, usize),
+    GetMethod(ValueIdx, usize),
+
     CreateBool(bool),
     CreateNumber(String),
     CreateString(String),

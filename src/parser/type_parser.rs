@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::mem;
 
 use derive_ctor::ctor;
 use itertools::Itertools;
@@ -11,6 +12,8 @@ use crate::{bytecode as b, context, errors};
 pub struct TypeParser<'a, 't> {
     #[ctor(default)]
     pub typedefs: Vec<DeclaredTypeDef<'t>>,
+    #[ctor(default)]
+    pub impls: Vec<(b::TypeRefKey, b::ImplDecl)>,
     #[ctor(expr(default_idents()))]
     pub idents: HashMap<String, b::TypeBody>,
     #[ctor(default)]
@@ -21,7 +24,10 @@ pub struct TypeParser<'a, 't> {
 }
 
 impl<'a, 't> TypeParser<'a, 't> {
-    pub fn finish(self) -> Vec<b::TypeDef> {
+    pub fn finish(mut self, modules: &mut [b::Module]) -> Vec<b::TypeDef> {
+        for (key, impl_decl) in mem::replace(&mut self.impls, vec![]) {
+            self.finish_impl(key, impl_decl, modules);
+        }
         self.typedefs.into_iter().map(|x| x.typedef).collect()
     }
 
@@ -151,18 +157,20 @@ impl<'a, 't> TypeParser<'a, 't> {
         });
     }
 
-    pub fn add_method(&mut self, ty: b::TypeRefKey, name: String, method: b::Method) {
-        match ty {
+    pub fn add_method(&mut self, ty: b::TypeRefKey, method: b::Method) -> usize {
+        let modules = &mut self.ctx.lock_modules_mut();
+
+        let typedef = match ty {
             b::TypeRefKey::Custom { mod_idx, idx } if mod_idx == self.mod_idx => {
-                self.typedefs[idx].typedef.methods.insert(name, method);
+                &mut self.typedefs[idx].typedef
             }
             b::TypeRefKey::Custom { mod_idx, idx } => {
-                let module = &mut self.ctx.lock_modules_mut()[mod_idx];
-                module.typedefs[idx].methods.insert(name, method);
+                let module = &mut modules[mod_idx];
+                &mut module.typedefs[idx]
             }
             b::TypeRefKey::Builtin(builtin_type) => {
-                let module = &mut self.ctx.lock_modules_mut()[b::BUILTINS_MODULE_IDX];
-                let typedef = module
+                let module = &mut modules[b::BUILTINS_MODULE_IDX];
+                module
                     .typedefs
                     .iter_mut()
                     .find(|td| {
@@ -172,10 +180,14 @@ impl<'a, 't> TypeParser<'a, 't> {
                             *b == builtin_type
                         )
                     })
-                    .expect("builtin type not found");
-                typedef.methods.insert(name, method);
+                    .expect("builtin type not found")
             }
-        }
+        };
+
+        let new_method_idx = typedef.methods.len();
+        typedef.methods.push(method);
+
+        new_method_idx
     }
 
     pub fn get_typedef<'s>(
@@ -238,6 +250,11 @@ impl<'a, 't> TypeParser<'a, 't> {
     }
 
     fn define_typedef(&mut self, i: usize) {
+        let ty_key = b::TypeRefKey::Custom {
+            mod_idx: self.mod_idx,
+            idx:     i,
+        };
+
         let typedef = &self.typedefs[i];
         let Some(node) = typedef.type_decl_node else {
             return;
@@ -265,32 +282,6 @@ impl<'a, 't> TypeParser<'a, 't> {
             })
             .collect_vec();
 
-        let impls = node
-            .iter_field("implements")
-            .filter_map(|ty_node| {
-                let loc = b::Loc::from_node(self.src_idx, &ty_node);
-                let ty = self.parse_type_expr(ty_node);
-                match ty.body {
-                    b::TypeBody::TypeRef(t) => {
-                        let iface_args = t.args.into_iter().map(|arg| arg.body).collect();
-                        Some(b::ImplDecl::new(t.key, iface_args, None, loc))
-                    }
-                    _ => {
-                        self.ctx.push_error(errors::Error::new(
-                            errors::TypeNotInterface::new(
-                                &ty.body,
-                                &self.ctx.lock_modules(),
-                                &self.ctx.cfg,
-                            )
-                            .into(),
-                            Some(b::Loc::from_node(self.src_idx, &node)),
-                        ));
-                        None
-                    }
-                }
-            })
-            .collect_vec();
-
         let body_node = node.required_field("body");
         let body = match (body_node.kind(), &typedef.typedef.body) {
             ("record_type", b::TypeDefBody::Record(rec)) => {
@@ -309,10 +300,11 @@ impl<'a, 't> TypeParser<'a, 't> {
                             )
                             .to_string();
                         let record_field = b::RecordField::new(
+                            name,
                             self.parse_type_expr(field_node.required_field("type")),
                             b::Loc::from_node(self.src_idx, &field_node),
                         );
-                        (name, record_field)
+                        record_field
                     })
                     .collect();
 
@@ -328,7 +320,86 @@ impl<'a, 't> TypeParser<'a, 't> {
         let typedef = &mut self.typedefs[i];
         typedef.typedef.body = body;
         typedef.typedef.generics = generics;
-        typedef.typedef.impls.extend(impls);
+
+        for ty_node in node.iter_field("implements") {
+            let loc = b::Loc::from_node(self.src_idx, &ty_node);
+            let ty = self.parse_type_expr(ty_node);
+            let b::TypeBody::TypeRef(t) = ty.body else {
+                self.ctx.push_error(errors::Error::new(
+                    errors::TypeNotInterface::new(
+                        &ty.body,
+                        &self.ctx.lock_modules(),
+                        &self.ctx.cfg,
+                    )
+                    .into(),
+                    Some(b::Loc::from_node(self.src_idx, &node)),
+                ));
+                continue;
+            };
+
+            let iface_args = t.args.into_iter().map(|arg| arg.body).collect();
+            let impl_decl = b::ImplDecl::new(t.key, iface_args, None, loc);
+            self.impls.push((ty_key, impl_decl));
+        }
+    }
+
+    fn finish_impl(
+        &mut self,
+        key: b::TypeRefKey,
+        mut impl_decl: b::ImplDecl,
+        modules: &mut [b::Module],
+    ) {
+        let method_names = self
+            .get_typedef(impl_decl.iface, modules)
+            .methods
+            .iter()
+            .map(|method| method.name.clone())
+            .collect_vec();
+
+        for method_name in method_names {
+            self.finish_impl_method(key, &mut impl_decl, method_name, modules);
+        }
+
+        let typedef = self.get_typedef_mut(key, modules);
+        typedef.impls.push(impl_decl)
+    }
+
+    fn finish_impl_method(
+        &self,
+        key: b::TypeRefKey,
+        impl_decl: &mut b::ImplDecl,
+        method_name: String,
+        modules: &mut [b::Module],
+    ) {
+        let typedef = self.get_typedef(key, modules);
+
+        let method_idx = typedef
+            .methods
+            .iter()
+            .position(|method| method.name == method_name)
+            .unwrap_or_else(|| {
+                let iface_typedef = self.get_typedef(impl_decl.iface, modules);
+
+                self.ctx.push_error(errors::Error::new(
+                    errors::MethodNotImplemented::new(
+                        method_name,
+                        typedef
+                            .name
+                            .formated(modules, &self.ctx.cfg, Some(self.mod_idx)),
+                        iface_typedef.name.formated(
+                            modules,
+                            &self.ctx.cfg,
+                            Some(self.mod_idx),
+                        ),
+                    )
+                    .into(),
+                    Some(impl_decl.loc),
+                ));
+
+                usize::MAX // we have to add something
+            });
+
+        impl_decl.methods.push(method_idx);
     }
 }
 

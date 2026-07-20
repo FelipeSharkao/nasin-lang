@@ -30,16 +30,16 @@ impl<'a> CodeTransformStep for FinishGetPropertyStep<'a> {
         let result_ty = &module.values[instr.results[0]].ty;
         let parent_ty = &module.values[source_v].ty;
         let is_func = matches!(&result_ty.body, b::TypeBody::Func(..));
-        let is_field = parent_ty.body.field(&key, &modules).is_some();
-        let is_method = parent_ty.body.method(&key, &modules).is_some();
+        let field_idx = parent_ty.body.field_index(&key, &modules);
+        let method_idx = parent_ty.body.method_index(&key, &modules);
 
         let Some(instr) = cursor.instr_mut(&mut modules[mod_idx]) else {
             return;
         };
-        if is_field {
-            instr.body = b::InstrBody::GetField(source_v, key);
-        } else if is_method {
-            instr.body = b::InstrBody::GetMethod(source_v, key.clone());
+        if let Some(idx) = field_idx {
+            instr.body = b::InstrBody::GetField(source_v, idx);
+        } else if let Some(idx) = method_idx {
+            instr.body = b::InstrBody::GetMethod(source_v, idx);
             // methods with just the receiver are used as fields, so we have to call them
             if !is_func {
                 let result = instr.results[0];

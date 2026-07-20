@@ -302,10 +302,16 @@ impl<'a> Printer<'a> {
 
         match &typedef.body {
             TypeDefBody::Record(rec) => {
-                for (name, field) in &rec.fields {
+                for (i, field) in rec.fields.iter().enumerate() {
                     table.start_row();
                     let line = table.push_cell();
-                    write!(line, "{S:indent$}  {name}: ")?;
+                    write!(line, "{S:indent$}  ")?;
+
+                    if !self.reconstruct && self.show_ids {
+                        write!(line, "{i}: ")?;
+                    }
+
+                    write!(line, "{}: ", field.name)?;
                     self.write_type_body(line, &field.ty.body)?;
 
                     if !self.reconstruct {
@@ -317,20 +323,25 @@ impl<'a> Printer<'a> {
             TypeDefBody::Interface | TypeDefBody::Builtin(_) => {}
         };
 
-        for (name, method) in &typedef.methods {
+        for (i, method) in typedef.methods.iter().enumerate() {
             table.start_row();
             let line = table.push_cell();
             let func = &self.modules[method.func_ref.0].funcs[method.func_ref.1];
             write!(line, "{S:indent$}  ")?;
+
+            if !self.reconstruct && self.show_ids {
+                write!(line, "{i}: ")?;
+            }
+
             self.write_method_signature(
                 line,
-                name,
+                &method.name,
                 &self.modules[method.func_ref.0],
                 func,
             )?;
 
             if !self.reconstruct && self.show_ids {
-                write!(line, " (func {}-{})", method.func_ref.0, method.func_ref.1)?;
+                write!(line, "(func {}-{})", method.func_ref.0, method.func_ref.1)?;
             }
 
             if !self.reconstruct {
@@ -595,7 +606,7 @@ impl<'a> Printer<'a> {
             write!(line, " = ")?;
         }
 
-        self.write_instr_body(line, &instr.body)?;
+        self.write_instr_body(line, module, &instr)?;
 
         let loc_comment = table.push_cell();
         self.write_loc_comment(loc_comment, instr.loc.as_ref())?;
@@ -658,8 +669,13 @@ impl<'a> Printer<'a> {
         Ok(())
     }
 
-    fn write_instr_body(&mut self, f: &mut impl Write, body: &InstrBody) -> fmt::Result {
-        match body {
+    fn write_instr_body(
+        &mut self,
+        f: &mut impl Write,
+        module: &Module,
+        instr: &Instr,
+    ) -> fmt::Result {
+        match &instr.body {
             InstrBody::GetGlobal(mod_idx, global_idx) => {
                 write!(f, "GetGlobal(")?;
                 self.write_global_ref(f, *mod_idx, *global_idx)?;
@@ -686,8 +702,26 @@ impl<'a> Printer<'a> {
                 write!(f, ")")
             }
             InstrBody::GetProperty(v, prop) => write!(f, "GetProperty(v{v}, {prop})"),
-            InstrBody::GetField(v, field) => write!(f, "GetField(v{v}, {field})"),
-            InstrBody::GetMethod(v, name) => write!(f, "GetMethod(v{v}, {name})"),
+            &InstrBody::GetField(v, idx) => {
+                write!(f, "GetField(v{v}, ")?;
+                let name = instr.results.get(0).and_then(|&res| {
+                    module.values[res].ty.body.field_name(idx, self.modules)
+                });
+                match name {
+                    Some(name) => write!(f, "{name} (field {idx}))"),
+                    None => write!(f, "field {idx})"),
+                }
+            }
+            &InstrBody::GetMethod(v, idx) => {
+                write!(f, "GetMethod(v{v}, ")?;
+                let name = instr.results.get(0).and_then(|&res| {
+                    module.values[res].ty.body.method_name(idx, self.modules)
+                });
+                match name {
+                    Some(name) => write!(f, "{name} (method {idx}))"),
+                    None => write!(f, "method {idx})"),
+                }
+            }
             InstrBody::CreateBool(b) => write!(f, "CreateBool({b})"),
             InstrBody::CreateNumber(n) => write!(f, "CreateNumber({n})"),
             InstrBody::CreateString(s) => {

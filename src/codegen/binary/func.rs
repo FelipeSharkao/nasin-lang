@@ -565,9 +565,9 @@ impl<'a> FuncCodegen<'a, '_> {
                     ),
                 );
             }
-            b::InstrBody::GetField(source_v, name) => {
-                let source_ty = &self.ctx.modules[mod_idx].values[*source_v].ty;
-                let source = &self.values[&(mod_idx, *source_v)];
+            &b::InstrBody::GetField(source_v, idx) => {
+                let source_ty = &self.ctx.modules[mod_idx].values[source_v].ty;
+                let source = &self.values[&(mod_idx, source_v)];
                 let b::TypeBody::TypeRef(ty_ref) = &source_ty.body else {
                     panic!("type should be a typeref");
                 };
@@ -578,10 +578,7 @@ impl<'a> FuncCodegen<'a, '_> {
                 };
 
                 let mut offset = 0;
-                for (k, v) in &rec.fields {
-                    if k == name {
-                        break;
-                    }
+                for v in &rec.fields[..idx] {
                     for native_ty in types::get_type_canonical(
                         &v.ty,
                         self.ctx.modules,
@@ -626,8 +623,8 @@ impl<'a> FuncCodegen<'a, '_> {
 
                 self.values.insert((mod_idx, instr.results[0]), value);
             }
-            &b::InstrBody::GetMethod(source_v, ref name) => {
-                let src = self.get_method_inst(mod_idx, source_v, name);
+            &b::InstrBody::GetMethod(source_v, idx) => {
+                let src = self.get_method_inst(mod_idx, source_v, idx);
                 self.values.insert(
                     (mod_idx, instr.results[0]),
                     types::RuntimeValue::new(src, mod_idx, instr.results[0]),
@@ -1071,7 +1068,7 @@ impl<'a> FuncCodegen<'a, '_> {
         &mut self,
         mod_idx: usize,
         source_v: b::ValueIdx,
-        name: &str,
+        idx: usize,
     ) -> types::ValueSource {
         let source = &self.values[&(mod_idx, source_v)];
         let source_ty = &self.ctx.modules[mod_idx].values[source_v].ty;
@@ -1100,7 +1097,7 @@ impl<'a> FuncCodegen<'a, '_> {
             MethodKind::Applied => {
                 let value = self.add_by_ref(&source.src.clone());
                 let typedef = ty_ref.get_typedef(self.ctx.modules);
-                let method = &typedef.methods[name];
+                let method = &typedef.methods[idx];
                 types::ValueSource::AppliedMethod(value, method.func_ref)
             }
             MethodKind::Dispatched => {
@@ -1129,20 +1126,7 @@ impl<'a> FuncCodegen<'a, '_> {
                 };
 
                 let typedef = ty_ref.get_typedef(self.ctx.modules);
-                let method = &typedef.methods[name];
-
-                let base_name = match name.find('<') {
-                    Some(pos) => &name[..pos],
-                    None => name,
-                };
-
-                let offset = self
-                    .ctx
-                    .vtables_desc
-                    .get(&ty_ref.key)
-                    .expect("Interface should already be defined")
-                    .method_offset(base_name, &self.ctx.cl_module)
-                    .unwrap();
+                let method = &typedef.methods[idx];
 
                 let builder = expect_builder!(self);
 
@@ -1150,7 +1134,7 @@ impl<'a> FuncCodegen<'a, '_> {
                     self.ctx.cl_module.isa().pointer_type(),
                     cl::MemFlags::new(),
                     vtable,
-                    offset as i32,
+                    idx as i32 * self.ctx.cl_module.isa().pointer_bytes() as i32,
                 );
 
                 let proto = types::FuncPrototype::from_func(

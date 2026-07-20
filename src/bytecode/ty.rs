@@ -13,7 +13,7 @@ use itertools::{Itertools, chain, izip};
 use super::Printer;
 use super::module::*;
 use crate::config::BuildConfig;
-use crate::utils::{self, SortedMap, matches_if, unordered};
+use crate::utils::{self, SortedMap, unordered};
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, From, PartialOrd, Ord)]
 pub enum TypeBody {
@@ -95,6 +95,26 @@ impl TypeBody {
         }
     }
 
+    pub fn field_index(&self, name: &str, modules: &[Module]) -> Option<usize> {
+        match self {
+            Self::TypeRef(type_ref) => type_ref.field_index(name, modules),
+            Self::TypeVar(type_var) => type_var.field_index(name, modules),
+            _ => None,
+        }
+    }
+
+    pub fn field_name<'a>(
+        &'a self,
+        index: usize,
+        modules: &'a [Module],
+    ) -> Option<&'a str> {
+        match self {
+            Self::TypeRef(type_ref) => type_ref.field_name(index, modules),
+            Self::TypeVar(type_var) => type_var.field_name(index, modules),
+            _ => None,
+        }
+    }
+
     pub fn method<'a>(
         &'a self,
         name: &str,
@@ -102,10 +122,27 @@ impl TypeBody {
     ) -> Option<Cow<'a, Type>> {
         match self {
             Self::TypeRef(type_ref) => type_ref.method(name, modules),
-            Self::TypeVar(type_var) => {
-                let res = type_var.method(name, modules);
-                res
-            }
+            Self::TypeVar(type_var) => type_var.method(name, modules),
+            _ => None,
+        }
+    }
+
+    pub fn method_index(&self, name: &str, modules: &[Module]) -> Option<usize> {
+        match self {
+            Self::TypeRef(type_ref) => type_ref.method_index(name, modules),
+            Self::TypeVar(type_var) => type_var.method_index(name, modules),
+            _ => None,
+        }
+    }
+
+    pub fn method_name<'a>(
+        &'a self,
+        index: usize,
+        modules: &'a [Module],
+    ) -> Option<&'a str> {
+        match self {
+            Self::TypeRef(type_ref) => type_ref.method_name(index, modules),
+            Self::TypeVar(type_var) => type_var.method_name(index, modules),
             _ => None,
         }
     }
@@ -912,7 +949,7 @@ impl TypeRef {
     ) -> Option<Cow<'a, Type>> {
         match &self.get_typedef(modules).body {
             TypeDefBody::Record(rec) => {
-                let ty = &rec.fields.get(name)?.ty;
+                let ty = &rec.fields[self.field_index(name, modules)?].ty;
                 let substitutions = self.typevar_substitutions(modules);
                 if let Some(ty) = ty.substitute_typevar(&substitutions) {
                     Some(Cow::Owned(ty))
@@ -924,13 +961,33 @@ impl TypeRef {
         }
     }
 
+    pub fn field_index(&self, name: &str, modules: &[Module]) -> Option<usize> {
+        match &self.get_typedef(modules).body {
+            TypeDefBody::Record(rec) => {
+                rec.fields.iter().position(|field| field.name == name)
+            }
+            TypeDefBody::Interface | TypeDefBody::Builtin(_) => None,
+        }
+    }
+
+    pub fn field_name<'a>(
+        &'a self,
+        index: usize,
+        modules: &'a [Module],
+    ) -> Option<&'a str> {
+        match &self.get_typedef(modules).body {
+            TypeDefBody::Record(rec) => Some(&rec.fields.get(index)?.name),
+            TypeDefBody::Interface | TypeDefBody::Builtin(_) => None,
+        }
+    }
+
     pub fn method<'a>(
         &'a self,
         name: &str,
         modules: &'a [Module],
     ) -> Option<Cow<'a, Type>> {
         let typedef = self.get_typedef(modules);
-        let method = typedef.methods.get(name)?;
+        let method = typedef.methods.iter().find(|method| method.name == name)?;
         let method_mod = modules.get(method.func_ref.0)?;
         let func = &method_mod.funcs[method.func_ref.1];
 
@@ -956,36 +1013,22 @@ impl TypeRef {
         )))
     }
 
-    pub fn method_instanced_ref(
-        &self,
-        name: &str,
-        modules: &[Module],
-    ) -> Option<(usize, usize)> {
+    pub fn method_index(&self, name: &str, modules: &[Module]) -> Option<usize> {
         let typedef = self.get_typedef(modules);
-        let base_method = &typedef.methods[name];
+        // should we resolve generics here? how?
+        typedef
+            .methods
+            .iter()
+            .position(|method| method.name == name)
+    }
 
-        let func = &modules[base_method.func_ref.0].funcs[base_method.func_ref.1];
-        let instantiated_funcs = func
-            .generic_instantiations
-            .values()
-            .map(|&func_idx| (base_method.func_ref.0, func_idx));
-
-        chain!(Some(base_method.func_ref), instantiated_funcs).find_map(|func_ref| {
-            let func = &modules[func_ref.0].funcs[func_ref.1];
-            let recv_ty = &modules[base_method.func_ref.0].values[func.params[0]].ty;
-            if recv_ty.body.has_typevars()
-                || !matches_if!(
-                    &recv_ty.body,
-                    TypeBody::TypeRef(recv_ty_ref),
-                    recv_ty_ref
-                        .merge(self, Variance::Covariant, modules)
-                        .is_some()
-                )
-            {
-                return None;
-            }
-            Some(func_ref)
-        })
+    pub fn method_name<'a>(
+        &'a self,
+        index: usize,
+        modules: &'a [Module],
+    ) -> Option<&'a str> {
+        let typedef = self.get_typedef(modules);
+        Some(&typedef.methods.get(index)?.name)
     }
 
     pub fn typevar_substitutions(&self, modules: &[Module]) -> HashMap<TypeVarIdx, Type> {
@@ -998,27 +1041,22 @@ impl TypeRef {
     pub fn to_inferred(&self, modules: &[Module]) -> InferredType {
         let def = self.get_typedef(modules);
 
-        let fields = match &def.body {
-            TypeDefBody::Record(rec) => &rec.fields,
-            TypeDefBody::Interface | TypeDefBody::Builtin(_) => &SortedMap::new(),
-        };
-
         let mut members = utils::SortedMap::new();
         let mut properties = utils::SortedMap::new();
 
-        for name in fields.keys() {
-            let Some(ty) = self.field(name, modules) else {
-                continue;
-            };
-            members.insert(name.to_string(), ty.clone().into_owned());
+        if let TypeDefBody::Record(rec) = &def.body {
+            for field in &rec.fields {
+                members.insert(field.name.clone(), field.ty.clone());
+                properties.insert(field.name.clone(), field.ty.clone());
+            }
         }
 
-        for name in chain!(fields.keys(), def.methods.keys()).unique() {
+        for method in &def.methods {
             let as_ty_body = TypeBody::TypeRef(self.clone());
-            let Some(ty) = as_ty_body.property(name, modules) else {
+            let Some(ty) = as_ty_body.property(&method.name, modules) else {
                 continue;
             };
-            properties.insert(name.to_string(), ty.into_owned());
+            properties.insert(method.name.clone(), ty.into_owned());
         }
 
         InferredType::new(members, properties)
@@ -1057,6 +1095,22 @@ impl TypeVar {
         })
     }
 
+    pub fn field_index(&self, name: &str, modules: &[Module]) -> Option<usize> {
+        let def = &modules[self.mod_idx].typevars[self.typevar_idx];
+        let cons = def.constraint.as_ref()?;
+        cons.body.field_index(name, modules)
+    }
+
+    pub fn field_name<'a>(
+        &'a self,
+        index: usize,
+        modules: &'a [Module],
+    ) -> Option<&'a str> {
+        let def = &modules[self.mod_idx].typevars[self.typevar_idx];
+        let cons = def.constraint.as_ref()?;
+        cons.body.field_name(index, modules)
+    }
+
     pub fn method<'a>(
         &'a self,
         name: &str,
@@ -1073,6 +1127,22 @@ impl TypeVar {
             }
             ty
         })
+    }
+
+    pub fn method_index(&self, name: &str, modules: &[Module]) -> Option<usize> {
+        let def = &modules[self.mod_idx].typevars[self.typevar_idx];
+        let cons = def.constraint.as_ref()?;
+        cons.body.method_index(name, modules)
+    }
+
+    pub fn method_name<'a>(
+        &'a self,
+        index: usize,
+        modules: &'a [Module],
+    ) -> Option<&'a str> {
+        let def = &modules[self.mod_idx].typevars[self.typevar_idx];
+        let cons = def.constraint.as_ref()?;
+        cons.body.method_name(index, modules)
     }
 
     pub fn extends(&self, other: &Self, modules: &[Module]) -> bool {

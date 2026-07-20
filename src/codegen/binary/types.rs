@@ -296,9 +296,15 @@ pub fn tuple_from_record<'a>(
         panic!("type is not a record type");
     };
 
+    assert_eq!(
+        rec.fields.len(),
+        fields.len(),
+        "the field count should be already typechecked"
+    );
+
     rec.fields
-        .keys()
-        .map(|key| fields.get(key).expect(&format!("missing field: {key}")))
+        .iter()
+        .map(|field| fields.get(&field.name).unwrap())
         .cloned()
         .collect()
 }
@@ -422,7 +428,7 @@ pub fn get_type_by_type(
             match &t.get_typedef(modules).body {
                 b::TypeDefBody::Record(rec) => rec
                     .fields
-                    .values()
+                    .iter()
                     .flat_map(|field| {
                         let field_ty = field
                             .ty
@@ -639,24 +645,6 @@ pub fn sig_first_param_index(sig: &cl::Signature) -> usize {
             )
         })
         .unwrap_or(sig.params.len())
-}
-
-#[derive(ctor)]
-pub struct VTableDesc {
-    pub methods: Vec<String>,
-}
-impl VTableDesc {
-    pub fn method_offset(
-        &self,
-        name: &str,
-        cl_module: &impl cl::Module,
-    ) -> Option<usize> {
-        let ptr = cl_module.isa().pointer_bytes() as usize;
-        self.methods
-            .iter()
-            .position(|m| *m == name)
-            .map(|i| i * ptr)
-    }
 }
 
 #[derive(ctor, Hash, PartialEq, Eq, Clone, Debug)]
